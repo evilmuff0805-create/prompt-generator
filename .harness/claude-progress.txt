@@ -1,0 +1,21 @@
+[2026-04-30 00:00:00] Harness initialized for existing project
+
+Project: PromptGen - AI 이미지 프롬프트 제네레이터
+Tech Stack: Node.js + Express, Vanilla JS, Supabase, Gemini + Groq, Lemon Squeezy, Railway
+
+Current state:
+- 25 features already implemented (passes: true)
+- 15 features pending implementation (passes: false)
+- No tests exist yet (unit or E2E)
+- Server runs on port 3000
+
+Onboarding summary:
+- Backend: server.js → Express API (analyze, payment, user)
+- Frontend: public/app.js (730 lines, SPA)
+- AI: geminiService.js (Gemini 2.5 Flash) + groqService.js (Groq fallback)
+- Auth: Supabase Google OAuth + JWT middleware
+- DB: Supabase PostgreSQL with RLS policies
+
+Next: Start with Feature #26 — Playwright E2E 테스트 환경 설정 (highest priority unimplemented)
+
+Current progress: 25/40 features completed (62.5%)
