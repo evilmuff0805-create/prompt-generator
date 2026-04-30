@@ -1,21 +1,82 @@
-[2026-04-30 00:00:00] Harness initialized for existing project
+## PromptGen AI - 세션 진행 로그
 
-Project: PromptGen - AI 이미지 프롬프트 제네레이터
-Tech Stack: Node.js + Express, Vanilla JS, Supabase, Gemini + Groq, Lemon Squeezy, Railway
+---
 
-Current state:
-- 25 features already implemented (passes: true)
-- 15 features pending implementation (passes: false)
-- No tests exist yet (unit or E2E)
-- Server runs on port 3000
+### 세션 1 (2026-04-30): 초기 분석 + 하네스 엔지니어링 적용
 
-Onboarding summary:
-- Backend: server.js → Express API (analyze, payment, user)
-- Frontend: public/app.js (730 lines, SPA)
-- AI: geminiService.js (Gemini 2.5 Flash) + groqService.js (Groq fallback)
-- Auth: Supabase Google OAuth + JWT middleware
-- DB: Supabase PostgreSQL with RLS policies
+**완료된 작업:**
+- 앱 전체 구조 분석 (Express + Supabase + Gemini/Groq + Lemon Squeezy)
+- 14개 보안 취약점 발견 및 수정
+- 하네스 엔지니어링 적용 (.harness/ 디렉토리 생성)
+- feature_list.json 40개 기능 추적 시트 생성
 
-Next: Start with Feature #26 — Playwright E2E 테스트 환경 설정 (highest priority unimplemented)
+**수정된 보안 취약점:**
+1. payment.js - makeAdminClient: SERVICE_ROLE_KEY 없을 때 throw (anon key 폴백 제거)
+2. payment.js - 웹훅 서명 필수 검증 (crypto.timingSafeEqual)
+3. payment.js - 웹훅 재전송 공격 방지 (webhook_events PRIMARY KEY)
+4. payment.js - 이메일 형식 검증 정규식
+5. payment.js - 체크아웃 URL https:// 필수 검증
+6. server.js - 위험한 /api/user/credits POST 엔드포인트 제거
+7. server.js - 속도 제한 (apiLimiter 60/min, analyzeLimiter 10/min)
+8. server.js - 보안 헤더 (CSP, X-Frame-Options, X-Content-Type-Options 등)
+9. server.js - 프로필 생성에 SERVICE_ROLE_KEY 사용
+10. analyze.js - 매직바이트 파일 검증 (MIME 스푸핑 방지)
+11. analyze.js - 원자적 크레딧 차감 RPC (레이스 컨디션 방지)
+12. geminiService.js - 30초 API 타임아웃 (withTimeout 패턴)
+13. groqService.js - 동일한 타임아웃 패턴 적용
+14. app.js - XSS 방지 (innerHTML → textContent), 더블클릭 가드, 아바타 URL 검증
+15. index.html - SRI 해시 (sha256-/anWf4DM5...) + 올바른 CDN 파일명
 
-Current progress: 25/40 features completed (62.5%)
+---
+
+### 세션 2 (2026-05-01): 새 Supabase 프로젝트 + 전체 통합 완료
+
+**배경:**
+- 기존 Supabase 프로젝트 삭제됨 (무료 플랜 제한으로 이전에 삭제)
+- 새 계정(와이프 계정)으로 새 Supabase 프로젝트 생성
+- 프로젝트: kzlovmcghswprasjaeeo.supabase.co
+
+**완료된 작업:**
+1. 새 Supabase 프로젝트 생성 및 설정
+2. SQL 마이그레이션 4개 모두 실행:
+   - supabase-setup.sql (profiles, usage_logs 테이블 + RLS + 트리거)
+   - supabase-migration-plans.sql (pro/enterprise 플랜 제약조건)
+   - supabase-credits-migration.sql (크레딧 시스템)
+   - supabase-security-migration.sql (webhook_events + deduct_credits RPC)
+3. Google OAuth 재설정 (새 Google Cloud 프로젝트)
+4. Supabase Auth URL 설정 (Site URL + Redirect URL)
+5. app.js Supabase 키 업데이트 (구 → 신 프로젝트)
+6. Railway 환경변수 업데이트 및 배포
+7. git 초기 커밋 생성 및 GitHub 푸시
+
+**발생한 버그 및 수정:**
+- CSP img-src에 blob: 누락 → 이미지 미리보기 안 됨 → blob: 추가
+- Supabase GRANT 권한 누락 (code: 42501) → GRANT 실행으로 해결
+- Railway trust proxy 미설정 → ERR_ERL_UNEXPECTED_X_FORWARDED_FOR → app.set('trust proxy', 1)
+- analyze.js 프로필 없을 때 500 → PGRST116 처리 후 자동 생성 로직 추가
+
+**교훈:**
+- Supabase RLS 활성화 시 반드시 GRANT SELECT/INSERT/UPDATE도 함께 실행해야 함
+- Railway 등 리버스 프록시 환경에서 express-rate-limit 사용 시 trust proxy 필수
+- CDN blob URL 사용 시 CSP의 img-src에 blob: 명시 필요
+- 새 Supabase 프로젝트에서 기존 유저 로그인은 트리거가 안 터지므로 백엔드에서 프로필 자동 생성 필요
+
+---
+
+### 현재 상태 (2026-05-01)
+
+**프로덕션 URL:** https://promptgen-ai.com
+**Supabase:** kzlovmcghswprasjaeeo.supabase.co
+**Railway:** GitHub 연동 자동 배포 (master 브랜치)
+**GitHub:** https://github.com/evilmuff0805-create/prompt-generator
+
+**기능 통과 현황:**
+- passes: true → 35개 (ID 1-25, 35, 41-50)
+- passes: false → 15개 (ID 26-34, 36-40)
+
+**다음 세션 우선순위:**
+1. ID 26-27: Playwright E2E + Jest 유닛 테스트 환경 구축
+2. ID 28-31: 서비스/미들웨어 유닛 테스트 작성
+3. ID 32-33: 프롬프트 히스토리 저장/조회 기능
+4. ID 34: 프롬프트 다운로드 기능
+5. ID 38: 모바일 UI 최적화

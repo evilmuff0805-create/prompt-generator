@@ -449,7 +449,7 @@
       "Retry-After 헤더 확인",
       "1분 후 정상 요청 가능 확인"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": 36,
@@ -515,5 +515,128 @@
       "적용 버튼 클릭 시 현재 프롬프트에 반영 확인"
     ],
     "passes": false
+  },
+  {
+    "id": 41,
+    "category": "security",
+    "priority": "high",
+    "description": "CSP 보안 헤더가 올바르게 설정되어 있다",
+    "steps": [
+      "응답 헤더에 Content-Security-Policy 존재 확인",
+      "script-src가 self와 cdn.jsdelivr.net만 허용 확인",
+      "img-src에 blob: 포함 확인 (이미지 미리보기용)",
+      "frame-ancestors none 확인 (클릭재킹 방지)"
+    ],
+    "passes": true
+  },
+  {
+    "id": 42,
+    "category": "security",
+    "priority": "high",
+    "description": "Railway 프록시 환경에서 rate limiting이 정확하게 동작한다",
+    "steps": [
+      "trust proxy 설정 확인 (app.set('trust proxy', 1))",
+      "X-Forwarded-For 헤더 기반으로 클라이언트 IP 식별 확인",
+      "ERR_ERL_UNEXPECTED_X_FORWARDED_FOR 오류 없음 확인"
+    ],
+    "passes": true
+  },
+  {
+    "id": 43,
+    "category": "security",
+    "priority": "high",
+    "description": "Supabase 테이블에 authenticated 역할 GRANT가 설정되어 있다",
+    "steps": [
+      "authenticated 역할로 profiles 테이블 SELECT 성공 확인",
+      "authenticated 역할로 usage_logs INSERT 성공 확인",
+      "permission denied (42501) 오류 없음 확인"
+    ],
+    "passes": true
+  },
+  {
+    "id": 44,
+    "category": "security",
+    "priority": "high",
+    "description": "이미지 업로드 시 매직바이트로 MIME 스푸핑을 방지한다",
+    "steps": [
+      "확장자는 .jpg이지만 내용이 다른 파일 업로드 시도",
+      "400 오류 반환 확인",
+      "JPEG/PNG/WebP/GIF 각각 매직바이트 검증 확인"
+    ],
+    "passes": true
+  },
+  {
+    "id": 45,
+    "category": "security",
+    "priority": "high",
+    "description": "크레딧 차감이 원자적으로 처리되어 레이스 컨디션을 방지한다",
+    "steps": [
+      "deduct_credits RPC 함수 Supabase에 존재 확인",
+      "동시 요청 시 크레딧이 중복 차감되지 않음 확인",
+      "크레딧 부족 시 -1 반환 및 403 응답 확인"
+    ],
+    "passes": true
+  },
+  {
+    "id": 46,
+    "category": "security",
+    "priority": "high",
+    "description": "웹훅 이벤트 중복 처리(재전송 공격)를 방지한다",
+    "steps": [
+      "동일한 event_id로 웹훅 두 번 전송",
+      "첫 번째: 정상 처리 확인",
+      "두 번째: 200 OK 반환하되 DB 중복 처리 없음 확인",
+      "webhook_events 테이블에 event_id PRIMARY KEY 확인"
+    ],
+    "passes": true
+  },
+  {
+    "id": 47,
+    "category": "security",
+    "priority": "high",
+    "description": "AI API 호출에 30초 타임아웃이 적용된다",
+    "steps": [
+      "Gemini API 호출에 withTimeout 30,000ms 래퍼 적용 확인",
+      "Groq API 호출에 동일한 타임아웃 적용 확인",
+      "타임아웃 초과 시 명확한 오류 메시지 반환 확인"
+    ],
+    "passes": true
+  },
+  {
+    "id": 48,
+    "category": "security",
+    "priority": "high",
+    "description": "웹훅 서명 검증이 타이밍 공격에 안전하다",
+    "steps": [
+      "crypto.timingSafeEqual로 서명 비교 확인",
+      "서명 불일치 시 401 반환 확인",
+      "웹훅 시크릿 미설정 시 500 반환 확인"
+    ],
+    "passes": true
+  },
+  {
+    "id": 49,
+    "category": "security",
+    "priority": "high",
+    "description": "CDN 스크립트에 SRI(Subresource Integrity) 해시가 적용되어 있다",
+    "steps": [
+      "index.html의 supabase CDN 스크립트 태그 확인",
+      "integrity 속성에 sha256 해시 존재 확인",
+      "crossorigin='anonymous' 속성 확인"
+    ],
+    "passes": true
+  },
+  {
+    "id": 50,
+    "category": "functional",
+    "priority": "high",
+    "description": "신규 사용자 로그인 시 프로필이 자동 생성된다",
+    "steps": [
+      "새 Google 계정으로 첫 로그인",
+      "auth.users 트리거로 profiles 행 자동 생성 확인",
+      "analyze 엔드포인트에서도 프로필 없을 시 자동 생성 확인",
+      "plan=free, credits=0, daily_used=0 기본값 확인"
+    ],
+    "passes": true
   }
 ]
