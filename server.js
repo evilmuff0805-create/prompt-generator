@@ -7,6 +7,9 @@ const rateLimit = require('express-rate-limit');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+/* ── Trust Proxy (Railway/reverse proxy 환경) ── */
+app.set('trust proxy', 1);
+
 /* ── Rate Limiters ── */
 const apiLimiter = rateLimit({
   windowMs: 60 * 1000,       // 1분
