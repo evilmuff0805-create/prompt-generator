@@ -41,7 +41,7 @@ app.use((req, res, next) => {
     "script-src 'self' https://cdn.jsdelivr.net; " +
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " +
     "font-src https://fonts.gstatic.com; " +
-    "img-src 'self' https: data:; " +
+    "img-src 'self' https: data: blob:; " +
     "connect-src 'self' https://*.supabase.co https://api.lemonsqueezy.com; " +
     "frame-ancestors 'none';"
   );

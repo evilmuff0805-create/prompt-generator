@@ -60,13 +60,36 @@ router.post('/analyze', authMiddleware, upload.single('image'), async (req, res,
     const today = new Date().toISOString().split('T')[0];
 
     // Fetch user profile
-    const { data: profile, error: profileError } = await req.supabase
+    let { data: profile, error: profileError } = await req.supabase
       .from('profiles')
       .select('plan, credits, daily_used, last_reset_date')
       .eq('id', req.user.id)
       .single();
 
+    // 프로필이 없으면 자동 생성 (PGRST116: no rows)
+    if (profileError?.code === 'PGRST116') {
+      const { createClient } = require('@supabase/supabase-js');
+      const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+      if (!serviceKey) {
+        return res.status(500).json({ success: false, error: 'Server configuration error' });
+      }
+      const adminClient = createClient(process.env.SUPABASE_URL, serviceKey, { auth: { persistSession: false } });
+      const today = new Date().toISOString().split('T')[0];
+      const { data: newProfile, error: insertError } = await adminClient
+        .from('profiles')
+        .insert({ id: req.user.id, plan: 'free', credits: 0, daily_used: 0, last_reset_date: today })
+        .select('plan, credits, daily_used, last_reset_date')
+        .single();
+      if (insertError) {
+        console.error('[analyze] profile insert error:', insertError.message);
+        return res.status(500).json({ success: false, error: 'Failed to create user profile' });
+      }
+      profile = newProfile;
+      profileError = null;
+    }
+
     if (profileError || !profile) {
+      console.error('[analyze] profile fetch error:', profileError?.message, '| code:', profileError?.code);
       return res.status(500).json({ success: false, error: 'Failed to fetch user profile' });
     }
 
