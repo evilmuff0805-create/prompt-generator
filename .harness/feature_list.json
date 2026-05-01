@@ -332,7 +332,7 @@
       "테스트 파일이 tests/e2e/ 디렉토리에 위치 확인",
       "헬스체크 E2E 테스트 통과 확인"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": 27,
@@ -345,7 +345,7 @@
       "tests/unit/ 디렉토리에 테스트 파일 존재 확인",
       "기본 테스트 통과 확인"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": 28,
@@ -358,7 +358,7 @@
       "JSON 파싱 오류 시 폴백 동작 테스트",
       "npm run test:unit 전체 통과 확인"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": 29,
@@ -371,7 +371,7 @@
       "Llama 폴백 → LLaVA 폴백 로직 테스트",
       "npm run test:unit 전체 통과 확인"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": 30,
@@ -384,7 +384,7 @@
       "유효한 토큰 → req.user 설정 테스트",
       "npm run test:unit 전체 통과 확인"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": 31,
@@ -397,7 +397,7 @@
       "플랜 업데이트 로직 테스트",
       "npm run test:unit 전체 통과 확인"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": 32,
@@ -410,7 +410,7 @@
       "최근 10개 프롬프트 목록 반환 확인",
       "각 항목에 생성일, 프롬프트 텍스트 포함 확인"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": 33,
@@ -423,7 +423,7 @@
       "항목 클릭 시 해당 프롬프트 복원 확인",
       "삭제 버튼으로 항목 제거 확인"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": 34,
@@ -436,7 +436,7 @@
       "prompt.txt 파일 다운로드 확인",
       "파일 내용이 현재 프롬프트 텍스트와 일치 확인"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": 35,
@@ -488,7 +488,7 @@
       "버튼이 탭 가능한 크기(44px 이상) 확인",
       "스크롤 없이 주요 기능 접근 가능 확인"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": 39,
