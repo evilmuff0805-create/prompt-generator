@@ -172,6 +172,68 @@ app.get('/api/user/profile', async (req, res) => {
 });
 
 
+/* ── GET /api/user/history ── */
+app.get('/api/user/history', async (req, res) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ success: false, error: 'Authentication required' });
+  }
+  const token = authHeader.split(' ')[1];
+  const { user, error: userError } = await verifyToken(token);
+  if (userError || !user) {
+    return res.status(401).json({ success: false, error: 'Invalid token' });
+  }
+
+  const supabase = makeUserClient(token);
+  const limit = Math.min(parseInt(req.query.limit) || 10, 50);
+
+  const { data, error } = await supabase
+    .from('prompts')
+    .select('id, prompt, analysis, created_at')
+    .eq('user_id', user.id)
+    .order('created_at', { ascending: false })
+    .limit(limit);
+
+  if (error) {
+    console.error('[GET /api/user/history] error:', error.message);
+    return res.status(500).json({ success: false, error: 'Failed to fetch history' });
+  }
+
+  res.json({ success: true, history: data || [] });
+});
+
+/* ── DELETE /api/user/history/:id ── */
+app.delete('/api/user/history/:id', async (req, res) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ success: false, error: 'Authentication required' });
+  }
+  const token = authHeader.split(' ')[1];
+  const { user, error: userError } = await verifyToken(token);
+  if (userError || !user) {
+    return res.status(401).json({ success: false, error: 'Invalid token' });
+  }
+
+  const id = parseInt(req.params.id);
+  if (!id || isNaN(id)) {
+    return res.status(400).json({ success: false, error: 'Invalid id' });
+  }
+
+  const supabase = makeUserClient(token);
+  const { error } = await supabase
+    .from('prompts')
+    .delete()
+    .eq('id', id)
+    .eq('user_id', user.id); // RLS + 명시적 user_id 체크
+
+  if (error) {
+    console.error('[DELETE /api/user/history] error:', error.message);
+    return res.status(500).json({ success: false, error: 'Failed to delete history item' });
+  }
+
+  res.json({ success: true });
+});
+
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });

@@ -685,6 +685,102 @@ sbClient.auth.onAuthStateChange(async (event, session) => {
   }
 })();
 
+/* ══════════════════════════════════════
+   HISTORY
+══════════════════════════════════════ */
+const historyBtn       = document.getElementById('historyBtn');
+const historySection   = document.getElementById('historySection');
+const historyList      = document.getElementById('historyList');
+const historyCloseBtn  = document.getElementById('historyCloseBtn');
+
+let historyOpen = false;
+
+historyBtn.addEventListener('click', async () => {
+  if (historyOpen) {
+    historySection.style.display = 'none';
+    historyOpen = false;
+    return;
+  }
+  await loadHistory();
+  historySection.style.display = 'block';
+  historyOpen = true;
+  historySection.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+});
+
+historyCloseBtn.addEventListener('click', () => {
+  historySection.style.display = 'none';
+  historyOpen = false;
+});
+
+async function loadHistory() {
+  const { data: { session } } = await sbClient.auth.getSession();
+  if (!session) return;
+
+  historyList.innerHTML = '<li class="history-loading">Loading…</li>';
+
+  try {
+    const res = await fetch('/api/user/history?limit=10', {
+      headers: { 'Authorization': `Bearer ${session.access_token}` }
+    });
+    const data = await res.json();
+
+    if (!data.success || !data.history.length) {
+      historyList.innerHTML = '<li class="history-empty">No prompts yet. Analyze an image to get started!</li>';
+      return;
+    }
+
+    historyList.innerHTML = data.history.map(item => {
+      const date = new Date(item.created_at).toLocaleDateString('ko-KR', {
+        month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'
+      });
+      const preview = item.prompt.replace(/\[([^\]]+)\]/g, '$1').slice(0, 120);
+      return `
+        <li class="history-item" data-id="${item.id}">
+          <div class="history-item__meta">${date}</div>
+          <div class="history-item__preview">${preview}…</div>
+          <div class="history-item__actions">
+            <button class="btn--text history-restore" data-prompt="${encodeURIComponent(item.prompt)}">Restore</button>
+            <button class="btn--text history-delete" data-id="${item.id}">Delete</button>
+          </div>
+        </li>`;
+    }).join('');
+
+    // Restore 버튼
+    historyList.querySelectorAll('.history-restore').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const prompt = decodeURIComponent(btn.dataset.prompt);
+        state.result = { prompt, brackets: [], analysis: {} };
+        state.bracketValues = {};
+        renderResults(state.result);
+        historySection.style.display = 'none';
+        historyOpen = false;
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      });
+    });
+
+    // Delete 버튼
+    historyList.querySelectorAll('.history-delete').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const id = btn.dataset.id;
+        const { data: { session } } = await sbClient.auth.getSession();
+        if (!session) return;
+        const res = await fetch(`/api/user/history/${id}`, {
+          method: 'DELETE',
+          headers: { 'Authorization': `Bearer ${session.access_token}` }
+        });
+        if ((await res.json()).success) {
+          btn.closest('.history-item').remove();
+          if (!historyList.querySelector('.history-item')) {
+            historyList.innerHTML = '<li class="history-empty">No prompts yet.</li>';
+          }
+        }
+      });
+    });
+  } catch (e) {
+    historyList.innerHTML = '<li class="history-empty">Failed to load history.</li>';
+  }
+}
+
 logoutBtn.addEventListener('click', async () => {
   await sbClient.auth.signOut();
   currentUserPlan = null;

@@ -156,6 +156,15 @@ router.post('/analyze', authMiddleware, upload.single('image'), async (req, res,
       .from('usage_logs')
       .insert({ user_id: req.user.id });
 
+    // 프롬프트 히스토리 저장
+    await req.supabase
+      .from('prompts')
+      .insert({
+        user_id: req.user.id,
+        prompt:  result.prompt || '',
+        analysis: result.analysis || {}
+      });
+
     res.json({ success: true, ...result });
   } catch (err) {
     next(err);

@@ -32,6 +32,7 @@
               <span id="planBadge" class="plan-badge plan-badge--free">Free</span>
             </div>
             <span id="usageDisplay" class="usage-display"></span>
+            <button id="historyBtn" class="btn btn--ghost btn--history" title="View history">📜</button>
             <button id="logoutBtn" class="btn btn--ghost btn--logout">Logout</button>
           </div>
         </li>
@@ -114,6 +115,15 @@
           </div>
         </div>
 
+      </section>
+
+      <!-- History Panel -->
+      <section id="historySection" class="history-section" style="display:none">
+        <div class="history-header">
+          <h3>📜 Recent Prompts</h3>
+          <button id="historyCloseBtn" class="btn--icon" aria-label="Close history">✕</button>
+        </div>
+        <ul id="historyList" class="history-list"></ul>
       </section>
     </div>
   </section>
