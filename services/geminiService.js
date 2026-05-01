@@ -467,4 +467,4 @@ async function analyzeImage(base64Image, mimeType) {
   throw lastError || new Error('Gemini API failed after retries');
 }
 
-module.exports = { analyzeImage };
+module.exports = { analyzeImage, parseHybridResponse, buildFormattedPrompt, buildAnalysis };

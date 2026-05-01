@@ -402,4 +402,4 @@ async function analyzeImage(base64Image, mimeType) {
   throw lastError || new Error('All models failed');
 }
 
-module.exports = { analyzeImage };
+module.exports = { analyzeImage, parseTextResponse, parseAnalysis };
