@@ -1713,3 +1713,97 @@ button { font-family: inherit; }
   text-align: center;
   margin-bottom: 0.75rem;
 }
+
+/* ══════════════════════════════════════
+   MOBILE OPTIMIZATION (375px+)
+══════════════════════════════════════ */
+@media (max-width: 640px) {
+
+  /* ── 전체 여백 축소 ── */
+  .upload-section {
+    padding: 3.5rem 0 2rem;
+  }
+
+  .container {
+    padding: 0 1rem;
+  }
+
+  /* ── 업로드 존 ── */
+  .drop-zone {
+    padding: 2rem 1rem;
+  }
+
+  .drop-zone__icon {
+    font-size: 2rem;
+  }
+
+  /* ── Analyze 버튼: 터치 친화적 44px+ ── */
+  #analyzeBtn {
+    min-height: 48px;
+    font-size: 1rem;
+  }
+
+  /* ── 프롬프트 액션 버튼: 세로 배치 ── */
+  .prompt-actions {
+    flex-direction: column;
+  }
+
+  /* ── 네비게이션 유저 프로필 축소 ── */
+  .user-name {
+    display: none;
+  }
+
+  .usage-display {
+    display: none;
+  }
+
+  .btn--history {
+    padding: 0.25rem 0.35rem;
+  }
+
+  /* ── 카드 패딩 축소 ── */
+  .card {
+    padding: 1rem;
+  }
+
+  /* ── 히스토리 패널 ── */
+  .history-item {
+    padding: 0.75rem 1rem;
+  }
+
+  .history-item__preview {
+    font-size: 0.82rem;
+  }
+
+  /* ── 브래킷 팝오버: 전체너비 ── */
+  .bracket-popover {
+    left: 0.5rem;
+    right: 0.5rem;
+  }
+
+  /* ── 결과 섹션 ── */
+  .prompt-display {
+    font-size: 0.88rem;
+    line-height: 1.65;
+  }
+
+  /* ── 모달 ── */
+  .modal__box {
+    margin: 1rem;
+    padding: 1.5rem 1.25rem;
+  }
+
+  /* ── 섹션 타이틀 ── */
+  .section-title {
+    font-size: clamp(1.5rem, 6vw, 2.5rem);
+  }
+
+  /* ── 히어로 섹션 ── */
+  .hero-section {
+    padding: 5rem 0 3rem;
+  }
+
+  .hero-title {
+    font-size: clamp(1.8rem, 8vw, 3rem);
+  }
+}
