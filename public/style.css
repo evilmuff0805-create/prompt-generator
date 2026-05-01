@@ -357,17 +357,33 @@ button { font-family: inherit; }
   transform: translateY(-1px);
 }
 
+.prompt-actions {
+  display: flex;
+  gap: 0.75rem;
+  margin-top: 0.75rem;
+}
+.prompt-actions .btn { flex: 1; }
+
 .btn--accent {
   background: transparent;
   color: var(--clr-mint);
   border: 1.5px solid var(--clr-mint);
-  width: 100%;
-  margin-top: 0.75rem;
   padding: 0.7rem;
 }
 .btn--accent:hover:not(:disabled) {
   background: rgba(0,255,204,0.08);
   box-shadow: var(--glow-mint);
+}
+
+.btn--secondary {
+  background: transparent;
+  color: #b388ff;
+  border: 1.5px solid #b388ff;
+  padding: 0.7rem;
+}
+.btn--secondary:hover:not(:disabled) {
+  background: rgba(179,136,255,0.08);
+  box-shadow: 0 0 8px rgba(179,136,255,0.4);
 }
 
 .btn--outline {

@@ -363,6 +363,28 @@ function renderAnalysis(analysis) {
   analysisBody.classList.add('hidden');
 }
 
+/* ── Download ── */
+const downloadBtn = document.getElementById('downloadBtn');
+downloadBtn.addEventListener('click', () => {
+  if (!state.result) return;
+
+  const prompt = buildFinalPrompt(state.result.prompt, state.result.brackets || []);
+  const blob = new Blob([prompt], { type: 'text/plain;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `prompt-${Date.now()}.txt`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+
+  const original = downloadBtn.textContent;
+  downloadBtn.textContent = '✓ Downloaded!';
+  setTimeout(() => { downloadBtn.textContent = original; }, 2000);
+});
+
 /* ── Copy ── */
 copyBtn.addEventListener('click', async () => {
   if (!state.result) return;
