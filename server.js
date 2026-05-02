@@ -45,6 +45,7 @@ app.use((req, res, next) => {
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " +
     "font-src https://fonts.gstatic.com; " +
     "img-src 'self' https: data: blob:; " +
+    "media-src 'self' blob:; " +
     "connect-src 'self' https://*.supabase.co https://api.lemonsqueezy.com; " +
     "frame-ancestors 'none';"
   );
@@ -232,6 +233,10 @@ app.delete('/api/user/history/:id', async (req, res) => {
   }
 
   res.json({ success: true });
+});
+
+app.get('/frame', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'frame.html'));
 });
 
 app.get('*', (req, res) => {

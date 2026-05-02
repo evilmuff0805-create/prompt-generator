@@ -16,6 +16,11 @@
   <nav id="navbar" class="navbar">
     <div class="navbar__inner">
       <a href="#home" class="navbar__logo"><img src="/favicon.png" width="32" height="32" style="margin-right:8px;vertical-align:middle">PromptGen</a>
+      <!-- Tool Tabs -->
+      <div class="tool-tabs" id="toolTabs">
+        <a href="/" class="tool-tab">🎨 <span class="tab-label">Image to Prompt</span></a>
+        <a href="/frame" class="tool-tab">🎬 <span class="tab-label">Endframe Extractor</span></a>
+      </div>
       <ul class="navbar__menu" id="navMenu">
         <li><a href="#home" class="nav-link">Home</a></li>
         <li><a href="#how-it-works" class="nav-link">How it Works</a></li>
@@ -336,6 +341,7 @@
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.49.4/dist/umd/supabase.js" integrity="sha256-/anWf4DM5AdPeNY3O7E26Ew0yyNbipHF5ChAaNpt3EI=" crossorigin="anonymous"></script>
   <script src="/app.js"></script>
+  <script src="/navbar-shared.js"></script>
   <script src="/gallery-data.js"></script>
   <script src="/gallery.js"></script>
 </body>
