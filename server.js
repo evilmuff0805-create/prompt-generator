@@ -48,12 +48,12 @@ app.use((req, res, next) => {
   res.setHeader(
     'Content-Security-Policy',
     "default-src 'self'; " +
-    "script-src 'self' https://cdn.jsdelivr.net https://cdn.paddle.com; " +
+    "script-src 'self' https://cdn.jsdelivr.net https://cdn.paddle.com https://static.cloudflareinsights.com; " +
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " +
     "font-src https://fonts.gstatic.com; " +
     "img-src 'self' https: data: blob:; " +
     "media-src 'self' blob:; " +
-    "connect-src 'self' https://*.supabase.co https://api.paddle.com https://checkout.paddle.com; " +
+    "connect-src 'self' https://*.supabase.co https://api.paddle.com https://checkout.paddle.com https://cdn.paddle.com; " +
     "frame-src https://checkout.paddle.com; " +
     "frame-ancestors 'none';"
   );
