@@ -200,8 +200,8 @@
     "description": "Pro 플랜 결제 체크아웃 URL을 생성할 수 있다",
     "steps": [
       "인증된 사용자로 /api/payment/checkout POST",
-      "Lemon Squeezy 체크아웃 URL 반환 확인",
-      "URL이 lemonsqueezy.com 도메인인 것 확인"
+      "Paddle 체크아웃 overlay 오픈 확인",
+      "URL이 buy.paddle.com 도메인인 것 확인"
     ],
     "passes": true
   },

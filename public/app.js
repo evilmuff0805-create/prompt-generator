@@ -3,6 +3,20 @@ const SUPABASE_URL = 'https://kzlovmcghswprasjaeeo.supabase.co';
 const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imt6bG92bWNnaHN3cHJhc2phZWVvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc1ODkyOTEsImV4cCI6MjA5MzE2NTI5MX0.aivqzUI4jpGgIMEpo6NMy8JL3iBxp49RqoCJU0NLOGE';
 const sbClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
+/* ── Paddle Init ── */
+Paddle.Initialize({
+  token: 'live_81a81f812ec882e5536a9188161',
+  eventCallback: function (event) {
+    if (event.name === 'checkout.completed') {
+      sbClient.auth.getSession().then(function ({ data: { session } }) {
+        if (session) {
+          setTimeout(function () { refreshUserProfile(session); }, 1500);
+        }
+      });
+    }
+  }
+});
+
 /* ── State ── */
 const state = {
   file: null,
@@ -790,7 +804,7 @@ logoutBtn.addEventListener('click', async () => {
 });
 
 /* ══════════════════════════════════════
-   PRICING CHECKOUT
+   PRICING CHECKOUT (Paddle overlay)
 ══════════════════════════════════════ */
 async function handleCheckout(plan) {
   const { data: { session } } = await sbClient.auth.getSession();
@@ -799,32 +813,15 @@ async function handleCheckout(plan) {
     return;
   }
 
-  const btn = document.getElementById(plan === 'pro' ? 'proPlanBtn' : 'enterprisePlanBtn');
-  const originalText = btn.textContent;
-  btn.disabled = true;
-  btn.textContent = 'Loading...';
+  const priceId = plan === 'pro'
+    ? 'pri_01kqntd17xt6hwpf7m7v4m6n4x'
+    : 'pri_01kqntg37hydkapmpycwh1x29b';
 
-  try {
-    const resp = await fetch('/api/payment/checkout', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${session.access_token}`
-      },
-      body: JSON.stringify({ plan })
-    });
-    const data = await resp.json();
-    if (data.success && data.checkout_url) {
-      window.location.href = data.checkout_url;
-    } else {
-      alert(data.error || 'Unable to open payment page. Please try again.');
-    }
-  } catch (err) {
-    alert('A network error occurred. Please try again.');
-  } finally {
-    btn.disabled = false;
-    btn.textContent = originalText;
-  }
+  Paddle.Checkout.open({
+    items: [{ priceId: priceId, quantity: 1 }],
+    customer: { email: session.user.email },
+    customData: { userId: session.user.id, plan: plan }
+  });
 }
 
 document.getElementById('proPlanBtn')?.addEventListener('click', () => handleCheckout('pro'));

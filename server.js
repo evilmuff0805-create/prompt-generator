@@ -27,6 +27,13 @@ const analyzeLimiter = rateLimit({
   message: { success: false, error: 'Too many analysis requests, please slow down.' }
 });
 
+/* ── Paddle webhook router — MUST be mounted before express.json() ── */
+/* express.raw() is applied at route level inside paddle.js.            */
+/* If express.json() runs first, req.body becomes a parsed object       */
+/* (not a Buffer), breaking HMAC signature verification.                */
+const paddleRouter = require('./routes/paddle');
+app.use('/api/paddle', paddleRouter);
+
 app.use(express.json({
   limit: '1mb',
   verify: (req, res, buf) => { req.rawBody = buf; }
@@ -41,12 +48,13 @@ app.use((req, res, next) => {
   res.setHeader(
     'Content-Security-Policy',
     "default-src 'self'; " +
-    "script-src 'self' https://cdn.jsdelivr.net; " +
+    "script-src 'self' https://cdn.jsdelivr.net https://cdn.paddle.com; " +
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " +
     "font-src https://fonts.gstatic.com; " +
     "img-src 'self' https: data: blob:; " +
     "media-src 'self' blob:; " +
-    "connect-src 'self' https://*.supabase.co https://api.lemonsqueezy.com; " +
+    "connect-src 'self' https://*.supabase.co https://api.paddle.com https://checkout.paddle.com; " +
+    "frame-src https://checkout.paddle.com; " +
     "frame-ancestors 'none';"
   );
   next();

@@ -74,7 +74,7 @@ describe('이메일 형식 검증', () => {
 
 describe('체크아웃 URL 검증', () => {
   test('https:// URL은 유효해야 한다', () => {
-    const url = 'https://checkout.lemonsqueezy.com/buy/abc123';
+    const url = 'https://buy.paddle.com/product/abc123';
     expect(url.startsWith('https://')).toBe(true);
   });
 
