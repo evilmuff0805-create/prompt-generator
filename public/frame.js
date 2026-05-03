@@ -141,7 +141,7 @@ const sbClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
       video.addEventListener('loadedmetadata', function onMeta() {
         video.removeEventListener('loadedmetadata', onMeta);
 
-        // ② 버그 방어: duration이 유효하지 않으면 에러
+        // Guard: if duration is invalid, reject with a clear error
         if (!video.duration || isNaN(video.duration) || video.duration <= 0) {
           URL.revokeObjectURL(blobUrl);
           reject(new Error('Could not read video duration. This format may not be supported by your browser. Try MP4 or WebM.'));
