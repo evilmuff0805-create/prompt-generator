@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Storyboard History — PromptGen</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/style.css" />
+  <link rel="icon" href="/favicon.png" type="image/png">
+</head>
+<body>
+
+  <nav id="navbar" class="navbar">
+    <div class="navbar__inner">
+      <a href="/" class="navbar__logo"><img src="/favicon.png" width="32" height="32" style="margin-right:8px;vertical-align:middle">PromptGen</a>
+      <div class="tool-tabs" id="toolTabs">
+        <a href="/" class="tool-tab">🎨 <span class="tab-label">Image to Prompt</span></a>
+        <a href="/frame" class="tool-tab">🎬 <span class="tab-label">Endframe Extractor</span></a>
+        <a href="/storyboard" class="tool-tab">🎬 <span class="tab-label">Storyboard</span></a>
+      </div>
+      <ul class="navbar__menu" id="navMenu"></ul>
+    </div>
+  </nav>
+
+  <main class="storyboard-page">
+    <div class="container">
+
+      <div class="storyboard-header">
+        <div class="section-label">History</div>
+        <h1 class="storyboard-title">Your Storyboards</h1>
+        <a href="/storyboard" class="btn btn--primary storyboard-new-btn">+ New Storyboard</a>
+      </div>
+
+      <div id="historyLoading" class="storyboard-loading-state">
+        <div class="storyboard-spinner"></div>
+        <p>Loading…</p>
+      </div>
+
+      <div id="historyEmpty" class="storyboard-card storyboard-card--center" style="display:none">
+        <div class="storyboard-icon">📽️</div>
+        <h2>No Storyboards Yet</h2>
+        <p>Generate your first storyboard to see it here.</p>
+        <a href="/storyboard" class="btn btn--primary" style="margin-top:1rem">Create Storyboard</a>
+      </div>
+
+      <div id="historyGrid" class="storyboard-history-grid" style="display:none"></div>
+
+      <div id="historyPagination" class="storyboard-pagination" style="display:none">
+        <button id="prevPage" class="btn btn--outline" disabled>← Previous</button>
+        <span id="pageInfo" class="storyboard-page-info"></span>
+        <button id="nextPage" class="btn btn--outline">Next →</button>
+      </div>
+
+    </div>
+  </main>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.49.4/dist/umd/supabase.js" integrity="sha256-/anWf4DM5AdPeNY3O7E26Ew0yyNbipHF5ChAaNpt3EI=" crossorigin="anonymous"></script>
+  <script src="/navbar-shared.js"></script>
+  <script src="/js/storyboard-api.js"></script>
+  <script src="/js/storyboard-history.js"></script>
+</body>
+</html>
