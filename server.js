@@ -51,7 +51,7 @@ app.use((req, res, next) => {
     "script-src 'self' https://cdn.jsdelivr.net https://cdn.paddle.com https://*.paddle.com https://static.cloudflareinsights.com; " +
     "style-src 'self' 'unsafe-inline' https://cdn.paddle.com https://*.paddle.com https://fonts.googleapis.com; " +
     "font-src 'self' https://fonts.gstatic.com https://cdn.paddle.com https://*.paddle.com; " +
-    "img-src 'self' data: blob: https://*.paddle.com https://cdn.paddle.com; " +
+    "img-src 'self' data: blob: https://*.paddle.com https://cdn.paddle.com https://*.supabase.co; " +
     "media-src 'self' blob:; " +
     "connect-src 'self' https://*.supabase.co https://*.paddle.com https://cdn.paddle.com; " +
     "frame-src https://*.paddle.com; " +
@@ -64,10 +64,12 @@ app.use(express.static('public'));
 
 const analyzeRouter = require('./routes/analyze');
 const paymentRouter = require('./routes/payment');
+const storyboardRouter = require('./routes/storyboard');
 app.use('/api/analyze', analyzeLimiter);   // 분석 엔드포인트에 엄격한 제한
 app.use('/api', apiLimiter);               // 나머지 API 전체에 일반 제한
 app.use('/api', analyzeRouter);
 app.use('/api/payment', paymentRouter);
+app.use('/api/storyboard', storyboardRouter);
 
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok' });
@@ -245,6 +247,18 @@ app.delete('/api/user/history/:id', async (req, res) => {
 
 app.get('/frame', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'frame.html'));
+});
+
+app.get('/storyboard', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'storyboard.html'));
+});
+
+app.get('/storyboard/history', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'storyboard-history.html'));
+});
+
+app.get('/storyboard/:id', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'storyboard-result.html'));
 });
 
 app.get('*', (req, res) => {
