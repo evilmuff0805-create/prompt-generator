@@ -51,7 +51,7 @@ app.use((req, res, next) => {
     "script-src 'self' https://cdn.jsdelivr.net https://cdn.paddle.com https://*.paddle.com https://static.cloudflareinsights.com; " +
     "style-src 'self' 'unsafe-inline' https://cdn.paddle.com https://*.paddle.com https://fonts.googleapis.com; " +
     "font-src 'self' https://fonts.gstatic.com https://cdn.paddle.com https://*.paddle.com; " +
-    "img-src 'self' data: blob: https://*.paddle.com https://cdn.paddle.com https://*.supabase.co; " +
+    "img-src 'self' data: blob: https://*.paddle.com https://cdn.paddle.com https://*.supabase.co https://*.googleusercontent.com; " +
     "media-src 'self' blob:; " +
     "connect-src 'self' https://*.supabase.co https://*.paddle.com https://cdn.paddle.com; " +
     "frame-src https://*.paddle.com; " +

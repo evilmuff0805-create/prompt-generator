@@ -2,6 +2,7 @@
 
 (function () {
   let currentUser = null;
+  let _rendering = false;
 
   async function init() {
     // Navbar scroll
@@ -31,35 +32,56 @@
   }
 
   async function renderAuthState() {
-    const authGate = document.getElementById('authGate');
-    const planGate = document.getElementById('planGate');
-    const mainForm = document.getElementById('mainForm');
-    const creditsDisplay = document.getElementById('creditsDisplay');
+    if (_rendering) return;
+    _rendering = true;
+    try {
+      const authGate = document.getElementById('authGate');
+      const planGate = document.getElementById('planGate');
+      const mainForm = document.getElementById('mainForm');
+      const creditsDisplay = document.getElementById('creditsDisplay');
+      const errorBanner = document.getElementById('errorBanner');
 
-    if (!currentUser) {
-      authGate.style.display = '';
-      planGate.style.display = 'none';
-      mainForm.style.display = 'none';
-      return;
-    }
+      if (!currentUser) {
+        authGate.style.display = '';
+        planGate.style.display = 'none';
+        mainForm.style.display = 'none';
+        return;
+      }
 
-    const profile = await StoryboardAPI.getUserProfile();
-    const allowedPlans = ['pro', 'enterprise', 'paid'];
-    const planOk = profile && allowedPlans.includes((profile.plan || 'free').toLowerCase());
+      let profile = null;
+      try {
+        const fetchTimeout = new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 8000));
+        profile = await Promise.race([StoryboardAPI.getUserProfile(), fetchTimeout]);
+      } catch {
+        authGate.style.display = 'none';
+        planGate.style.display = 'none';
+        mainForm.style.display = 'none';
+        if (errorBanner) {
+          errorBanner.textContent = '프로필을 불러오지 못했습니다. 페이지를 새로고침해 주세요.';
+          errorBanner.style.display = '';
+        }
+        return;
+      }
 
-    if (!planOk) {
+      const allowedPlans = ['pro', 'enterprise', 'paid'];
+      const planOk = profile && allowedPlans.includes((profile.plan || 'free').toLowerCase());
+
+      if (!planOk) {
+        authGate.style.display = 'none';
+        planGate.style.display = '';
+        mainForm.style.display = 'none';
+        return;
+      }
+
       authGate.style.display = 'none';
-      planGate.style.display = '';
-      mainForm.style.display = 'none';
-      return;
-    }
+      planGate.style.display = 'none';
+      mainForm.style.display = '';
 
-    authGate.style.display = 'none';
-    planGate.style.display = 'none';
-    mainForm.style.display = '';
-
-    if (creditsDisplay && profile) {
-      creditsDisplay.textContent = `${profile.credits.toLocaleString()} credits available`;
+      if (creditsDisplay && profile) {
+        creditsDisplay.textContent = `${profile.credits.toLocaleString()} credits available`;
+      }
+    } finally {
+      _rendering = false;
     }
   }
 
