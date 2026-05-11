@@ -4,7 +4,9 @@ const SUPABASE_URL = 'https://kzlovmcghswprasjaeeo.supabase.co';
 const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imt6bG92bWNnaHN3cHJhc2phZWVvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc1ODkyOTEsImV4cCI6MjA5MzE2NTI5MX0.aivqzUI4jpGgIMEpo6NMy8JL3iBxp49RqoCJU0NLOGE';
 
 // Shared Supabase client (anon, for auth only)
-const _sbClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+const _sbClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+  auth: { storage: window.sessionStorage, persistSession: true, autoRefreshToken: true }
+});
 
 async function getAuthToken() {
   const { data: { session } } = await _sbClient.auth.getSession();
