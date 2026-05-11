@@ -636,21 +636,7 @@ async function refreshUserProfile(session) {
     const data = await resp.json();
     if (data.success) {
       userNameEl.textContent = data.user.full_name || data.user.email;
-      if (data.user.avatar_url) {
-        try {
-          const avatarUrl = new URL(data.user.avatar_url);
-          if (avatarUrl.protocol === 'https:') {
-            userAvatarEl.src = avatarUrl.href;
-            userAvatarEl.style.display = 'block';
-          } else {
-            userAvatarEl.style.display = 'none';
-          }
-        } catch {
-          userAvatarEl.style.display = 'none';
-        }
-      } else {
-        userAvatarEl.style.display = 'none';
-      }
+      if (userAvatarEl) userAvatarEl.style.display = 'flex';
       const planLabels = { free: 'Free', pro: 'Pro', enterprise: 'Enterprise', paid: 'Pro' };
       const planKey = data.plan || 'free';
       planBadgeEl.textContent = planLabels[planKey] || 'Free';

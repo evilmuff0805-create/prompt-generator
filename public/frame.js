@@ -63,10 +63,7 @@ const sbClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
       userProfile.style.display = 'flex';
       const meta = session.user.user_metadata || {};
       if (userName) userName.textContent = meta.full_name || session.user.email || '';
-      if (userAvatar && meta.avatar_url) {
-        userAvatar.src = meta.avatar_url;
-        userAvatar.style.display = 'block';
-      }
+      if (userAvatar) userAvatar.style.display = 'flex';
     } else {
       loginNavBtn.style.display = '';
       userProfile.style.display = 'none';

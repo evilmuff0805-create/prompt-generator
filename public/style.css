@@ -1485,10 +1485,13 @@ button { font-family: inherit; }
   width: 1.875rem;
   height: 1.875rem;
   border-radius: 50%;
-  object-fit: cover;
   border: 1.5px solid rgba(0,255,204,0.35);
   display: none;
   flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.1rem;
+  line-height: 1;
 }
 
 .user-info {
