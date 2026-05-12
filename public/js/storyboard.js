@@ -3,6 +3,7 @@
 (function () {
   let currentUser = null;
   let _rendering = false;
+  let _pendingRender = false;
 
   async function init() {
     // Navbar scroll
@@ -32,8 +33,9 @@
   }
 
   async function renderAuthState() {
-    if (_rendering) return;
+    if (_rendering) { _pendingRender = true; return; }
     _rendering = true;
+    _pendingRender = false;
     try {
       const authGate = document.getElementById('authGate');
       const planGate = document.getElementById('planGate');
@@ -84,6 +86,7 @@
       }
     } finally {
       _rendering = false;
+      if (_pendingRender) { _pendingRender = false; renderAuthState(); }
     }
   }
 
@@ -91,6 +94,7 @@
     const errorBanner = document.getElementById('errorBanner');
 
     const result = await StoryboardAPI.generateStoryboard(formData);
+    if (!result.success) console.error('[storyboard] generate error:', JSON.stringify(result));
 
     if (!result.success) {
       const messages = {
