@@ -77,6 +77,8 @@
       planGate.style.display = 'none';
       mainForm.style.display = '';
 
+      if (errorBanner) errorBanner.style.display = 'none';
+
       if (creditsDisplay && profile) {
         creditsDisplay.textContent = `${profile.credits.toLocaleString()} credits available`;
       }
@@ -97,7 +99,7 @@
         RATE_LIMITED: 'Please wait 60 seconds between requests.',
         TOO_MANY_CONCURRENT_JOBS: 'You already have the maximum number of jobs running.',
         MODERATION_REJECTED: 'Your scenario was flagged by our safety system. Please revise it.',
-        INVALID_INPUT: result.errors?.join(', ') || 'Invalid input.',
+        INVALID_INPUT: result.errors?.join(', ') || result.message || 'Invalid input.',
         REFERENCE_EXPIRED_SOON: 'One or more reference images are about to expire. Please re-upload them.'
       };
       const msg = messages[result.code] || result.message || 'Generation failed. Please try again.';
