@@ -278,7 +278,7 @@ router.post('/upload-reference', requireAuth, upload.single('image'), async (req
 
     // Insert reference_images row with 24h expiry
     const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
-    await admin.from('reference_images').insert({
+    const { error: insertErr } = await admin.from('reference_images').insert({
       id: refId,
       user_id: userId,
       storage_path: storagePath,
@@ -286,6 +286,12 @@ router.post('/upload-reference', requireAuth, upload.single('image'), async (req
       file_size: resizedBuffer.length,
       expires_at: expiresAt
     });
+
+    if (insertErr) {
+      console.error('[storyboard] ref insert error:', insertErr.message);
+      await admin.storage.from('reference-images').remove([storagePath]);
+      return res.status(500).json({ code: 'INTERNAL_ERROR', message: 'Failed to save reference image. The reference_images table may not exist — run migrations/002_create_reference_images.sql in Supabase.' });
+    }
 
     // Return signed preview URL (1h)
     const { data: signedData } = await admin.storage
