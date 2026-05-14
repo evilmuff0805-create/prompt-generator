@@ -273,7 +273,7 @@ router.post('/upload-reference', requireAuth, upload.single('image'), async (req
 
     if (uploadErr) {
       console.error('[storyboard] ref upload error:', uploadErr.message);
-      return res.status(500).json({ code: 'INTERNAL_ERROR' });
+      return res.status(500).json({ code: 'INTERNAL_ERROR', message: `Storage upload failed: ${uploadErr.message}` });
     }
 
     // Insert reference_images row with 24h expiry
