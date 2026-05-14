@@ -73,20 +73,23 @@ $$ LANGUAGE plpgsql SECURITY DEFINER;
 
 
 -- ============================================================
--- PRIVILEGE HARDENING (v1.2.1)
+-- PRIVILEGE HARDENING (v1.2.2)
 --
--- PostgreSQL grants EXECUTE to PUBLIC by default on new functions.
--- service_role bypasses RLS/GRANT entirely — it does NOT need a
--- GRANT EXECUTE. Client roles (anon, authenticated) must be denied
--- explicitly to prevent privilege escalation via RPC calls.
+-- Revoke public execute, grant only to service_role (backend).
+-- Client roles (anon, authenticated) must not call these directly
+-- to prevent privilege escalation via RPC calls.
+-- Note: As of Supabase April 2026, service_role requires an
+-- explicit GRANT EXECUTE even after REVOKE FROM PUBLIC.
 -- ============================================================
 REVOKE EXECUTE ON FUNCTION public.deduct_storyboard_credits(UUID, INT, TEXT) FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION public.deduct_storyboard_credits(UUID, INT, TEXT) FROM anon;
 REVOKE EXECUTE ON FUNCTION public.deduct_storyboard_credits(UUID, INT, TEXT) FROM authenticated;
+GRANT EXECUTE ON FUNCTION public.deduct_storyboard_credits(UUID, INT, TEXT) TO service_role;
 
 REVOKE EXECUTE ON FUNCTION public.refund_storyboard_credits(UUID, INT, TEXT, TEXT) FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION public.refund_storyboard_credits(UUID, INT, TEXT, TEXT) FROM anon;
 REVOKE EXECUTE ON FUNCTION public.refund_storyboard_credits(UUID, INT, TEXT, TEXT) FROM authenticated;
+GRANT EXECUTE ON FUNCTION public.refund_storyboard_credits(UUID, INT, TEXT, TEXT) TO service_role;
 
 -- Defense in depth: pin search_path to prevent function-shadowing attacks
 ALTER FUNCTION public.deduct_storyboard_credits(UUID, INT, TEXT)
