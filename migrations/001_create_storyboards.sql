@@ -72,3 +72,7 @@ CREATE POLICY "storyboards: update own"
 CREATE POLICY "storyboards: delete own"
   ON public.storyboards FOR DELETE
   USING (false);
+
+-- Required since Supabase April 2026: new tables are no longer auto-exposed to PostgREST.
+GRANT ALL ON public.storyboards TO service_role;
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.storyboards TO authenticated;
