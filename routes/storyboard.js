@@ -273,7 +273,7 @@ router.post('/upload-reference', requireAuth, upload.single('image'), async (req
 
     if (uploadErr) {
       console.error('[storyboard] ref upload error:', uploadErr.message);
-      return res.status(500).json({ code: 'INTERNAL_ERROR' });
+      return res.status(500).json({ code: 'INTERNAL_ERROR', message: `Storage upload failed: ${uploadErr.message}` });
     }
 
     // Insert reference_images row with 24h expiry
@@ -290,7 +290,7 @@ router.post('/upload-reference', requireAuth, upload.single('image'), async (req
     if (insertErr) {
       console.error('[storyboard] ref insert error:', insertErr.message);
       await admin.storage.from('reference-images').remove([storagePath]);
-      return res.status(500).json({ code: 'INTERNAL_ERROR', message: 'Failed to save reference image. The reference_images table may not exist — run migrations/002_create_reference_images.sql in Supabase.' });
+      return res.status(500).json({ code: 'INTERNAL_ERROR', message: `DB insert failed: ${insertErr.message}` });
     }
 
     // Return signed preview URL (1h)
