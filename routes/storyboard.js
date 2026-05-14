@@ -156,6 +156,9 @@ router.post('/generate', requireAuth, async (req, res) => {
     // 7. Moderation on scenario text (pre-deduction — no charge on rejection)
     const modResult = await moderateContent({ text: scenario });
     if (modResult.flagged) {
+      if (modResult.reason === 'moderation_error') {
+        return res.status(500).json({ code: 'INTERNAL_ERROR', message: `Moderation service error — please try again.` });
+      }
       return res.status(422).json({ code: 'MODERATION_REJECTED', message: 'Content flagged by safety system.' });
     }
 
