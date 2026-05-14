@@ -185,7 +185,7 @@ router.post('/generate', requireAuth, async (req, res) => {
 
     if (insertErr) {
       console.error('[storyboard] insert error:', insertErr.message);
-      return res.status(500).json({ code: 'INTERNAL_ERROR' });
+      return res.status(500).json({ code: 'INTERNAL_ERROR', message: `Storyboard insert failed: ${insertErr.message}` });
     }
 
     // 10. Atomic credit deduction
