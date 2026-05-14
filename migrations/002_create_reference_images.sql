@@ -39,3 +39,8 @@ CREATE POLICY "reference_images: no client update"
 CREATE POLICY "reference_images: no client delete"
   ON public.reference_images FOR DELETE
   USING (false);
+
+-- Required since Supabase April 2026: new tables are no longer auto-exposed to PostgREST.
+-- service_role is used by the backend (bypasses RLS); authenticated covers direct client reads.
+GRANT ALL ON public.reference_images TO service_role;
+GRANT SELECT, INSERT ON public.reference_images TO authenticated;
