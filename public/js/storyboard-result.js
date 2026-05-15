@@ -92,8 +92,25 @@
       img.src = sb.gridUrl;
       img.alt = `${sb.style} storyboard grid`;
       const dlBtn = document.getElementById('downloadGridBtn');
-      dlBtn.href = sb.gridUrl;
       dlBtn.style.display = '';
+      dlBtn.addEventListener('click', async (e) => {
+        e.preventDefault();
+        try {
+          dlBtn.textContent = '⏳ Downloading…';
+          dlBtn.disabled = true;
+          const res = await fetch(sb.gridUrl);
+          const blob = await res.blob();
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = `storyboard-${storyboardId}.png`;
+          a.click();
+          URL.revokeObjectURL(url);
+        } finally {
+          dlBtn.textContent = '⬇ Download Grid';
+          dlBtn.disabled = false;
+        }
+      });
     }
 
     // Shots
