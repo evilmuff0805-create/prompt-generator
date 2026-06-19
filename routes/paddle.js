@@ -51,19 +51,83 @@ function priceIdToPlan(priceId) {
 
 const PLAN_CREDITS = { pro: 1000, enterprise: 4000 };
 
-/* ── DB update ── */
-async function updateUserPlan(userId, plan) {
-  const supabase = makeAdminClient();
+/* ── Grant credits on purchase (increment, not overwrite) ── */
+async function grantCreditsForPurchase(supabase, transactionId, userId, plan) {
   const credits = PLAN_CREDITS[plan] || 0;
-  const { error } = await supabase
-    .from('profiles')
-    .update({ plan, credits })
-    .eq('id', userId);
-  if (error) {
-    console.error('[paddle/webhook] Failed to update plan for userId=' + userId + ':', error.message);
-  } else {
-    console.log('[paddle/webhook] Plan updated to \'' + plan + '\' (credits=' + credits + ') for userId=' + userId);
+
+  // Record purchase in ledger first (idempotency guard via UNIQUE on transaction_id)
+  const { error: insertError } = await supabase
+    .from('purchases')
+    .insert({
+      transaction_id: transactionId,
+      user_id: userId,
+      plan,
+      credits_granted: credits,
+      status: 'completed'
+    });
+
+  if (insertError) {
+    if (insertError.code === '23505') {
+      console.log('[paddle/webhook] Purchase already recorded for transaction_id=' + transactionId + ', skipping grant');
+      return;
+    }
+    throw new Error('Failed to insert purchase record: ' + insertError.message);
   }
+
+  // Atomically increment credits via RPC
+  const { error: rpcError } = await supabase.rpc('grant_credits', {
+    p_user_id: userId,
+    p_plan: plan,
+    p_amount: credits
+  });
+
+  if (rpcError) {
+    throw new Error('grant_credits RPC failed: ' + rpcError.message);
+  }
+
+  console.log('[paddle/webhook] Granted ' + credits + ' credits (' + plan + ') to userId=' + userId + ' for transaction=' + transactionId);
+}
+
+/* ── Revoke credits on refund ── */
+async function revokeCreditsForRefund(supabase, transactionId) {
+  // Look up original purchase by transaction_id
+  const { data: purchase, error: lookupError } = await supabase
+    .from('purchases')
+    .select('id, user_id, credits_granted, status')
+    .eq('transaction_id', transactionId)
+    .single();
+
+  if (lookupError || !purchase) {
+    console.error('[paddle/webhook] No purchase record found for transaction_id=' + transactionId + ' — cannot revoke credits');
+    return;
+  }
+
+  if (purchase.status === 'refunded') {
+    console.log('[paddle/webhook] Purchase already refunded for transaction_id=' + transactionId + ', skipping');
+    return;
+  }
+
+  // Mark purchase as refunded
+  const { error: updateError } = await supabase
+    .from('purchases')
+    .update({ status: 'refunded' })
+    .eq('id', purchase.id);
+
+  if (updateError) {
+    throw new Error('Failed to mark purchase as refunded: ' + updateError.message);
+  }
+
+  // Atomically deduct credits via RPC
+  const { error: rpcError } = await supabase.rpc('revoke_credits', {
+    p_user_id: purchase.user_id,
+    p_amount: purchase.credits_granted
+  });
+
+  if (rpcError) {
+    throw new Error('revoke_credits RPC failed: ' + rpcError.message);
+  }
+
+  console.log('[paddle/webhook] Revoked ' + purchase.credits_granted + ' credits from userId=' + purchase.user_id + ' for refunded transaction=' + transactionId);
 }
 
 /* ── POST /api/paddle/webhook ── */
@@ -124,26 +188,60 @@ router.post('/webhook',
       }
     }
 
-    // Only transaction.completed triggers credit grant (one-time purchase)
-    if (eventType === 'transaction.completed') {
-      const data = payload?.data;
-      const userId = data?.custom_data?.userId;
-      const priceId = data?.items?.[0]?.price?.id;
-      const plan = priceIdToPlan(priceId);
+    try {
+      if (eventType === 'transaction.completed') {
+        const data = payload?.data;
+        const transactionId = data?.id;
+        const userId = data?.custom_data?.userId;
+        const priceId = data?.items?.[0]?.price?.id;
+        const plan = priceIdToPlan(priceId);
 
-      if (!userId) {
-        console.error('[paddle/webhook] No userId in custom_data — cannot update plan');
-        return res.status(200).send('OK');
-      }
-      if (!plan) {
-        console.warn('[paddle/webhook] Unknown priceId:', priceId, '— ignoring');
-        return res.status(200).send('OK');
-      }
+        if (!userId) {
+          console.error('[paddle/webhook] No userId in custom_data — cannot grant credits');
+          return res.status(200).send('OK');
+        }
+        if (!plan) {
+          console.warn('[paddle/webhook] Unknown priceId:', priceId, '— ignoring');
+          return res.status(200).send('OK');
+        }
+        if (!transactionId) {
+          console.error('[paddle/webhook] No transaction id in payload — cannot record purchase');
+          return res.status(200).send('OK');
+        }
 
-      await updateUserPlan(userId, plan);
-    } else {
-      // All other events (subscription.*, refund.*, etc.): log only, no DB update
-      console.log('[paddle/webhook] Unhandled event type, ignoring:', eventType);
+        const supabase = makeAdminClient();
+        await grantCreditsForPurchase(supabase, transactionId, userId, plan);
+
+      } else if (eventType === 'adjustment.created') {
+        // Refund event — no userId in payload, must look up via purchases table
+        const data = payload?.data;
+        const action = data?.action;
+        const status = data?.status;
+        const transactionId = data?.transaction_id;
+
+        // Only process approved credit refunds
+        if (action !== 'refund' && action !== 'credit') {
+          console.log('[paddle/webhook] Adjustment action \'' + action + '\' is not a refund/credit, ignoring');
+          return res.status(200).send('OK');
+        }
+        if (status !== 'approved') {
+          console.log('[paddle/webhook] Adjustment status \'' + status + '\' is not approved, ignoring');
+          return res.status(200).send('OK');
+        }
+        if (!transactionId) {
+          console.error('[paddle/webhook] No transaction_id in adjustment payload — cannot process refund');
+          return res.status(200).send('OK');
+        }
+
+        const supabase = makeAdminClient();
+        await revokeCreditsForRefund(supabase, transactionId);
+
+      } else {
+        console.log('[paddle/webhook] Unhandled event type, ignoring:', eventType);
+      }
+    } catch (err) {
+      console.error('[paddle/webhook] Error processing event:', eventType, '—', err.message);
+      return res.status(500).send('Internal error');
     }
 
     return res.status(200).send('OK');
