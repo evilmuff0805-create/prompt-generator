@@ -92,6 +92,23 @@ async function grantCreditsForPurchase(supabase, transactionId, userId, plan) {
   console.log('[paddle/webhook] Reset credits to ' + credits + ' (' + plan + ') for userId=' + userId + ' transaction=' + transactionId);
 }
 
+/* ── Expire subscription at period end (subscription.canceled) ── */
+// Paddle fires subscription.canceled when an end-of-period cancellation actually
+// takes effect (status → canceled). At that point the user loses access:
+// plan → free, credits → 0.
+async function expireSubscription(supabase, userId) {
+  const { error } = await supabase
+    .from('profiles')
+    .update({ plan: 'free', credits: 0 })
+    .eq('id', userId);
+
+  if (error) {
+    throw new Error('Failed to expire subscription: ' + error.message);
+  }
+
+  console.log('[paddle/webhook] Subscription expired (plan=free, credits=0) for userId=' + userId);
+}
+
 /* ── Revoke credits on refund ── */
 async function revokeCreditsForRefund(supabase, transactionId) {
   // Look up original purchase by transaction_id
@@ -239,6 +256,19 @@ router.post('/webhook',
 
         const supabase = makeAdminClient();
         await revokeCreditsForRefund(supabase, transactionId);
+
+      } else if (eventType === 'subscription.canceled') {
+        // End-of-period cancellation took effect — revoke access
+        const data = payload?.data;
+        const userId = data?.custom_data?.userId;
+
+        if (!userId) {
+          console.error('[paddle/webhook] No userId in subscription custom_data — cannot expire subscription');
+          return res.status(200).send('OK');
+        }
+
+        const supabase = makeAdminClient();
+        await expireSubscription(supabase, userId);
 
       } else {
         console.log('[paddle/webhook] Unhandled event type, ignoring:', eventType);
