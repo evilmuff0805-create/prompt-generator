@@ -51,11 +51,15 @@ function priceIdToPlan(priceId) {
 
 const PLAN_CREDITS = { pro: 1000, enterprise: 4000 };
 
-/* ── Grant credits on purchase (increment, not overwrite) ── */
+/* ── Reset credits on each subscription payment (initial + renewals) ── */
+// Subscription (reset, no rollover): Paddle fires transaction.completed every
+// billing cycle. grant_credits RPC SETs credits to the plan allotment (not +=),
+// so each renewal resets the balance to e.g. 1000 instead of accumulating.
 async function grantCreditsForPurchase(supabase, transactionId, userId, plan) {
   const credits = PLAN_CREDITS[plan] || 0;
 
-  // Record purchase in ledger first (idempotency guard via UNIQUE on transaction_id)
+  // Record payment in ledger first (idempotency guard via UNIQUE on transaction_id).
+  // Each billing cycle has a distinct transaction_id → one ledger row per payment.
   const { error: insertError } = await supabase
     .from('purchases')
     .insert({
@@ -68,13 +72,13 @@ async function grantCreditsForPurchase(supabase, transactionId, userId, plan) {
 
   if (insertError) {
     if (insertError.code === '23505') {
-      console.log('[paddle/webhook] Purchase already recorded for transaction_id=' + transactionId + ', skipping grant');
+      console.log('[paddle/webhook] Payment already recorded for transaction_id=' + transactionId + ', skipping reset');
       return;
     }
     throw new Error('Failed to insert purchase record: ' + insertError.message);
   }
 
-  // Atomically increment credits via RPC
+  // Atomically reset credits to the plan allotment via RPC
   const { error: rpcError } = await supabase.rpc('grant_credits', {
     p_user_id: userId,
     p_plan: plan,
@@ -85,7 +89,24 @@ async function grantCreditsForPurchase(supabase, transactionId, userId, plan) {
     throw new Error('grant_credits RPC failed: ' + rpcError.message);
   }
 
-  console.log('[paddle/webhook] Granted ' + credits + ' credits (' + plan + ') to userId=' + userId + ' for transaction=' + transactionId);
+  console.log('[paddle/webhook] Reset credits to ' + credits + ' (' + plan + ') for userId=' + userId + ' transaction=' + transactionId);
+}
+
+/* ── Expire subscription at period end (subscription.canceled) ── */
+// Paddle fires subscription.canceled when an end-of-period cancellation actually
+// takes effect (status → canceled). At that point the user loses access:
+// plan → free, credits → 0.
+async function expireSubscription(supabase, userId) {
+  const { error } = await supabase
+    .from('profiles')
+    .update({ plan: 'free', credits: 0 })
+    .eq('id', userId);
+
+  if (error) {
+    throw new Error('Failed to expire subscription: ' + error.message);
+  }
+
+  console.log('[paddle/webhook] Subscription expired (plan=free, credits=0) for userId=' + userId);
 }
 
 /* ── Revoke credits on refund ── */
@@ -235,6 +256,19 @@ router.post('/webhook',
 
         const supabase = makeAdminClient();
         await revokeCreditsForRefund(supabase, transactionId);
+
+      } else if (eventType === 'subscription.canceled') {
+        // End-of-period cancellation took effect — revoke access
+        const data = payload?.data;
+        const userId = data?.custom_data?.userId;
+
+        if (!userId) {
+          console.error('[paddle/webhook] No userId in subscription custom_data — cannot expire subscription');
+          return res.status(200).send('OK');
+        }
+
+        const supabase = makeAdminClient();
+        await expireSubscription(supabase, userId);
 
       } else {
         console.log('[paddle/webhook] Unhandled event type, ignoring:', eventType);

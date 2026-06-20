@@ -45,9 +45,8 @@ function buildSignatureHeader(secret, rawBody, ts) {
 
 function makeSupabaseMock({ insertError = null, selectData = null, selectError = null, updateError = null, rpcError = null } = {}) {
   const singleFn = jest.fn().mockResolvedValue({ data: selectData, error: selectError });
-  const updateFn = jest.fn().mockReturnValue({
-    eq: jest.fn().mockResolvedValue({ error: updateError })
-  });
+  const updateEqFn = jest.fn().mockResolvedValue({ error: updateError });
+  const updateFn = jest.fn().mockReturnValue({ eq: updateEqFn });
   const rpcFn = jest.fn().mockResolvedValue({ error: rpcError });
 
   return {
@@ -56,13 +55,13 @@ function makeSupabaseMock({ insertError = null, selectData = null, selectError =
       select: jest.fn().mockReturnValue({
         eq: jest.fn().mockReturnValue({ single: singleFn })
       }),
-      update: jest.fn().mockReturnValue({
-        eq: jest.fn().mockResolvedValue({ error: updateError })
-      })
+      update: updateFn
     }),
     rpc: rpcFn,
     _rpcFn: rpcFn,
-    _singleFn: singleFn
+    _singleFn: singleFn,
+    _updateFn: updateFn,
+    _updateEqFn: updateEqFn
   };
 }
 
@@ -109,6 +108,15 @@ async function revokeCreditsForRefund(supabase, transactionId) {
   });
 
   if (rpcError) throw new Error('revoke_credits RPC failed: ' + rpcError.message);
+}
+
+async function expireSubscription(supabase, userId) {
+  const { error } = await supabase
+    .from('profiles')
+    .update({ plan: 'free', credits: 0 })
+    .eq('id', userId);
+
+  if (error) throw new Error('Failed to expire subscription: ' + error.message);
 }
 
 // ── Tests ──
@@ -217,6 +225,23 @@ describe('revokeCreditsForRefund', () => {
     });
     await expect(revokeCreditsForRefund(supabase, 'txn_rpc_fail'))
       .rejects.toThrow('revoke_credits RPC failed');
+  });
+});
+
+describe('expireSubscription', () => {
+  test('plan=free, credits=0으로 업데이트해야 한다', async () => {
+    const supabase = makeSupabaseMock();
+    await expireSubscription(supabase, 'user-uuid');
+
+    expect(supabase.from).toHaveBeenCalledWith('profiles');
+    expect(supabase._updateFn).toHaveBeenCalledWith({ plan: 'free', credits: 0 });
+    expect(supabase._updateEqFn).toHaveBeenCalledWith('id', 'user-uuid');
+  });
+
+  test('업데이트 실패 시 예외를 던져야 한다', async () => {
+    const supabase = makeSupabaseMock({ updateError: { message: 'db error' } });
+    await expect(expireSubscription(supabase, 'user-uuid'))
+      .rejects.toThrow('Failed to expire subscription');
   });
 });
 
