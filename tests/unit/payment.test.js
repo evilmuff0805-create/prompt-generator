@@ -4,6 +4,7 @@
  */
 
 const crypto = require('crypto');
+const { extractPortalUrl } = require('../../routes/payment');
 
 // HMAC 서명 생성 헬퍼 (payment.js와 동일한 로직)
 function generateSignature(secret, body) {
@@ -107,5 +108,57 @@ describe('withTimeout 패턴', () => {
   test('타임아웃 초과 시 에러를 throw해야 한다', async () => {
     const slow = new Promise(resolve => setTimeout(resolve, 500, 'late'));
     await expect(withTimeout(slow, 50, 'test-op')).rejects.toThrow('test-op timed out after 50ms');
+  });
+});
+
+describe('extractPortalUrl', () => {
+  const SUB_ID = 'sub_01h04vsc0qhwtsbsxh3422wjs4';
+
+  function makeResponse({ subscriptions, overview } = {}) {
+    const urls = {};
+    if (subscriptions) urls.subscriptions = subscriptions;
+    if (overview) urls.general = { overview };
+    return { data: { urls } };
+  }
+
+  test('해당 subscription의 cancel_subscription 딥링크를 우선 반환해야 한다', () => {
+    const res = makeResponse({
+      subscriptions: [{ id: SUB_ID, cancel_subscription: 'https://portal/cancel', update_subscription_payment_method: 'https://portal/pay' }],
+      overview: 'https://portal/overview'
+    });
+    expect(extractPortalUrl(res, SUB_ID)).toBe('https://portal/cancel');
+  });
+
+  test('일치하는 subscription이 없으면 general.overview로 폴백해야 한다', () => {
+    const res = makeResponse({
+      subscriptions: [{ id: 'sub_other', cancel_subscription: 'https://portal/other-cancel' }],
+      overview: 'https://portal/overview'
+    });
+    expect(extractPortalUrl(res, SUB_ID)).toBe('https://portal/overview');
+  });
+
+  test('subscriptionId가 null이어도 overview로 폴백해야 한다', () => {
+    const res = makeResponse({ overview: 'https://portal/overview' });
+    expect(extractPortalUrl(res, null)).toBe('https://portal/overview');
+  });
+
+  test('cancel 링크도 overview도 없으면 null을 반환해야 한다', () => {
+    const res = makeResponse({ subscriptions: [{ id: SUB_ID }] });
+    expect(extractPortalUrl(res, SUB_ID)).toBeNull();
+  });
+
+  test('urls가 없는 응답이면 null을 반환해야 한다', () => {
+    expect(extractPortalUrl({ data: {} }, SUB_ID)).toBeNull();
+    expect(extractPortalUrl(null, SUB_ID)).toBeNull();
+  });
+
+  test('다른 subscription의 cancel 링크를 잘못 반환하지 않아야 한다', () => {
+    const res = makeResponse({
+      subscriptions: [
+        { id: 'sub_AAA', cancel_subscription: 'https://portal/AAA' },
+        { id: SUB_ID, cancel_subscription: 'https://portal/TARGET' }
+      ]
+    });
+    expect(extractPortalUrl(res, SUB_ID)).toBe('https://portal/TARGET');
   });
 });
