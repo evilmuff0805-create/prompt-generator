@@ -222,7 +222,17 @@ router.post('/webhook',
           return res.status(200).send('OK');
         }
         if (!plan) {
-          console.warn('[paddle/webhook] Unknown priceId:', priceId, '— ignoring');
+          // 결제는 성공했으나 priceId 가 env(PADDLE_*_PRICE_ID) 와 매칭 실패.
+          // 크레딧이 지급되지 않으므로 매출 손실로 이어질 수 있는 치명적 케이스.
+          // 200 OK 는 유지 (Paddle 재전송 폭주 방지) — 대신 역추적 가능한 식별자를 error 로 남긴다.
+          console.error(
+            '[paddle/webhook] [CRITICAL] 결제 성공했으나 plan 매칭 실패 — 크레딧 미지급, 매출 손실 가능 |',
+            'priceId=' + priceId,
+            '| transaction_id=' + transactionId,
+            '| userId=' + userId,
+            '| customer_id=' + (data?.customer_id || 'n/a'),
+            '| customer_email=' + (data?.customer?.email || 'n/a (payload 에 미포함)')
+          );
           return res.status(200).send('OK');
         }
         if (!transactionId) {
