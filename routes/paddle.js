@@ -92,6 +92,24 @@ async function grantCreditsForPurchase(supabase, transactionId, userId, plan) {
   console.log('[paddle/webhook] Reset credits to ' + credits + ' (' + plan + ') for userId=' + userId + ' transaction=' + transactionId);
 }
 
+/* ── Store Paddle customer/subscription IDs for future portal session use ── */
+async function saveSubscriptionIds(supabase, { userId, customerId, subscriptionId }) {
+  const updates = {};
+  if (customerId)     updates.paddle_customer_id     = customerId;
+  if (subscriptionId) updates.paddle_subscription_id = subscriptionId;
+  if (Object.keys(updates).length === 0) return;
+
+  const { error } = await supabase
+    .from('profiles')
+    .update(updates)
+    .eq('id', userId);
+
+  if (error) {
+    // Credit grant already succeeded — log only, do not throw (keeps webhook 200 OK)
+    console.error('[paddle/webhook] Failed to save Paddle IDs for userId=' + userId + ':', error.message);
+  }
+}
+
 /* ── Expire subscription at period end (subscription.canceled) ── */
 // Paddle fires subscription.canceled when an end-of-period cancellation actually
 // takes effect (status → canceled). At that point the user loses access:
@@ -242,6 +260,11 @@ router.post('/webhook',
 
         const supabase = makeAdminClient();
         await grantCreditsForPurchase(supabase, transactionId, userId, plan);
+        await saveSubscriptionIds(supabase, {
+          userId,
+          customerId: data?.customer_id,
+          subscriptionId: data?.subscription_id,
+        });
 
       } else if (eventType === 'adjustment.created') {
         // Refund event — no userId in payload, must look up via purchases table

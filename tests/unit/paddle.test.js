@@ -119,6 +119,22 @@ async function expireSubscription(supabase, userId) {
   if (error) throw new Error('Failed to expire subscription: ' + error.message);
 }
 
+async function saveSubscriptionIds(supabase, { userId, customerId, subscriptionId }) {
+  const updates = {};
+  if (customerId)     updates.paddle_customer_id     = customerId;
+  if (subscriptionId) updates.paddle_subscription_id = subscriptionId;
+  if (Object.keys(updates).length === 0) return;
+
+  const { error } = await supabase
+    .from('profiles')
+    .update(updates)
+    .eq('id', userId);
+
+  if (error) {
+    console.error('[paddle/webhook] Failed to save Paddle IDs for userId=' + userId + ':', error.message);
+  }
+}
+
 // ── Tests ──
 
 describe('verifyPaddleSignature', () => {
@@ -264,5 +280,51 @@ describe('adjustment.created 이벤트 필터링', () => {
 
   test('status가 approved이면 처리해야 한다', () => {
     expect('approved' === 'approved').toBe(true);
+  });
+});
+
+describe('saveSubscriptionIds', () => {
+  const USER_ID = 'user-uuid-123';
+  const CUSTOMER_ID = 'ctm_01abc';
+  const SUBSCRIPTION_ID = 'sub_01xyz';
+
+  test('customer_id + subscription_id 둘 다 있으면 profiles UPDATE를 호출해야 한다', async () => {
+    const supabase = makeSupabaseMock();
+    await saveSubscriptionIds(supabase, { userId: USER_ID, customerId: CUSTOMER_ID, subscriptionId: SUBSCRIPTION_ID });
+
+    expect(supabase._updateFn).toHaveBeenCalledWith({
+      paddle_customer_id: CUSTOMER_ID,
+      paddle_subscription_id: SUBSCRIPTION_ID,
+    });
+  });
+
+  test('UPDATE .eq()에 userId가 정확히 전달돼야 한다 (customerId 혼용 방지)', async () => {
+    const supabase = makeSupabaseMock();
+    await saveSubscriptionIds(supabase, { userId: USER_ID, customerId: CUSTOMER_ID, subscriptionId: SUBSCRIPTION_ID });
+
+    expect(supabase._updateEqFn).toHaveBeenCalledWith('id', USER_ID);
+    expect(supabase._updateEqFn).not.toHaveBeenCalledWith('id', CUSTOMER_ID);
+  });
+
+  test('customer_id만 있을 때 paddle_subscription_id를 포함하지 않아야 한다', async () => {
+    const supabase = makeSupabaseMock();
+    await saveSubscriptionIds(supabase, { userId: USER_ID, customerId: CUSTOMER_ID, subscriptionId: undefined });
+
+    expect(supabase._updateFn).toHaveBeenCalledWith({ paddle_customer_id: CUSTOMER_ID });
+    expect(supabase._updateFn).not.toHaveBeenCalledWith(expect.objectContaining({ paddle_subscription_id: expect.anything() }));
+  });
+
+  test('둘 다 undefined이면 DB 호출 없이 종료해야 한다', async () => {
+    const supabase = makeSupabaseMock();
+    await saveSubscriptionIds(supabase, { userId: USER_ID, customerId: undefined, subscriptionId: undefined });
+
+    expect(supabase.from).not.toHaveBeenCalled();
+  });
+
+  test('UPDATE 실패해도 예외를 던지지 않아야 한다', async () => {
+    const supabase = makeSupabaseMock({ updateError: { message: 'db error' } });
+    await expect(
+      saveSubscriptionIds(supabase, { userId: USER_ID, customerId: CUSTOMER_ID, subscriptionId: SUBSCRIPTION_ID })
+    ).resolves.toBeUndefined();
   });
 });
