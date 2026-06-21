@@ -625,6 +625,7 @@ const userAvatarEl   = document.getElementById('userAvatar');
 const userNameEl     = document.getElementById('userName');
 const planBadgeEl    = document.getElementById('planBadge');
 const usageDisplayEl = document.getElementById('usageDisplay');
+const manageSubBtn   = document.getElementById('manageSubBtn');
 const logoutBtn      = document.getElementById('logoutBtn');
 
 async function refreshUserProfile(session) {
@@ -647,8 +648,10 @@ async function refreshUserProfile(session) {
       if (['pro', 'enterprise', 'paid'].includes(planKey)) {
         const total = getPlanTotalCredits(planKey);
         usageDisplayEl.textContent = `Credits: ${currentUserCredits.toLocaleString()} / ${total.toLocaleString()}`;
+        if (manageSubBtn) manageSubBtn.style.display = '';
       } else {
         usageDisplayEl.textContent = `Today ${data.daily_used}/1 used`;
+        if (manageSubBtn) manageSubBtn.style.display = 'none';
       }
       updateAnalyzeButtonState();
       updatePricingButtons();
@@ -792,6 +795,34 @@ logoutBtn.addEventListener('click', async () => {
   updatePricingButtons();
   updateNavUI(null);
 });
+
+if (manageSubBtn) {
+  manageSubBtn.addEventListener('click', async () => {
+    const { data: { session } } = await sbClient.auth.getSession();
+    if (!session) { openAuthRequiredModal(); return; }
+
+    const original = manageSubBtn.textContent;
+    manageSubBtn.disabled = true;
+    manageSubBtn.textContent = 'Opening…';
+    try {
+      const res = await fetch('/api/payment/cancel', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${session.access_token}` }
+      });
+      const data = await res.json();
+      if (data.success && data.url) {
+        window.open(data.url, '_blank', 'noopener');
+      } else {
+        alert(data.error || 'Could not open subscription management. Please try again.');
+      }
+    } catch (e) {
+      alert('Could not open subscription management. Please try again.');
+    } finally {
+      manageSubBtn.disabled = false;
+      manageSubBtn.textContent = original;
+    }
+  });
+}
 
 /* ══════════════════════════════════════
    PRICING CHECKOUT (Paddle overlay)
