@@ -651,6 +651,7 @@ async function refreshUserProfile(session) {
         usageDisplayEl.textContent = `Today ${data.daily_used}/1 used`;
       }
       updateAnalyzeButtonState();
+      updatePricingButtons();
     }
   } catch (e) {
     // ignore profile fetch errors
@@ -788,6 +789,7 @@ logoutBtn.addEventListener('click', async () => {
   currentUserPlan = null;
   currentUserCredits = 0;
   updateAnalyzeButtonState();
+  updatePricingButtons();
   updateNavUI(null);
 });
 
@@ -814,6 +816,68 @@ async function handleCheckout(plan) {
 
 document.getElementById('proPlanBtn')?.addEventListener('click', () => handleCheckout('pro'));
 document.getElementById('enterprisePlanBtn')?.addEventListener('click', () => handleCheckout('enterprise'));
+
+/* ── Pricing button states based on current plan ── */
+// Tiers: free(0) < pro/paid(1) < enterprise(2)
+const PLAN_TIER = { free: 0, paid: 1, pro: 1, enterprise: 2 };
+const PLAN_LABEL = { free: 'Free', pro: 'Pro', enterprise: 'Enterprise' };
+const SWITCH_TOOLTIP = 'Plan switching is coming soon. Contact support to change your plan.';
+
+const PRICING_BUTTONS = [
+  { el: document.getElementById('freePlanBtn'),       plan: 'free',       defaultLabel: 'Get Started' },
+  { el: document.getElementById('proPlanBtn'),        plan: 'pro',        defaultLabel: 'Get Started' },
+  { el: document.getElementById('enterprisePlanBtn'), plan: 'enterprise', defaultLabel: 'Get Started' }
+];
+
+function resetPricingButton(btn) {
+  if (!btn.el) return;
+  btn.el.textContent = btn.defaultLabel;
+  btn.el.disabled = false;
+  btn.el.classList.remove('btn--current');
+  btn.el.removeAttribute('title');
+}
+
+function updatePricingButtons() {
+  // Logged out → restore default state (pro/ent buttons open login modal on click)
+  if (!currentUserPlan) {
+    PRICING_BUTTONS.forEach(resetPricingButton);
+    return;
+  }
+
+  const curTier = PLAN_TIER[currentUserPlan] ?? 0;
+
+  PRICING_BUTTONS.forEach((btn) => {
+    if (!btn.el) return;
+    const btnTier = PLAN_TIER[btn.plan];
+
+    if (btnTier === curTier) {
+      // Current plan
+      btn.el.textContent = '✓ Current Plan';
+      btn.el.disabled = true;
+      btn.el.classList.add('btn--current');
+      btn.el.removeAttribute('title');
+    } else if (btnTier > curTier) {
+      btn.el.classList.remove('btn--current');
+      // Upgrade. Only free → paid is a clean new subscription (safe to checkout).
+      // Paid → higher paid would create a 2nd subscription (double billing) until
+      // proration/switch logic exists → disable with tooltip.
+      btn.el.textContent = `Upgrade to ${PLAN_LABEL[btn.plan]}`;
+      if (curTier === 0) {
+        btn.el.disabled = false;
+        btn.el.removeAttribute('title');
+      } else {
+        btn.el.disabled = true;
+        btn.el.title = SWITCH_TOOLTIP;
+      }
+    } else {
+      // Downgrade — no self-serve flow yet (cancel/proration not built) → disable
+      btn.el.classList.remove('btn--current');
+      btn.el.textContent = `Downgrade to ${PLAN_LABEL[btn.plan]}`;
+      btn.el.disabled = true;
+      btn.el.title = SWITCH_TOOLTIP;
+    }
+  });
+}
 
 // Handle redirect back from payment
 (async () => {

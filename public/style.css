@@ -395,7 +395,7 @@ button { font-family: inherit; }
   font-size: 0.95rem;
   font-weight: 600;
 }
-.btn--outline:hover {
+.btn--outline:hover:not(:disabled) {
   border-color: var(--clr-text-muted);
   color: var(--clr-text);
 }
@@ -408,9 +408,19 @@ button { font-family: inherit; }
   font-size: 0.95rem;
   font-weight: 700;
 }
-.btn--lavender:hover {
+.btn--lavender:hover:not(:disabled) {
   box-shadow: 0 0 20px rgba(184,169,255,0.4);
   opacity: 0.9;
+}
+
+/* Pricing: current plan button (intentional, not just dimmed) */
+.btn--current,
+.btn--current:disabled {
+  background: var(--clr-mint, #34d399);
+  color: #000;
+  border: 1.5px solid transparent;
+  opacity: 1;
+  cursor: default;
 }
 
 .btn--full { width: 100%; }
