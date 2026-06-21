@@ -185,7 +185,7 @@ router.post('/generate', requireAuth, async (req, res) => {
 
     if (insertErr) {
       console.error('[storyboard] insert error:', insertErr.message);
-      return res.status(500).json({ code: 'INTERNAL_ERROR', message: `Storyboard insert failed: ${insertErr.message}` });
+      return res.status(500).json({ code: 'INTERNAL_ERROR' });
     }
 
     // 10. Atomic credit deduction
@@ -276,7 +276,7 @@ router.post('/upload-reference', requireAuth, upload.single('image'), async (req
 
     if (uploadErr) {
       console.error('[storyboard] ref upload error:', uploadErr.message);
-      return res.status(500).json({ code: 'INTERNAL_ERROR', message: `Storage upload failed: ${uploadErr.message}` });
+      return res.status(500).json({ code: 'INTERNAL_ERROR', message: 'Failed to upload reference image. Please try again.' });
     }
 
     // Insert reference_images row with 24h expiry
@@ -293,7 +293,7 @@ router.post('/upload-reference', requireAuth, upload.single('image'), async (req
     if (insertErr) {
       console.error('[storyboard] ref insert error:', insertErr.message);
       await admin.storage.from('reference-images').remove([storagePath]);
-      return res.status(500).json({ code: 'INTERNAL_ERROR', message: `DB insert failed: ${insertErr.message}` });
+      return res.status(500).json({ code: 'INTERNAL_ERROR', message: 'Failed to save reference image. Please try again.' });
     }
 
     // Return signed preview URL (1h)
