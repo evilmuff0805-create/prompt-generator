@@ -51,6 +51,22 @@ function priceIdToPlan(priceId) {
 
 const PLAN_CREDITS = { pro: 1000, enterprise: 4000 };
 
+/* ── Route a transaction.completed event by its `data.origin` ── */
+// Returns one of:
+//   'grant'  → new purchase or renewal: existing credit grant/reset (unchanged)
+//   'defer'  → plan change (subscription_update): credit handling deferred to a
+//              later step; plan itself is synced via the subscription.updated event
+//   'ignore' → not credit-related (one-time charge, payment-method change, unknown)
+// NOTE: Both 'checkout' and 'web' are treated as new-purchase origins because
+// Paddle's documented value for a Paddle.js checkout is ambiguous across docs
+// (changelog says "checkout"; the origin enum uses "web"). Covering both keeps
+// the new-subscription grant working regardless of which one is emitted.
+function classifyTransactionOrigin(origin) {
+  if (origin === 'subscription_update') return 'defer';
+  if (origin === 'checkout' || origin === 'web' || origin === 'subscription_recurring') return 'grant';
+  return 'ignore';
+}
+
 /* ── Reset credits on each subscription payment (initial + renewals) ── */
 // Subscription (reset, no rollover): Paddle fires transaction.completed every
 // billing cycle. grant_credits RPC SETs credits to the plan allotment (not +=),
@@ -108,6 +124,24 @@ async function saveSubscriptionIds(supabase, { userId, customerId, subscriptionI
     // Credit grant already succeeded — log only, do not throw (keeps webhook 200 OK)
     console.error('[paddle/webhook] Failed to save Paddle IDs for userId=' + userId + ':', error.message);
   }
+}
+
+/* ── Sync plan on subscription change (subscription.updated) ── */
+// Fired on any subscription change, including plan up/downgrades. We update only
+// the plan column here; credit recalculation is intentionally deferred to a later
+// step. A downgrade may not emit a transaction.completed, so this keeps the DB
+// plan in sync regardless. Re-writing the same plan is harmless (idempotent).
+async function syncPlanFromSubscription(supabase, userId, plan) {
+  const { error } = await supabase
+    .from('profiles')
+    .update({ plan })
+    .eq('id', userId);
+
+  if (error) {
+    throw new Error('Failed to sync plan from subscription.updated: ' + error.message);
+  }
+
+  console.log('[paddle/webhook] Synced plan=' + plan + ' for userId=' + userId + ' (subscription.updated)');
 }
 
 /* ── Expire subscription at period end (subscription.canceled) ── */
@@ -235,6 +269,30 @@ router.post('/webhook',
         const priceId = data?.items?.[0]?.price?.id;
         const plan = priceIdToPlan(priceId);
 
+        // ── Origin routing (overlaid on top of the existing grant flow) ──
+        // Only 'grant' origins (new purchase / renewal) fall through to the
+        // unchanged credit logic below. Plan changes are deferred; everything
+        // else is ignored. This must not alter the checkout/recurring behavior.
+        const decision = classifyTransactionOrigin(data?.origin);
+        if (decision === 'defer') {
+          console.log(
+            '[paddle/webhook] transaction.completed origin=subscription_update (plan change) — credit handling deferred to next step |',
+            'transaction_id=' + transactionId,
+            '| userId=' + (userId || 'n/a')
+          );
+          return res.status(200).send('OK');
+        }
+        if (decision === 'ignore') {
+          console.warn(
+            '[paddle/webhook] transaction.completed origin=' + (data?.origin || 'undefined') +
+            ' — not a credit-granting origin, ignoring |',
+            'transaction_id=' + transactionId,
+            '| userId=' + (userId || 'n/a')
+          );
+          return res.status(200).send('OK');
+        }
+        // decision === 'grant' → existing behavior below (UNCHANGED)
+
         if (!userId) {
           console.error('[paddle/webhook] No userId in custom_data — cannot grant credits');
           return res.status(200).send('OK');
@@ -290,6 +348,33 @@ router.post('/webhook',
         const supabase = makeAdminClient();
         await revokeCreditsForRefund(supabase, transactionId);
 
+      } else if (eventType === 'subscription.updated') {
+        // Subscription changed (incl. plan up/downgrade). Sync the plan column only;
+        // credit recalculation is deferred to a later step.
+        const data = payload?.data;
+        const userId = data?.custom_data?.userId;
+        const priceId = data?.items?.[0]?.price?.id;
+        const plan = priceIdToPlan(priceId);
+
+        if (!userId) {
+          console.error('[paddle/webhook] No userId in subscription.updated custom_data — cannot sync plan');
+          return res.status(200).send('OK');
+        }
+        if (!plan) {
+          // priceId 가 env(PADDLE_*_PRICE_ID) 와 매칭 실패 — plan 동기화 불가.
+          // 200 OK 유지(재전송 폭주 방지) + 역추적 식별자를 error 로 남긴다.
+          console.error(
+            '[paddle/webhook] [CRITICAL] subscription.updated priceId 가 plan 매칭 실패 — plan 동기화 불가 |',
+            'priceId=' + priceId,
+            '| subscription_id=' + (data?.id || 'n/a'),
+            '| userId=' + userId
+          );
+          return res.status(200).send('OK');
+        }
+
+        const supabase = makeAdminClient();
+        await syncPlanFromSubscription(supabase, userId, plan);
+
       } else if (eventType === 'subscription.canceled') {
         // End-of-period cancellation took effect — revoke access
         const data = payload?.data;
@@ -316,3 +401,5 @@ router.post('/webhook',
 );
 
 module.exports = router;
+module.exports.classifyTransactionOrigin = classifyTransactionOrigin;
+module.exports.syncPlanFromSubscription = syncPlanFromSubscription;
