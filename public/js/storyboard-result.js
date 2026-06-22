@@ -3,6 +3,7 @@
 (function () {
   const storyboardId = window.location.pathname.split('/').pop();
   let pollTimer = null;
+  let currentShots = null;
 
   async function init() {
     window.addEventListener('scroll', () => {
@@ -116,7 +117,36 @@
     // Shots
     const shotList = document.getElementById('shotList');
     shotList.innerHTML = '';
-    (sb.shots || []).forEach((shot, i) => {
+    currentShots = sb.shots || [];
+
+    // Copy All Prompts button (above shot list)
+    const copyAllBtn = document.createElement('button');
+    copyAllBtn.className = 'btn btn--secondary storyboard-copy-all-btn';
+    copyAllBtn.textContent = '📋 Copy All Prompts';
+    copyAllBtn.addEventListener('click', () => {
+      if (!currentShots || currentShots.length === 0) return;
+
+      const flashFail = () => {
+        copyAllBtn.textContent = '복사 실패 — 다시 시도';
+        setTimeout(() => { copyAllBtn.textContent = '📋 Copy All Prompts'; }, 2000);
+      };
+
+      if (!navigator.clipboard) { flashFail(); return; }
+
+      const text = currentShots.map((shot, i) => {
+        const num = shot.shotNumber || (i + 1);
+        const angle = shot.cameraAngle ? ` (${shot.cameraAngle})` : '';
+        return `- shot ${num}${angle} -\n${(shot.videoPrompt || '').trim()}`;
+      }).join('\n\n');
+
+      navigator.clipboard.writeText(text).then(() => {
+        copyAllBtn.textContent = '✓ Copied!';
+        setTimeout(() => { copyAllBtn.textContent = '📋 Copy All Prompts'; }, 2000);
+      }).catch(flashFail);
+    });
+    shotList.parentElement.insertBefore(copyAllBtn, shotList);
+
+    currentShots.forEach((shot, i) => {
       const item = document.createElement('div');
       item.className = 'storyboard-shot-item';
       item.innerHTML = `
