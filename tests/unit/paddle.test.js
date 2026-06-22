@@ -5,6 +5,7 @@
  */
 
 const crypto = require('crypto');
+const { classifyTransactionOrigin, syncPlanFromSubscription } = require('../../routes/paddle');
 
 // ── Copied from routes/paddle.js (pure functions, no side effects) ──
 
@@ -326,5 +327,71 @@ describe('saveSubscriptionIds', () => {
     await expect(
       saveSubscriptionIds(supabase, { userId: USER_ID, customerId: CUSTOMER_ID, subscriptionId: SUBSCRIPTION_ID })
     ).resolves.toBeUndefined();
+  });
+});
+
+describe('classifyTransactionOrigin', () => {
+  test("'checkout'은 grant로 분류해야 한다 (신규 구매)", () => {
+    expect(classifyTransactionOrigin('checkout')).toBe('grant');
+  });
+
+  test("'web'도 grant로 분류해야 한다 (Paddle.js 체크아웃 origin 모호성 대비)", () => {
+    expect(classifyTransactionOrigin('web')).toBe('grant');
+  });
+
+  test("'subscription_recurring'은 grant로 분류해야 한다 (갱신)", () => {
+    expect(classifyTransactionOrigin('subscription_recurring')).toBe('grant');
+  });
+
+  test("'subscription_update'는 defer로 분류해야 한다 (플랜 변경)", () => {
+    expect(classifyTransactionOrigin('subscription_update')).toBe('defer');
+  });
+
+  test("'subscription_charge'는 ignore로 분류해야 한다 (일회성 추가 청구)", () => {
+    expect(classifyTransactionOrigin('subscription_charge')).toBe('ignore');
+  });
+
+  test("'subscription_payment_method_change'는 ignore로 분류해야 한다", () => {
+    expect(classifyTransactionOrigin('subscription_payment_method_change')).toBe('ignore');
+  });
+
+  test('undefined / 알 수 없는 값은 ignore로 분류해야 한다', () => {
+    expect(classifyTransactionOrigin(undefined)).toBe('ignore');
+    expect(classifyTransactionOrigin(null)).toBe('ignore');
+    expect(classifyTransactionOrigin('some_future_origin')).toBe('ignore');
+  });
+});
+
+describe('syncPlanFromSubscription', () => {
+  const USER_ID = 'user-uuid-123';
+
+  test('profiles.plan을 새 플랜으로 UPDATE해야 한다', async () => {
+    const supabase = makeSupabaseMock();
+    await syncPlanFromSubscription(supabase, USER_ID, 'pro');
+
+    expect(supabase.from).toHaveBeenCalledWith('profiles');
+    expect(supabase._updateFn).toHaveBeenCalledWith({ plan: 'pro' });
+  });
+
+  test('UPDATE .eq()에 userId가 정확히 전달돼야 한다', async () => {
+    const supabase = makeSupabaseMock();
+    await syncPlanFromSubscription(supabase, USER_ID, 'enterprise');
+
+    expect(supabase._updateEqFn).toHaveBeenCalledWith('id', USER_ID);
+  });
+
+  test('크레딧은 건드리지 않아야 한다 (plan만 UPDATE)', async () => {
+    const supabase = makeSupabaseMock();
+    await syncPlanFromSubscription(supabase, USER_ID, 'pro');
+
+    const updateArg = supabase._updateFn.mock.calls[0][0];
+    expect(updateArg).toEqual({ plan: 'pro' });
+    expect(updateArg).not.toHaveProperty('credits');
+  });
+
+  test('UPDATE 실패 시 예외를 던져야 한다', async () => {
+    const supabase = makeSupabaseMock({ updateError: { message: 'db error' } });
+    await expect(syncPlanFromSubscription(supabase, USER_ID, 'pro'))
+      .rejects.toThrow('Failed to sync plan from subscription.updated');
   });
 });
