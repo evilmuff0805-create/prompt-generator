@@ -136,7 +136,7 @@
       const text = currentShots.map((shot, i) => {
         const num = shot.shotNumber || (i + 1);
         const angle = shot.cameraAngle ? ` (${shot.cameraAngle})` : '';
-        return `--- Shot ${num}${angle} ---\n${(shot.videoPrompt || '').trim()}`;
+        return `- shot ${num}${angle} -\n${(shot.videoPrompt || '').trim()}`;
       }).join('\n\n');
 
       navigator.clipboard.writeText(text).then(() => {
