@@ -144,6 +144,29 @@ async function syncPlanFromSubscription(supabase, userId, plan) {
   console.log('[paddle/webhook] Synced plan=' + plan + ' for userId=' + userId + ' (subscription.updated)');
 }
 
+/* ── Apply plan change with credit recalculation (subscription.updated, Step 2) ── */
+// Calls the apply_plan_change Postgres RPC which atomically:
+//   - Reads current plan + credits (FOR UPDATE lock)
+//   - Upgrade  → resets credits to full allotment
+//   - Downgrade → credits = min(remaining, new allotment)
+//   - Same plan → credits unchanged (idempotent re-delivery safe)
+// Returns the new credits value.
+async function applyPlanChange(supabase, userId, plan) {
+  const allotment = PLAN_CREDITS[plan];
+  const { data, error } = await supabase.rpc('apply_plan_change', {
+    p_user_id: userId,
+    p_new_plan: plan,
+    p_new_allotment: allotment
+  });
+
+  if (error) {
+    throw new Error('apply_plan_change RPC failed: ' + error.message);
+  }
+
+  console.log('[paddle/webhook] Plan change applied: plan=' + plan + ' credits=' + data + ' userId=' + userId);
+  return data;
+}
+
 /* ── Expire subscription at period end (subscription.canceled) ── */
 // Paddle fires subscription.canceled when an end-of-period cancellation actually
 // takes effect (status → canceled). At that point the user loses access:
@@ -349,22 +372,48 @@ router.post('/webhook',
         await revokeCreditsForRefund(supabase, transactionId);
 
       } else if (eventType === 'subscription.updated') {
-        // Subscription changed (incl. plan up/downgrade). Sync the plan column only;
-        // credit recalculation is deferred to a later step.
+        // Subscription changed (incl. plan up/downgrade).
+        // Atomically recalculates credits via apply_plan_change RPC.
         const data = payload?.data;
-        const userId = data?.custom_data?.userId;
+        let userId = data?.custom_data?.userId;
         const priceId = data?.items?.[0]?.price?.id;
         const plan = priceIdToPlan(priceId);
 
+        // userId fallback: if custom_data.userId is absent (e.g. older Paddle checkout
+        // sessions before we started embedding it), look up the profile by the
+        // paddle_customer_id stored during the initial purchase.
+        const supabase = makeAdminClient();
         if (!userId) {
-          console.error('[paddle/webhook] No userId in subscription.updated custom_data — cannot sync plan');
+          const customerId = data?.customer_id;
+          if (customerId) {
+            const { data: profile, error: lookupError } = await supabase
+              .from('profiles')
+              .select('id')
+              .eq('paddle_customer_id', customerId)
+              .single();
+            if (!lookupError && profile?.id) {
+              userId = profile.id;
+              console.log('[paddle/webhook] subscription.updated — resolved userId=' + userId + ' from paddle_customer_id=' + customerId);
+            }
+          }
+        }
+
+        if (!userId) {
+          // Both custom_data.userId and paddle_customer_id lookup failed — cannot
+          // identify the user. Log as CRITICAL (no credit change made).
+          console.error(
+            '[paddle/webhook] [CRITICAL] subscription.updated — userId 특정 불가',
+            '(custom_data.userId 없음, paddle_customer_id 조회 실패) — 크레딧 변경 생략 |',
+            'subscription_id=' + (data?.id || 'n/a'),
+            '| customer_id=' + (data?.customer_id || 'n/a')
+          );
           return res.status(200).send('OK');
         }
         if (!plan) {
-          // priceId 가 env(PADDLE_*_PRICE_ID) 와 매칭 실패 — plan 동기화 불가.
-          // 200 OK 유지(재전송 폭주 방지) + 역추적 식별자를 error 로 남긴다.
+          // priceId가 env(PADDLE_*_PRICE_ID)와 매칭 실패 — plan 동기화 불가.
+          // 200 OK 유지(재전송 폭주 방지) + 역추적 식별자를 error로 남긴다.
           console.error(
-            '[paddle/webhook] [CRITICAL] subscription.updated priceId 가 plan 매칭 실패 — plan 동기화 불가 |',
+            '[paddle/webhook] [CRITICAL] subscription.updated priceId가 plan 매칭 실패 — plan 동기화 불가 |',
             'priceId=' + priceId,
             '| subscription_id=' + (data?.id || 'n/a'),
             '| userId=' + userId
@@ -372,8 +421,12 @@ router.post('/webhook',
           return res.status(200).send('OK');
         }
 
-        const supabase = makeAdminClient();
-        await syncPlanFromSubscription(supabase, userId, plan);
+        // KNOWN LIMITATION: if Paddle issues a credit_to_balance adjustment for a
+        // downgrade, the resulting adjustment.created event will not find a matching
+        // purchases row (plan changes have no transaction_id in the ledger), so
+        // revokeCreditsForRefund silently exits. Credits are not double-deducted, but
+        // the adjustment goes unlogged in the purchases table.
+        await applyPlanChange(supabase, userId, plan);
 
       } else if (eventType === 'subscription.canceled') {
         // End-of-period cancellation took effect — revoke access
@@ -403,3 +456,4 @@ router.post('/webhook',
 module.exports = router;
 module.exports.classifyTransactionOrigin = classifyTransactionOrigin;
 module.exports.syncPlanFromSubscription = syncPlanFromSubscription;
+module.exports.applyPlanChange = applyPlanChange;
