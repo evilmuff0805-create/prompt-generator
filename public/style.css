@@ -1379,6 +1379,25 @@ button { font-family: inherit; }
 }
 .modal__toggle a:hover { text-decoration: underline; }
 
+.modal__warn {
+  background: rgba(255, 193, 7, 0.08);
+  border: 1px solid rgba(255, 193, 7, 0.25);
+  border-radius: var(--radius);
+  padding: 0.6rem 0.75rem;
+  font-size: 0.8rem;
+  color: var(--clr-text-muted);
+  margin-bottom: 1.25rem;
+  line-height: 1.5;
+}
+
+.modal__btn-row {
+  display: flex;
+  gap: 0.75rem;
+  margin-top: 0.25rem;
+}
+
+.modal__btn-row .btn { flex: 1; }
+
 /* ══════════════════════════════════════
    SCROLL REVEAL
 ══════════════════════════════════════ */

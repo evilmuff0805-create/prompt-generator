@@ -357,8 +357,48 @@
     </div>
   </div>
 
+  <!-- Change Plan Modal -->
+  <div id="changePlanModal" class="modal-overlay" aria-hidden="true">
+    <div class="modal" role="dialog" aria-modal="true" aria-label="Change Plan">
+      <button class="modal__close" id="changePlanClose" aria-label="Close">✕</button>
+      <div class="modal__logo">PromptGen</div>
+      <div class="modal-icon" id="changePlanIcon">🔄</div>
+      <h2 class="modal__title" id="changePlanTitle">Change Plan</h2>
+
+      <!-- Loading state: fetching preview -->
+      <div id="cpStateLoading">
+        <div style="display:flex;justify-content:center;margin:0.5rem 0 1.5rem"><div class="spinner"></div></div>
+      </div>
+
+      <!-- Ready state: show amounts + optional credit warning -->
+      <div id="cpStateReady" style="display:none">
+        <p class="modal__sub" id="changePlanPriceInfo" style="white-space:pre-line"></p>
+        <div id="changePlanCreditWarn" class="modal__warn" style="display:none">
+          <span id="changePlanCreditText"></span>
+        </div>
+        <div class="modal__btn-row">
+          <button class="btn btn--secondary" id="changePlanCancelBtn">Cancel</button>
+          <button class="btn btn--primary" id="changePlanConfirmBtn">Confirm Change</button>
+        </div>
+      </div>
+
+      <!-- Updating state: webhook polling in progress -->
+      <div id="cpStateUpdating" style="display:none">
+        <div style="display:flex;justify-content:center;margin:0.5rem 0 1rem"><div class="spinner"></div></div>
+        <p class="modal__sub" id="changePlanUpdatingMsg">Applying your plan change…</p>
+      </div>
+
+      <!-- Error state -->
+      <div id="cpStateError" style="display:none">
+        <p class="modal__sub" id="changePlanErrorMsg"></p>
+        <button class="btn btn--secondary btn--full" id="changePlanDismissBtn">Close</button>
+      </div>
+    </div>
+  </div>
+
   <script src="https://cdn.paddle.com/paddle/v2/paddle.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.49.4/dist/umd/supabase.js" integrity="sha256-/anWf4DM5AdPeNY3O7E26Ew0yyNbipHF5ChAaNpt3EI=" crossorigin="anonymous"></script>
+  <script src="/js/changePlan-helpers.js"></script>
   <script src="/app.js"></script>
   <script src="/navbar-shared.js"></script>
   <script src="/gallery-data.js"></script>
