@@ -5,7 +5,7 @@
  */
 
 const crypto = require('crypto');
-const { classifyTransactionOrigin, syncPlanFromSubscription } = require('../../routes/paddle');
+const { classifyTransactionOrigin, syncPlanFromSubscription, applyPlanChange } = require('../../routes/paddle');
 
 // ── Copied from routes/paddle.js (pure functions, no side effects) ──
 
@@ -393,5 +393,108 @@ describe('syncPlanFromSubscription', () => {
     const supabase = makeSupabaseMock({ updateError: { message: 'db error' } });
     await expect(syncPlanFromSubscription(supabase, USER_ID, 'pro'))
       .rejects.toThrow('Failed to sync plan from subscription.updated');
+  });
+});
+
+describe('applyPlanChange', () => {
+  const USER_ID = 'user-uuid-123';
+
+  test('업그레이드: apply_plan_change RPC를 enterprise allotment(4000)으로 호출해야 한다', async () => {
+    const supabase = makeSupabaseMock();
+    await applyPlanChange(supabase, USER_ID, 'enterprise');
+
+    expect(supabase._rpcFn).toHaveBeenCalledWith('apply_plan_change', {
+      p_user_id: USER_ID,
+      p_new_plan: 'enterprise',
+      p_new_allotment: 4000
+    });
+  });
+
+  test('다운그레이드: apply_plan_change RPC를 pro allotment(1000)으로 호출해야 한다', async () => {
+    const supabase = makeSupabaseMock();
+    await applyPlanChange(supabase, USER_ID, 'pro');
+
+    expect(supabase._rpcFn).toHaveBeenCalledWith('apply_plan_change', {
+      p_user_id: USER_ID,
+      p_new_plan: 'pro',
+      p_new_allotment: 1000
+    });
+  });
+
+  test('동일 플랜 idempotent 재전송: RPC 호출은 정확히 1회 (DB 내 크레딧 결정은 RPC가 처리)', async () => {
+    const supabase = makeSupabaseMock();
+    await applyPlanChange(supabase, USER_ID, 'enterprise');
+
+    expect(supabase._rpcFn).toHaveBeenCalledTimes(1);
+  });
+
+  test('RPC 실패 시 예외를 던져야 한다', async () => {
+    const supabase = makeSupabaseMock({ rpcError: { message: 'RPC error' } });
+    await expect(applyPlanChange(supabase, USER_ID, 'enterprise'))
+      .rejects.toThrow('apply_plan_change RPC failed');
+  });
+});
+
+describe('subscription.updated userId 폴백 로직', () => {
+  // Mirrors the handler's userId resolution logic for unit testing
+  async function resolveUserId(supabase, data) {
+    let userId = data?.custom_data?.userId;
+    if (!userId) {
+      const customerId = data?.customer_id;
+      if (customerId) {
+        const { data: profile, error: lookupError } = await supabase
+          .from('profiles')
+          .select('id')
+          .eq('paddle_customer_id', customerId)
+          .single();
+        if (!lookupError && profile?.id) {
+          userId = profile.id;
+        }
+      }
+    }
+    return userId || null;
+  }
+
+  test('custom_data.userId가 있으면 DB 조회 없이 반환해야 한다', async () => {
+    const supabase = makeSupabaseMock();
+    const data = { custom_data: { userId: 'user-direct' }, customer_id: 'ctm_abc' };
+    const userId = await resolveUserId(supabase, data);
+
+    expect(userId).toBe('user-direct');
+    expect(supabase.from).not.toHaveBeenCalled();
+  });
+
+  test('custom_data.userId 없을 때 paddle_customer_id로 profiles를 조회해야 한다', async () => {
+    const supabase = makeSupabaseMock({ selectData: { id: 'user-from-db' } });
+    const data = { customer_id: 'ctm_abc' };
+    const userId = await resolveUserId(supabase, data);
+
+    expect(userId).toBe('user-from-db');
+    expect(supabase.from).toHaveBeenCalledWith('profiles');
+  });
+
+  test('custom_data.userId도 없고 paddle_customer_id 조회도 실패하면 null을 반환해야 한다', async () => {
+    const supabase = makeSupabaseMock({ selectData: null, selectError: { message: 'not found' } });
+    const data = { customer_id: 'ctm_abc' };
+    const userId = await resolveUserId(supabase, data);
+
+    expect(userId).toBeNull();
+  });
+
+  test('customer_id 자체가 없으면 DB 조회 없이 null을 반환해야 한다', async () => {
+    const supabase = makeSupabaseMock();
+    const data = { custom_data: {} };
+    const userId = await resolveUserId(supabase, data);
+
+    expect(userId).toBeNull();
+    expect(supabase.from).not.toHaveBeenCalled();
+  });
+
+  test('data 자체가 null이면 null을 반환해야 한다', async () => {
+    const supabase = makeSupabaseMock();
+    const userId = await resolveUserId(supabase, null);
+
+    expect(userId).toBeNull();
+    expect(supabase.from).not.toHaveBeenCalled();
   });
 });
