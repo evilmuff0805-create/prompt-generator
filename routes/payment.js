@@ -19,6 +19,28 @@ function extractPortalUrl(paddleResponse, subscriptionId) {
   return (sub && sub.cancel_subscription) || urls.general?.overview || null;
 }
 
+/* ── Plan → Paddle price ID (server-side, env-based) ── */
+// Mirrors routes/paddle.js priceIdToPlan() so the webhook and this endpoint
+// share a single source of truth (env). NEVER trust a client-supplied price ID
+// for a money-moving call — the client only sends the plan name.
+function planToPriceId(plan) {
+  if (plan === 'pro')        return process.env.PADDLE_PRO_PRICE_ID || null;
+  if (plan === 'enterprise') return process.env.PADDLE_ENTERPRISE_PRICE_ID || null;
+  return null;
+}
+
+/* ── Build the Paddle subscription-update request body ── */
+// Paddle requires the COMPLETE items list — omitted items are removed. Our
+// subscriptions carry a single plan item, so the full list is just this one.
+// Credits are NOT touched here; the subscription.updated webhook recalculates
+// them via apply_plan_change (single source for credit changes).
+function buildSubscriptionUpdateBody(priceId) {
+  return {
+    items: [{ price_id: priceId, quantity: 1 }],
+    proration_billing_mode: 'prorated_immediately'
+  };
+}
+
 function makeUserClient(token) {
   return createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY, {
     global: { headers: { Authorization: `Bearer ${token}` } },
@@ -123,5 +145,121 @@ router.post('/cancel', authMiddleware, async (req, res) => {
   return res.json({ success: true, url });
 });
 
+/* ── POST /api/payment/change-plan ── */
+// Actively asks Paddle to switch the user's subscription to a different plan
+// (Pro <-> Enterprise) via PATCH /subscriptions/{id}. With proration_billing_mode
+// = 'prorated_immediately', Paddle charges/credits the difference right away and
+// emits subscription.updated, which our webhook handles to recalculate credits
+// (apply_plan_change). This endpoint MUST NOT touch credits or plan in our DB —
+// the webhook is the single source for those changes, preventing double-processing.
+//
+// body: { plan: 'pro' | 'enterprise', preview?: boolean }
+//   preview: true  → PATCH /subscriptions/{id}/preview (no charge; returns proration)
+//   preview: false → PATCH /subscriptions/{id}        (applies the change, real money)
+const VALID_PLANS = ['pro', 'enterprise'];
+
+async function handleChangePlan(req, res) {
+  const targetPlan = req.body?.plan;
+  const isPreview = req.body?.preview === true;
+
+  // Guard 6: target plan must be a known paid plan
+  if (!VALID_PLANS.includes(targetPlan)) {
+    return res.status(400).json({ success: false, error: 'Invalid plan.', code: 'INVALID_PLAN' });
+  }
+
+  // Guard 5: API key must be configured
+  const apiKey = process.env.PADDLE_API_KEY;
+  if (!apiKey) {
+    console.error('[payment/change-plan] PADDLE_API_KEY is not configured');
+    return res.status(500).json({ success: false, error: 'Plan changes are temporarily unavailable.' });
+  }
+
+  // Map plan → price ID server-side (never trust client). Must be configured.
+  const priceId = planToPriceId(targetPlan);
+  if (!priceId) {
+    console.error('[payment/change-plan] [CRITICAL] No price ID configured for plan=' + targetPlan + ' (check PADDLE_*_PRICE_ID env)');
+    return res.status(500).json({ success: false, error: 'Plan changes are temporarily unavailable.' });
+  }
+
+  // Load the user's current plan + stored subscription ID
+  const { data: profile, error } = await req.supabase
+    .from('profiles')
+    .select('plan, paddle_subscription_id')
+    .eq('id', req.user.id)
+    .single();
+
+  if (error) {
+    console.error('[payment/change-plan] Failed to load profile for userId=' + req.user.id + ':', error.message);
+    return res.status(500).json({ success: false, error: 'Failed to load subscription details.' });
+  }
+
+  const currentPlan = profile?.plan;
+  const subscriptionId = profile?.paddle_subscription_id;
+
+  // Guard 4: free users have no subscription to change — they must use checkout
+  if (currentPlan === 'free' || !currentPlan) {
+    return res.status(400).json({ success: false, error: 'No active subscription to change.', code: 'NO_ACTIVE_SUBSCRIPTION' });
+  }
+  // Guard 2: must have a stored Paddle subscription ID
+  if (!subscriptionId) {
+    return res.status(404).json({ success: false, error: 'No active subscription found.', code: 'NO_SUBSCRIPTION' });
+  }
+  // Guard 3: target must differ from current (idempotency / double-submit block)
+  if (targetPlan === currentPlan) {
+    return res.status(400).json({ success: false, error: 'Already on this plan.', code: 'SAME_PLAN' });
+  }
+
+  // Build the Paddle request. Preview uses the same body on the /preview path.
+  const body = buildSubscriptionUpdateBody(priceId);
+  const path = isPreview
+    ? `/subscriptions/${subscriptionId}/preview`
+    : `/subscriptions/${subscriptionId}`;
+
+  let paddleRes;
+  try {
+    paddleRes = await fetch(`${PADDLE_API_BASE}${path}`, {
+      method: 'PATCH',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(body)
+    });
+  } catch (err) {
+    console.error('[payment/change-plan] Paddle API request failed:', err.message);
+    return res.status(502).json({ success: false, error: 'Could not reach subscription provider.' });
+  }
+
+  if (!paddleRes.ok) {
+    const errBody = await paddleRes.text().catch(() => '');
+    if (paddleRes.status === 403) {
+      console.error('[payment/change-plan] [CRITICAL] Paddle 403 — API key likely missing subscription.write scope. body=' + errBody);
+    } else {
+      console.error('[payment/change-plan] Paddle update error status=' + paddleRes.status + ' body=' + errBody);
+    }
+    // Money-related: do not leak Paddle internals; our DB is left untouched
+    // (plan stays in sync via webhook). Generic, safe message only.
+    return res.status(502).json({ success: false, error: 'Could not change your plan. Please try again later.' });
+  }
+
+  const json = await paddleRes.json().catch(() => null);
+
+  if (isPreview) {
+    // Return the proration preview so the caller can show the upcoming charge.
+    // No money moved, no DB change.
+    return res.json({ success: true, preview: true, data: json?.data || null });
+  }
+
+  // Applied. Credits/plan are synced by the subscription.updated webhook — we
+  // intentionally return without writing to our DB.
+  console.log('[payment/change-plan] Plan change requested: userId=' + req.user.id + ' → ' + targetPlan + ' (subscription=' + subscriptionId + ')');
+  return res.json({ success: true, plan: targetPlan });
+}
+
+router.post('/change-plan', authMiddleware, handleChangePlan);
+
 module.exports = router;
 module.exports.extractPortalUrl = extractPortalUrl;
+module.exports.planToPriceId = planToPriceId;
+module.exports.buildSubscriptionUpdateBody = buildSubscriptionUpdateBody;
+module.exports.handleChangePlan = handleChangePlan;
