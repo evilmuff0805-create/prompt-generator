@@ -614,6 +614,7 @@ document.addEventListener('keydown', e => {
     closeModal();
     closeAuthRequiredModal();
     closeUpgradeModal();
+    closeChangePlanModal();
   }
 });
 
@@ -845,8 +846,20 @@ async function handleCheckout(plan) {
   });
 }
 
-document.getElementById('proPlanBtn')?.addEventListener('click', () => handleCheckout('pro'));
-document.getElementById('enterprisePlanBtn')?.addEventListener('click', () => handleCheckout('enterprise'));
+document.getElementById('proPlanBtn')?.addEventListener('click', () => handlePlanButtonClick('pro'));
+document.getElementById('enterprisePlanBtn')?.addEventListener('click', () => handlePlanButtonClick('enterprise'));
+
+/* ── Plan button dispatcher: free → checkout, paid → change-plan modal ── */
+// CRITICAL: paid users must NEVER go through handleCheckout — that creates a 2nd subscription.
+async function handlePlanButtonClick(targetPlan) {
+  const { data: { session } } = await sbClient.auth.getSession();
+  if (!session) { openModal(); return; }
+  if (['pro', 'enterprise', 'paid'].includes(currentUserPlan)) {
+    openChangePlanModal(targetPlan);
+  } else {
+    handleCheckout(targetPlan);
+  }
+}
 
 /* ── Pricing button states based on current plan ── */
 // Tiers: free(0) < pro/paid(1) < enterprise(2)
@@ -889,23 +902,15 @@ function updatePricingButtons() {
       btn.el.removeAttribute('title');
     } else if (btnTier > curTier) {
       btn.el.classList.remove('btn--current');
-      // Upgrade. Only free → paid is a clean new subscription (safe to checkout).
-      // Paid → higher paid would create a 2nd subscription (double billing) until
-      // proration/switch logic exists → disable with tooltip.
       btn.el.textContent = `Upgrade to ${PLAN_LABEL[btn.plan]}`;
-      if (curTier === 0) {
-        btn.el.disabled = false;
-        btn.el.removeAttribute('title');
-      } else {
-        btn.el.disabled = true;
-        btn.el.title = SWITCH_TOOLTIP;
-      }
+      btn.el.disabled = false;
+      btn.el.removeAttribute('title');
     } else {
-      // Downgrade — no self-serve flow yet (cancel/proration not built) → disable
+      // Downgrade
       btn.el.classList.remove('btn--current');
       btn.el.textContent = `Downgrade to ${PLAN_LABEL[btn.plan]}`;
-      btn.el.disabled = true;
-      btn.el.title = SWITCH_TOOLTIP;
+      btn.el.disabled = false;
+      btn.el.removeAttribute('title');
     }
   });
 }
@@ -921,6 +926,190 @@ function updatePricingButtons() {
     window.history.replaceState({}, '', window.location.pathname + window.location.hash);
   }
 })();
+
+/* ══════════════════════════════════════
+   CHANGE PLAN MODAL
+══════════════════════════════════════ */
+const changePlanModal      = document.getElementById('changePlanModal');
+const changePlanClose      = document.getElementById('changePlanClose');
+const changePlanIcon       = document.getElementById('changePlanIcon');
+const changePlanTitle      = document.getElementById('changePlanTitle');
+const changePlanPriceInfo  = document.getElementById('changePlanPriceInfo');
+const changePlanCreditWarn = document.getElementById('changePlanCreditWarn');
+const changePlanCreditText = document.getElementById('changePlanCreditText');
+const changePlanCancelBtn  = document.getElementById('changePlanCancelBtn');
+const changePlanConfirmBtn = document.getElementById('changePlanConfirmBtn');
+const changePlanUpdatingMsg = document.getElementById('changePlanUpdatingMsg');
+const changePlanRefreshBtn = document.getElementById('changePlanRefreshBtn');
+const cpUpdatingSpinner    = document.getElementById('cpUpdatingSpinner');
+const changePlanErrorMsg   = document.getElementById('changePlanErrorMsg');
+const changePlanDismissBtn = document.getElementById('changePlanDismissBtn');
+
+const cpStateLoading  = document.getElementById('cpStateLoading');
+const cpStateReady    = document.getElementById('cpStateReady');
+const cpStateUpdating = document.getElementById('cpStateUpdating');
+const cpStateError    = document.getElementById('cpStateError');
+
+let _cpTargetPlan = null;
+let _cpPollCancel = null;
+
+function cpShowState(state) {
+  [cpStateLoading, cpStateReady, cpStateUpdating, cpStateError].forEach(el => {
+    if (el) el.style.display = 'none';
+  });
+  if (state) state.style.display = '';
+}
+
+function openChangePlanModal(targetPlan) {
+  // Guard: only for paid users (free must use checkout)
+  if (!['pro', 'enterprise', 'paid'].includes(currentUserPlan)) return;
+
+  _cpTargetPlan = targetPlan;
+  const isUpgrade = (PLAN_TIER[targetPlan] || 0) > (PLAN_TIER[currentUserPlan] || 0);
+
+  changePlanIcon.textContent  = isUpgrade ? '⬆️' : '⬇️';
+  changePlanTitle.textContent = isUpgrade
+    ? `Upgrade to ${PLAN_LABEL[targetPlan]}`
+    : `Downgrade to ${PLAN_LABEL[targetPlan]}`;
+  changePlanCreditWarn.style.display = 'none';
+  changePlanPriceInfo.textContent    = '';
+  cpShowState(cpStateLoading);
+
+  changePlanModal.classList.add('open');
+  changePlanModal.setAttribute('aria-hidden', 'false');
+
+  _cpLoadPreview(targetPlan, isUpgrade);
+}
+
+function closeChangePlanModal() {
+  if (!changePlanModal) return;
+  changePlanModal.classList.remove('open');
+  changePlanModal.setAttribute('aria-hidden', 'true');
+  _cpTargetPlan = null;
+  if (_cpPollCancel) { _cpPollCancel(); _cpPollCancel = null; }
+}
+
+async function _cpLoadPreview(targetPlan, isUpgrade) {
+  try {
+    const { data: { session } } = await sbClient.auth.getSession();
+    if (!session) { closeChangePlanModal(); openAuthRequiredModal(); return; }
+
+    const res = await fetch('/api/payment/change-plan', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${session.access_token}`
+      },
+      body: JSON.stringify({ plan: targetPlan, preview: true })
+    });
+    const json = await res.json();
+
+    if (!res.ok || !json.success) throw new Error(json.error || 'Could not load plan details.');
+
+    _cpRenderReady(ChangePlanHelpers.parsePlanPreview(json.data), targetPlan, isUpgrade);
+  } catch (err) {
+    changePlanTitle.textContent = 'Could not load plan details';
+    changePlanErrorMsg.textContent = err.message || 'Please try again.';
+    cpShowState(cpStateError);
+  }
+}
+
+function _cpRenderReady(preview, targetPlan, isUpgrade) {
+  if (!preview) {
+    changePlanErrorMsg.textContent = 'Preview unavailable. Please try again.';
+    cpShowState(cpStateError);
+    return;
+  }
+
+  const { immediateAmount, recurringAmount, currency, immediateApplicable } = preview;
+  const fmt = (n) => currency === 'USD' ? `$${n.toFixed(2)}` : `${n.toFixed(2)} ${currency}`;
+
+  const lines = [];
+  if (immediateApplicable) {
+    lines.push(`Due now (prorated): ${fmt(immediateAmount)}`);
+  } else {
+    lines.push('Applies from your next billing date.');
+  }
+  if (recurringAmount !== null) lines.push(`Then: ${fmt(recurringAmount)} / month`);
+  changePlanPriceInfo.textContent = lines.join('\n');
+
+  if (!isUpgrade) {
+    const warn = ChangePlanHelpers.calcCreditWarning(currentUserCredits, targetPlan);
+    if (warn.show) {
+      changePlanCreditText.textContent =
+        `⚠ Credits will change: ${warn.from.toLocaleString()} → ${warn.to.toLocaleString()}`;
+      changePlanCreditWarn.style.display = '';
+    }
+  }
+
+  cpShowState(cpStateReady);
+}
+
+changePlanConfirmBtn?.addEventListener('click', async () => {
+  const targetPlan = _cpTargetPlan;
+  if (!targetPlan) return;
+  // Guard: free must never reach here
+  if (!['pro', 'enterprise', 'paid'].includes(currentUserPlan)) { closeChangePlanModal(); return; }
+
+  changePlanIcon.textContent  = '⏳';
+  changePlanTitle.textContent = 'Applying change…';
+  changePlanUpdatingMsg.textContent = 'Applying your plan change…';
+  if (cpUpdatingSpinner) cpUpdatingSpinner.style.display = 'flex';
+  if (changePlanRefreshBtn) changePlanRefreshBtn.style.display = 'none';
+  cpShowState(cpStateUpdating);
+
+  try {
+    const { data: { session } } = await sbClient.auth.getSession();
+    if (!session) { closeChangePlanModal(); openAuthRequiredModal(); return; }
+
+    const res = await fetch('/api/payment/change-plan', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${session.access_token}`
+      },
+      body: JSON.stringify({ plan: targetPlan })
+    });
+    const json = await res.json();
+
+    if (!res.ok || !json.success) throw new Error(json.error || 'Could not change your plan. Please try again later.');
+
+    // PATCH accepted — webhook is async, poll until plan is reflected
+    changePlanTitle.textContent = 'Updating…';
+    changePlanUpdatingMsg.textContent = 'Applying your plan change…';
+
+    _cpPollCancel = ChangePlanHelpers.createPlanPoller(
+      async () => { await refreshUserProfile(session); return currentUserPlan; },
+      targetPlan,
+      {
+        maxAttempts: 5,
+        intervalMs: 2000,
+        onDone: () => { _cpPollCancel = null; closeChangePlanModal(); },
+        onTimeout: () => {
+          // PATCH already succeeded (Paddle accepted the change + charged). The
+          // webhook is just slow to reflect locally — reassure, do NOT force reload.
+          _cpPollCancel = null;
+          changePlanIcon.textContent = '✅';
+          changePlanTitle.textContent = 'Plan change confirmed';
+          if (cpUpdatingSpinner) cpUpdatingSpinner.style.display = 'none';
+          changePlanUpdatingMsg.textContent =
+            '변경이 완료됐어요. 반영까지 1~2분 걸릴 수 있습니다. 아래 버튼으로 최신 상태를 불러올 수 있어요.';
+          if (changePlanRefreshBtn) changePlanRefreshBtn.style.display = '';
+        }
+      }
+    );
+  } catch (err) {
+    changePlanTitle.textContent = 'Something went wrong';
+    changePlanErrorMsg.textContent = err.message || 'Could not change your plan. Please try again later.';
+    cpShowState(cpStateError);
+  }
+});
+
+changePlanClose?.addEventListener('click', closeChangePlanModal);
+changePlanCancelBtn?.addEventListener('click', closeChangePlanModal);
+changePlanDismissBtn?.addEventListener('click', closeChangePlanModal);
+changePlanRefreshBtn?.addEventListener('click', () => window.location.reload());
+changePlanModal?.addEventListener('click', e => { if (e.target === changePlanModal) closeChangePlanModal(); });
 
 /* ══════════════════════════════════════
    SCROLL REVEAL
