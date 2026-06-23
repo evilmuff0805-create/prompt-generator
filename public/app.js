@@ -940,6 +940,8 @@ const changePlanCreditText = document.getElementById('changePlanCreditText');
 const changePlanCancelBtn  = document.getElementById('changePlanCancelBtn');
 const changePlanConfirmBtn = document.getElementById('changePlanConfirmBtn');
 const changePlanUpdatingMsg = document.getElementById('changePlanUpdatingMsg');
+const changePlanRefreshBtn = document.getElementById('changePlanRefreshBtn');
+const cpUpdatingSpinner    = document.getElementById('cpUpdatingSpinner');
 const changePlanErrorMsg   = document.getElementById('changePlanErrorMsg');
 const changePlanDismissBtn = document.getElementById('changePlanDismissBtn');
 
@@ -1052,6 +1054,8 @@ changePlanConfirmBtn?.addEventListener('click', async () => {
   changePlanIcon.textContent  = '⏳';
   changePlanTitle.textContent = 'Applying change…';
   changePlanUpdatingMsg.textContent = 'Applying your plan change…';
+  if (cpUpdatingSpinner) cpUpdatingSpinner.style.display = 'flex';
+  if (changePlanRefreshBtn) changePlanRefreshBtn.style.display = 'none';
   cpShowState(cpStateUpdating);
 
   try {
@@ -1082,10 +1086,15 @@ changePlanConfirmBtn?.addEventListener('click', async () => {
         intervalMs: 2000,
         onDone: () => { _cpPollCancel = null; closeChangePlanModal(); },
         onTimeout: () => {
+          // PATCH already succeeded (Paddle accepted the change + charged). The
+          // webhook is just slow to reflect locally — reassure, do NOT force reload.
           _cpPollCancel = null;
-          changePlanTitle.textContent = 'Almost done';
-          changePlanUpdatingMsg.textContent = '변경이 곧 반영됩니다. 새로고침해 주세요.';
-          setTimeout(() => { closeChangePlanModal(); window.location.reload(); }, 3000);
+          changePlanIcon.textContent = '✅';
+          changePlanTitle.textContent = 'Plan change confirmed';
+          if (cpUpdatingSpinner) cpUpdatingSpinner.style.display = 'none';
+          changePlanUpdatingMsg.textContent =
+            '변경이 완료됐어요. 반영까지 1~2분 걸릴 수 있습니다. 아래 버튼으로 최신 상태를 불러올 수 있어요.';
+          if (changePlanRefreshBtn) changePlanRefreshBtn.style.display = '';
         }
       }
     );
@@ -1099,6 +1108,7 @@ changePlanConfirmBtn?.addEventListener('click', async () => {
 changePlanClose?.addEventListener('click', closeChangePlanModal);
 changePlanCancelBtn?.addEventListener('click', closeChangePlanModal);
 changePlanDismissBtn?.addEventListener('click', closeChangePlanModal);
+changePlanRefreshBtn?.addEventListener('click', () => window.location.reload());
 changePlanModal?.addEventListener('click', e => { if (e.target === changePlanModal) closeChangePlanModal(); });
 
 /* ══════════════════════════════════════

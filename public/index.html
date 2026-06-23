@@ -382,10 +382,11 @@
         </div>
       </div>
 
-      <!-- Updating state: webhook polling in progress -->
+      <!-- Updating state: webhook polling in progress (or confirmed-pending on timeout) -->
       <div id="cpStateUpdating" style="display:none">
-        <div style="display:flex;justify-content:center;margin:0.5rem 0 1rem"><div class="spinner"></div></div>
+        <div id="cpUpdatingSpinner" style="display:flex;justify-content:center;margin:0.5rem 0 1rem"><div class="spinner"></div></div>
         <p class="modal__sub" id="changePlanUpdatingMsg">Applying your plan change…</p>
+        <button class="btn btn--primary btn--full" id="changePlanRefreshBtn" style="display:none">Refresh now</button>
       </div>
 
       <!-- Error state -->
