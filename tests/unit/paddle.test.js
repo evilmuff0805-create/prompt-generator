@@ -5,7 +5,7 @@
  */
 
 const crypto = require('crypto');
-const { classifyTransactionOrigin, isActiveSubscription, syncPlanFromSubscription, applyPlanChange } = require('../../routes/paddle');
+const { classifyTransactionOrigin, isActiveSubscription, recordPlanUpgradePurchase, syncPlanFromSubscription, applyPlanChange } = require('../../routes/paddle');
 
 // ── Copied from routes/paddle.js (pure functions, no side effects) ──
 
@@ -90,12 +90,21 @@ async function grantCreditsForPurchase(supabase, transactionId, userId, plan) {
 async function revokeCreditsForRefund(supabase, transactionId) {
   const { data: purchase, error: lookupError } = await supabase
     .from('purchases')
-    .select('id, user_id, credits_granted, status')
+    .select('id, user_id, credits_granted, status, transaction_type')
     .eq('transaction_id', transactionId)
     .single();
 
   if (lookupError || !purchase) return;
   if (purchase.status === 'refunded') return;
+
+  if (purchase.transaction_type === 'plan_upgrade') {
+    console.warn(
+      '[paddle/webhook] plan_upgrade 환불은 아직 미구현(토대만 기록됨), 스킵 |',
+      'transaction_id=' + transactionId,
+      '| userId=' + purchase.user_id
+    );
+    return;
+  }
 
   const { error: updateError } = await supabase
     .from('purchases')
@@ -110,6 +119,7 @@ async function revokeCreditsForRefund(supabase, transactionId) {
 
   if (rpcError) throw new Error('revoke_credits RPC failed: ' + rpcError.message);
 }
+
 
 async function expireSubscription(supabase, userId) {
   const { error } = await supabase
@@ -327,6 +337,96 @@ describe('saveSubscriptionIds', () => {
     await expect(
       saveSubscriptionIds(supabase, { userId: USER_ID, customerId: CUSTOMER_ID, subscriptionId: SUBSCRIPTION_ID })
     ).resolves.toBeUndefined();
+  });
+});
+
+describe('recordPlanUpgradePurchase', () => {
+  const TXN_ID = 'txn_upgrade_001';
+  const USER_ID = 'user-uuid-123';
+  const SUB_ID = 'sub_01abc';
+
+  test('올바른 컬럼으로 purchases INSERT를 호출해야 한다', async () => {
+    const supabase = makeSupabaseMock();
+    await recordPlanUpgradePurchase(supabase, { transactionId: TXN_ID, userId: USER_ID, plan: 'enterprise', subscriptionId: SUB_ID });
+
+    expect(supabase.from).toHaveBeenCalledWith('purchases');
+    const insertCall = supabase.from.mock.results[0].value.insert.mock.calls[0][0];
+    expect(insertCall).toMatchObject({
+      transaction_id:   TXN_ID,
+      user_id:          USER_ID,
+      plan:             'enterprise',
+      credits_granted:  4000,
+      status:           'completed',
+      subscription_id:  SUB_ID,
+      transaction_type: 'plan_upgrade'
+    });
+  });
+
+  test('credits는 plan에 따라 올바르게 설정돼야 한다 (pro=1000)', async () => {
+    const supabase = makeSupabaseMock();
+    await recordPlanUpgradePurchase(supabase, { transactionId: TXN_ID, userId: USER_ID, plan: 'pro', subscriptionId: SUB_ID });
+
+    const insertCall = supabase.from.mock.results[0].value.insert.mock.calls[0][0];
+    expect(insertCall.credits_granted).toBe(1000);
+  });
+
+  test('중복 transaction_id(23505)이면 조용히 스킵해야 한다', async () => {
+    const supabase = makeSupabaseMock({ insertError: { code: '23505', message: 'duplicate key' } });
+    await expect(recordPlanUpgradePurchase(supabase, { transactionId: TXN_ID, userId: USER_ID, plan: 'enterprise', subscriptionId: SUB_ID }))
+      .resolves.toBeUndefined();
+  });
+
+  test('크레딧 RPC(grant_credits)를 절대 호출하지 않아야 한다 — 크레딧 이중처리 방지', async () => {
+    const supabase = makeSupabaseMock();
+    await recordPlanUpgradePurchase(supabase, { transactionId: TXN_ID, userId: USER_ID, plan: 'enterprise', subscriptionId: SUB_ID });
+
+    expect(supabase.rpc).not.toHaveBeenCalled();
+  });
+
+  test('비-중복 INSERT 실패 시 예외를 던져야 한다', async () => {
+    const supabase = makeSupabaseMock({ insertError: { code: '42501', message: 'permission denied' } });
+    await expect(recordPlanUpgradePurchase(supabase, { transactionId: TXN_ID, userId: USER_ID, plan: 'enterprise', subscriptionId: SUB_ID }))
+      .rejects.toThrow('Failed to record plan_upgrade purchase');
+  });
+
+  test('subscriptionId 없으면 subscription_id=null로 기록해야 한다', async () => {
+    const supabase = makeSupabaseMock();
+    await recordPlanUpgradePurchase(supabase, { transactionId: TXN_ID, userId: USER_ID, plan: 'enterprise', subscriptionId: undefined });
+
+    const insertCall = supabase.from.mock.results[0].value.insert.mock.calls[0][0];
+    expect(insertCall.subscription_id).toBeNull();
+  });
+});
+
+describe('revokeCreditsForRefund — plan_upgrade skip 가드', () => {
+  test('transaction_type=plan_upgrade이면 revoke_credits를 호출하지 않아야 한다(no-op)', async () => {
+    const supabase = makeSupabaseMock({
+      selectData: { id: 10, user_id: 'user-uuid', credits_granted: 4000, status: 'completed', transaction_type: 'plan_upgrade' }
+    });
+    await revokeCreditsForRefund(supabase, 'txn_upgrade_refund');
+
+    expect(supabase.rpc).not.toHaveBeenCalled();
+  });
+
+  test('plan_upgrade 스킵 시 status를 refunded로 바꾸지 않아야 한다', async () => {
+    const supabase = makeSupabaseMock({
+      selectData: { id: 10, user_id: 'user-uuid', credits_granted: 4000, status: 'completed', transaction_type: 'plan_upgrade' }
+    });
+    await revokeCreditsForRefund(supabase, 'txn_upgrade_refund');
+
+    expect(supabase._updateFn).not.toHaveBeenCalled();
+  });
+
+  test('transaction_type=null(신규구매) 환불은 기존 revoke_credits(plan→free) 경로를 그대로 타야 한다', async () => {
+    const supabase = makeSupabaseMock({
+      selectData: { id: 42, user_id: 'user-uuid', credits_granted: 1000, status: 'completed', transaction_type: null }
+    });
+    await revokeCreditsForRefund(supabase, 'txn_grant_refund');
+
+    expect(supabase.rpc).toHaveBeenCalledWith('revoke_credits', {
+      p_user_id: 'user-uuid',
+      p_amount: 1000
+    });
   });
 });
 

@@ -118,6 +118,35 @@ async function grantCreditsForPurchase(supabase, transactionId, userId, plan) {
   console.log('[paddle/webhook] Reset credits to ' + credits + ' (' + plan + ') for userId=' + userId + ' transaction=' + transactionId);
 }
 
+/* ── Record plan-upgrade transaction in purchases ledger (defer branch) ── */
+// Inserts a ledger row for a plan-change transaction. Credits are NOT touched here —
+// apply_plan_change in subscription.updated handles credit recalculation exclusively.
+// UNIQUE(transaction_id) 23505 = idempotent skip (safe for Paddle re-delivery).
+async function recordPlanUpgradePurchase(supabase, { transactionId, userId, plan, subscriptionId }) {
+  const credits = PLAN_CREDITS[plan] || 0;
+  const { error } = await supabase
+    .from('purchases')
+    .insert({
+      transaction_id:   transactionId,
+      user_id:          userId,
+      plan,
+      credits_granted:  credits,
+      status:           'completed',
+      subscription_id:  subscriptionId || null,
+      transaction_type: 'plan_upgrade'
+    });
+
+  if (error) {
+    if (error.code === '23505') {
+      console.log('[paddle/webhook] plan_upgrade already recorded for transaction_id=' + transactionId + ', skipping');
+      return;
+    }
+    throw new Error('Failed to record plan_upgrade purchase: ' + error.message);
+  }
+
+  console.log('[paddle/webhook] Recorded plan_upgrade: transaction_id=' + transactionId + ' plan=' + plan + ' userId=' + userId);
+}
+
 /* ── Store Paddle customer/subscription IDs for future portal session use ── */
 async function saveSubscriptionIds(supabase, { userId, customerId, subscriptionId }) {
   const updates = {};
@@ -199,7 +228,7 @@ async function revokeCreditsForRefund(supabase, transactionId) {
   // Look up original purchase by transaction_id
   const { data: purchase, error: lookupError } = await supabase
     .from('purchases')
-    .select('id, user_id, credits_granted, status')
+    .select('id, user_id, credits_granted, status, transaction_type')
     .eq('transaction_id', transactionId)
     .single();
 
@@ -210,6 +239,18 @@ async function revokeCreditsForRefund(supabase, transactionId) {
 
   if (purchase.status === 'refunded') {
     console.log('[paddle/webhook] Purchase already refunded for transaction_id=' + transactionId + ', skipping');
+    return;
+  }
+
+  // Skip guard: plan_upgrade refunds not yet wired to revert_plan_change (next step).
+  // Log explicitly (not a silent return) so this case is traceable in Railway logs.
+  // Do NOT call revoke_credits here — wrong path for plan-change transactions.
+  if (purchase.transaction_type === 'plan_upgrade') {
+    console.warn(
+      '[paddle/webhook] plan_upgrade 환불은 아직 미구현(토대만 기록됨), 스킵 |',
+      'transaction_id=' + transactionId,
+      '| userId=' + purchase.user_id
+    );
     return;
   }
 
@@ -308,11 +349,51 @@ router.post('/webhook',
         // else is ignored. This must not alter the checkout/recurring behavior.
         const decision = classifyTransactionOrigin(data?.origin);
         if (decision === 'defer') {
-          console.log(
-            '[paddle/webhook] transaction.completed origin=subscription_update (plan change) — credit handling deferred to next step |',
-            'transaction_id=' + transactionId,
-            '| userId=' + (userId || 'n/a')
-          );
+          // Record plan-change transaction in the purchases ledger for refund tracking.
+          // Credits are NOT changed here — apply_plan_change in subscription.updated handles that.
+          const supabase = makeAdminClient();
+          let deferUserId = userId;
+
+          // userId fallback: same pattern as subscription.updated handler
+          if (!deferUserId) {
+            const customerId = data?.customer_id;
+            if (customerId) {
+              const { data: profile, error: lookupError } = await supabase
+                .from('profiles')
+                .select('id')
+                .eq('paddle_customer_id', customerId)
+                .single();
+              if (!lookupError && profile?.id) {
+                deferUserId = profile.id;
+                console.log('[paddle/webhook] defer — resolved userId=' + deferUserId + ' from paddle_customer_id=' + customerId);
+              }
+            }
+          }
+
+          if (!deferUserId) {
+            console.error(
+              '[paddle/webhook] [CRITICAL] transaction.completed defer — userId 특정 불가',
+              '(custom_data.userId 없음, paddle_customer_id 조회 실패) — 원장 기록 불가 |',
+              'transaction_id=' + (transactionId || 'n/a'),
+              '| customer_id=' + (data?.customer_id || 'n/a')
+            );
+            return res.status(200).send('OK');
+          }
+
+          if (plan && transactionId) {
+            await recordPlanUpgradePurchase(supabase, {
+              transactionId,
+              userId: deferUserId,
+              plan,
+              subscriptionId: data?.subscription_id
+            });
+          } else {
+            console.warn(
+              '[paddle/webhook] defer — plan 또는 transactionId 없어 원장 기록 생략 |',
+              'plan=' + plan,
+              '| transaction_id=' + (transactionId || 'n/a')
+            );
+          }
           return res.status(200).send('OK');
         }
         if (decision === 'ignore') {
@@ -480,5 +561,6 @@ router.post('/webhook',
 module.exports = router;
 module.exports.classifyTransactionOrigin = classifyTransactionOrigin;
 module.exports.isActiveSubscription = isActiveSubscription;
+module.exports.recordPlanUpgradePurchase = recordPlanUpgradePurchase;
 module.exports.syncPlanFromSubscription = syncPlanFromSubscription;
 module.exports.applyPlanChange = applyPlanChange;
