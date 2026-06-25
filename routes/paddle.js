@@ -51,6 +51,16 @@ function priceIdToPlan(priceId) {
 
 const PLAN_CREDITS = { pro: 1000, enterprise: 4000 };
 
+/* ── Check if subscription status allows plan changes ── */
+// Only 'active' and 'trialing' subscriptions should have their plan/credits
+// recalculated. When Paddle fires subscription.updated + subscription.canceled
+// together (e.g. immediate cancel), the two events can race. If updated arrives
+// after canceled has already set plan=free/credits=0, applying a plan change
+// would re-grant credits to a canceled account. Guarding on status prevents that.
+function isActiveSubscription(status) {
+  return status === 'active' || status === 'trialing';
+}
+
 /* ── Route a transaction.completed event by its `data.origin` ── */
 // Returns one of:
 //   'grant'  → new purchase or renewal: existing credit grant/reset (unchanged)
@@ -421,6 +431,20 @@ router.post('/webhook',
           return res.status(200).send('OK');
         }
 
+        // Guard: skip plan change for non-active subscriptions.
+        // Prevents a late subscription.updated (status=canceled) from re-granting
+        // credits after subscription.canceled already set plan=free.
+        const subscriptionStatus = data?.status;
+        if (!isActiveSubscription(subscriptionStatus)) {
+          console.log(
+            '[paddle/webhook] subscription.updated status=' + subscriptionStatus +
+            ' — not active/trialing, skipping plan change |',
+            'subscription_id=' + (data?.id || 'n/a'),
+            '| userId=' + userId
+          );
+          return res.status(200).send('OK');
+        }
+
         // KNOWN LIMITATION: if Paddle issues a credit_to_balance adjustment for a
         // downgrade, the resulting adjustment.created event will not find a matching
         // purchases row (plan changes have no transaction_id in the ledger), so
@@ -455,5 +479,6 @@ router.post('/webhook',
 
 module.exports = router;
 module.exports.classifyTransactionOrigin = classifyTransactionOrigin;
+module.exports.isActiveSubscription = isActiveSubscription;
 module.exports.syncPlanFromSubscription = syncPlanFromSubscription;
 module.exports.applyPlanChange = applyPlanChange;
