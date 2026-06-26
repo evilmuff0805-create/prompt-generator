@@ -12,6 +12,8 @@
 --      실제 연결(revokeCreditsForRefund → revert_plan_change)은 다음 단계.
 -- ============================================================
 
+BEGIN;
+
 -- 1. 신규 컬럼 추가
 ALTER TABLE public.purchases
   ADD COLUMN IF NOT EXISTS subscription_id   TEXT,
@@ -82,6 +84,8 @@ REVOKE EXECUTE ON FUNCTION public.revert_plan_change(UUID, TEXT, INT) FROM PUBLI
 REVOKE EXECUTE ON FUNCTION public.revert_plan_change(UUID, TEXT, INT) FROM anon;
 REVOKE EXECUTE ON FUNCTION public.revert_plan_change(UUID, TEXT, INT) FROM authenticated;
 GRANT EXECUTE ON FUNCTION public.revert_plan_change(UUID, TEXT, INT) TO service_role;
+
+COMMIT;
 
 
 -- ============================================================
