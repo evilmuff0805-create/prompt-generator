@@ -223,12 +223,38 @@ async function expireSubscription(supabase, userId) {
   console.log('[paddle/webhook] Subscription expired (plan=free, credits=0) for userId=' + userId);
 }
 
+/* ── Derive the plan in effect BEFORE a given plan-change row ── */
+// previous_plan = result plan of the immediately-prior ledger row for the same
+// subscription_id (ordered by created_at, id). No prior row → 'free'. This avoids
+// reverse-inference: the value comes from committed history, not a guess.
+// LIMITATION: the ledger records upgrades + new purchases only (not downgrades),
+// so a downgrade between two upgrades is invisible here.
+async function derivePreviousPlan(supabase, { subscriptionId, beforeCreatedAt, beforeId }) {
+  if (!subscriptionId) return 'free';
+  const { data: prior, error } = await supabase
+    .from('purchases')
+    .select('plan, created_at, id')
+    .eq('subscription_id', subscriptionId)
+    .lt('created_at', beforeCreatedAt)
+    .order('created_at', { ascending: false })
+    .order('id', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) {
+    console.error('[paddle/webhook] derivePreviousPlan query error for subscription_id=' + subscriptionId + ':', error.message);
+    return 'free';
+  }
+  return prior?.plan || 'free';
+}
+
 /* ── Revoke credits on refund ── */
-async function revokeCreditsForRefund(supabase, transactionId) {
+// adjustmentType: Paddle adjustment.data.type — 'full' | 'partial' (may be undefined).
+async function revokeCreditsForRefund(supabase, transactionId, adjustmentType) {
   // Look up original purchase by transaction_id
   const { data: purchase, error: lookupError } = await supabase
     .from('purchases')
-    .select('id, user_id, credits_granted, status, transaction_type')
+    .select('id, user_id, credits_granted, status, transaction_type, subscription_id, created_at')
     .eq('transaction_id', transactionId)
     .single();
 
@@ -242,15 +268,69 @@ async function revokeCreditsForRefund(supabase, transactionId) {
     return;
   }
 
-  // Skip guard: plan_upgrade refunds not yet wired to revert_plan_change (next step).
-  // Log explicitly (not a silent return) so this case is traceable in Railway logs.
-  // Do NOT call revoke_credits here — wrong path for plan-change transactions.
+  // ── plan_upgrade refund: auto-revert via revert_plan_change (usage-guarded in RPC) ──
   if (purchase.transaction_type === 'plan_upgrade') {
-    console.warn(
-      '[paddle/webhook] plan_upgrade 환불은 아직 미구현(토대만 기록됨), 스킵 |',
-      'transaction_id=' + transactionId,
-      '| userId=' + purchase.user_id
-    );
+    // Partial refunds have no clean plan-revert mapping (money-only). Skip + flag.
+    if (adjustmentType !== 'full') {
+      console.error(
+        '[paddle/webhook] [CRITICAL] plan_upgrade 부분환불(type=' + (adjustmentType || 'n/a') +
+        ') — plan revert 매핑 불가, 스킵(운영자 수동 처리 필요) |',
+        'transaction_id=' + transactionId,
+        '| userId=' + purchase.user_id
+      );
+      return;
+    }
+
+    const previousPlan = await derivePreviousPlan(supabase, {
+      subscriptionId: purchase.subscription_id,
+      beforeCreatedAt: purchase.created_at,
+      beforeId: purchase.id
+    });
+    const previousAllotment = PLAN_CREDITS[previousPlan] || 0;
+
+    const { data: result, error: rpcError } = await supabase.rpc('revert_plan_change', {
+      p_user_id: purchase.user_id,
+      p_previous_plan: previousPlan,
+      p_previous_allotment: previousAllotment,
+      p_granted: purchase.credits_granted
+    });
+
+    if (rpcError) {
+      throw new Error('revert_plan_change RPC failed: ' + rpcError.message);
+    }
+
+    if (result?.plan_restored) {
+      // Only mark refunded when the plan was actually reverted.
+      const { error: updateError } = await supabase
+        .from('purchases')
+        .update({ status: 'refunded' })
+        .eq('id', purchase.id);
+      if (updateError) {
+        throw new Error('Failed to mark plan_upgrade purchase as refunded: ' + updateError.message);
+      }
+      console.log(
+        '[paddle/webhook] plan_upgrade 환불 복원 완료: plan→' + previousPlan +
+        ' credits=' + result.new_balance + ' userId=' + purchase.user_id + ' transaction=' + transactionId
+      );
+    } else if (result?.reason === 'credits_used') {
+      // Policy violation: credits were used but a refund was issued (operator error).
+      // Leave plan/credits untouched — do not compound the mistake. Flag loudly.
+      console.error(
+        '[paddle/webhook] [CRITICAL] 정책위반 환불 — 크레딧 사용된 계정이 환불됨, plan 복원 스킵(무변경) |',
+        'transaction_id=' + transactionId,
+        '| userId=' + purchase.user_id,
+        '| current_credits=' + result.new_balance,
+        '| granted=' + purchase.credits_granted
+      );
+    } else {
+      // account_free (already canceled) — free-guard prevented plan resurrection.
+      console.warn(
+        '[paddle/webhook] plan_upgrade 환불 — 계정이 이미 free(취소됨), plan 복원 스킵 |',
+        'transaction_id=' + transactionId,
+        '| userId=' + purchase.user_id,
+        '| reason=' + (result?.reason || 'unknown')
+      );
+    }
     return;
   }
 
@@ -460,7 +540,7 @@ router.post('/webhook',
         }
 
         const supabase = makeAdminClient();
-        await revokeCreditsForRefund(supabase, transactionId);
+        await revokeCreditsForRefund(supabase, transactionId, data?.type);
 
       } else if (eventType === 'subscription.updated') {
         // Subscription changed (incl. plan up/downgrade).
@@ -562,5 +642,6 @@ module.exports = router;
 module.exports.classifyTransactionOrigin = classifyTransactionOrigin;
 module.exports.isActiveSubscription = isActiveSubscription;
 module.exports.recordPlanUpgradePurchase = recordPlanUpgradePurchase;
+module.exports.derivePreviousPlan = derivePreviousPlan;
 module.exports.syncPlanFromSubscription = syncPlanFromSubscription;
 module.exports.applyPlanChange = applyPlanChange;
