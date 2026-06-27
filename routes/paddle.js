@@ -51,6 +51,20 @@ function priceIdToPlan(priceId) {
 
 const PLAN_CREDITS = { pro: 1000, enterprise: 4000 };
 
+/* ── Test-account whitelist (env-managed, no code deploy) ── */
+// Accounts in TEST_ACCOUNT_USER_IDS (comma-separated user_id list) are FROZEN:
+// every webhook plan/credits mutation is skipped so their plan/credits stay
+// exactly as set manually. Parsing is safe by default — unset/empty → empty set
+// → nobody is whitelisted. Pure function (envStr injectable) for testability.
+function isTestAccount(userId, envStr = process.env.TEST_ACCOUNT_USER_IDS) {
+  if (!userId || !envStr) return false;
+  const ids = String(envStr)
+    .split(',')
+    .map(function (s) { return s.trim(); })
+    .filter(Boolean);
+  return ids.indexOf(String(userId).trim()) !== -1;
+}
+
 /* ── Check if subscription status allows plan changes ── */
 // Only 'active' and 'trialing' subscriptions should have their plan/credits
 // recalculated. When Paddle fires subscription.updated + subscription.canceled
@@ -102,6 +116,12 @@ async function grantCreditsForPurchase(supabase, transactionId, userId, plan) {
       return;
     }
     throw new Error('Failed to insert purchase record: ' + insertError.message);
+  }
+
+  // Whitelist: ledger row recorded above, but skip the credit mutation (frozen account).
+  if (isTestAccount(userId)) {
+    console.warn('[paddle/webhook] [TEST_ACCOUNT] grant_credits 스킵(결제해도 크레딧 미지급) userId=' + userId + ' transaction=' + transactionId);
+    return;
   }
 
   // Atomically reset credits to the plan allotment via RPC
@@ -191,6 +211,12 @@ async function syncPlanFromSubscription(supabase, userId, plan) {
 //   - Same plan → credits unchanged (idempotent re-delivery safe)
 // Returns the new credits value.
 async function applyPlanChange(supabase, userId, plan) {
+  // Whitelist: frozen account — skip plan/credit recalculation.
+  if (isTestAccount(userId)) {
+    console.warn('[paddle/webhook] [TEST_ACCOUNT] apply_plan_change 스킵(plan 변경 무시) userId=' + userId + ' plan=' + plan);
+    return null;
+  }
+
   const allotment = PLAN_CREDITS[plan];
   const { data, error } = await supabase.rpc('apply_plan_change', {
     p_user_id: userId,
@@ -211,6 +237,12 @@ async function applyPlanChange(supabase, userId, plan) {
 // takes effect (status → canceled). At that point the user loses access:
 // plan → free, credits → 0.
 async function expireSubscription(supabase, userId) {
+  // Whitelist: frozen account — do not expire.
+  if (isTestAccount(userId)) {
+    console.warn('[paddle/webhook] [TEST_ACCOUNT] expireSubscription 스킵(취소돼도 plan/credits 유지) userId=' + userId);
+    return;
+  }
+
   const { error } = await supabase
     .from('profiles')
     .update({ plan: 'free', credits: 0 })
@@ -265,6 +297,13 @@ async function revokeCreditsForRefund(supabase, transactionId, adjustmentType) {
 
   if (purchase.status === 'refunded') {
     console.log('[paddle/webhook] Purchase already refunded for transaction_id=' + transactionId + ', skipping');
+    return;
+  }
+
+  // Whitelist: frozen account — skip any credit/plan mutation on refund.
+  // (userId only known here, after the ledger lookup — guard must live inside this fn.)
+  if (isTestAccount(purchase.user_id)) {
+    console.warn('[paddle/webhook] [TEST_ACCOUNT] 환불 mutation 스킵(plan/credits 유지) userId=' + purchase.user_id + ' transaction=' + transactionId);
     return;
   }
 
@@ -641,6 +680,7 @@ router.post('/webhook',
 module.exports = router;
 module.exports.classifyTransactionOrigin = classifyTransactionOrigin;
 module.exports.isActiveSubscription = isActiveSubscription;
+module.exports.isTestAccount = isTestAccount;
 module.exports.recordPlanUpgradePurchase = recordPlanUpgradePurchase;
 module.exports.derivePreviousPlan = derivePreviousPlan;
 module.exports.syncPlanFromSubscription = syncPlanFromSubscription;

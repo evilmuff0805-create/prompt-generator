@@ -5,7 +5,7 @@
  */
 
 const crypto = require('crypto');
-const { classifyTransactionOrigin, isActiveSubscription, recordPlanUpgradePurchase, syncPlanFromSubscription, applyPlanChange } = require('../../routes/paddle');
+const { classifyTransactionOrigin, isActiveSubscription, isTestAccount, recordPlanUpgradePurchase, syncPlanFromSubscription, applyPlanChange } = require('../../routes/paddle');
 
 // ── Copied from routes/paddle.js (pure functions, no side effects) ──
 
@@ -80,6 +80,8 @@ async function grantCreditsForPurchase(supabase, transactionId, userId, plan) {
     throw new Error('Failed to insert purchase record: ' + insertError.message);
   }
 
+  if (isTestAccount(userId)) return;
+
   const { error: rpcError } = await supabase.rpc('grant_credits', {
     p_user_id: userId, p_plan: plan, p_amount: credits
   });
@@ -111,6 +113,8 @@ async function revokeCreditsForRefund(supabase, transactionId, adjustmentType) {
 
   if (lookupError || !purchase) return;
   if (purchase.status === 'refunded') return;
+
+  if (isTestAccount(purchase.user_id)) return { action: 'test_account_skip' };
 
   if (purchase.transaction_type === 'plan_upgrade') {
     if (adjustmentType !== 'full') return { action: 'partial_skip' };
@@ -157,6 +161,8 @@ async function revokeCreditsForRefund(supabase, transactionId, adjustmentType) {
 
 
 async function expireSubscription(supabase, userId) {
+  if (isTestAccount(userId)) return;
+
   const { error } = await supabase
     .from('profiles')
     .update({ plan: 'free', credits: 0 })
@@ -614,6 +620,95 @@ describe('revokeCreditsForRefund — plan_upgrade skip 가드', () => {
       p_user_id: 'user-uuid',
       p_amount: 1000
     });
+  });
+});
+
+describe('isTestAccount (env 파싱)', () => {
+  test('목록에 있는 user_id는 true', () => {
+    expect(isTestAccount('u1', 'u1,u2')).toBe(true);
+    expect(isTestAccount('u2', 'u1,u2')).toBe(true);
+  });
+
+  test('목록에 없는 user_id는 false', () => {
+    expect(isTestAccount('u3', 'u1,u2')).toBe(false);
+  });
+
+  test('콤마 주변 공백을 trim해야 한다', () => {
+    expect(isTestAccount('u1', '  u1 , u2  ')).toBe(true);
+    expect(isTestAccount('u2', 'u1 ,  u2')).toBe(true);
+  });
+
+  test('빈 문자열/미설정이면 아무도 화이트리스트 아님 (false)', () => {
+    expect(isTestAccount('u1', '')).toBe(false);
+    expect(isTestAccount('u1', undefined)).toBe(false);
+    expect(isTestAccount('u1', '   ')).toBe(false);
+  });
+
+  test('userId가 없으면 false (빈 목록이어도 매칭 안 됨)', () => {
+    expect(isTestAccount('', 'u1')).toBe(false);
+    expect(isTestAccount(null, 'u1')).toBe(false);
+    expect(isTestAccount(undefined, 'u1')).toBe(false);
+  });
+
+  test('후행 콤마/빈 항목은 무시해야 한다 (빈 항목이 모두 매칭하지 않음)', () => {
+    expect(isTestAccount('u1', 'u1,')).toBe(true);
+    expect(isTestAccount('', 'u1,,')).toBe(false);
+  });
+
+  test('단일 id', () => {
+    expect(isTestAccount('only', 'only')).toBe(true);
+    expect(isTestAccount('other', 'only')).toBe(false);
+  });
+});
+
+describe('테스트 계정 화이트리스트 — mutation 스킵', () => {
+  const ORIGINAL = process.env.TEST_ACCOUNT_USER_IDS;
+  const WL = 'test-user-1';
+  beforeEach(() => { process.env.TEST_ACCOUNT_USER_IDS = WL; });
+  afterEach(() => {
+    if (ORIGINAL === undefined) delete process.env.TEST_ACCOUNT_USER_IDS;
+    else process.env.TEST_ACCOUNT_USER_IDS = ORIGINAL;
+  });
+
+  test('grantCreditsForPurchase: 원장 INSERT는 하되 grant_credits RPC는 스킵', async () => {
+    const supabase = makeSupabaseMock();
+    await grantCreditsForPurchase(supabase, 'txn_wl', WL, 'pro');
+
+    expect(supabase.from).toHaveBeenCalledWith('purchases'); // 원장 기록 유지
+    expect(supabase.rpc).not.toHaveBeenCalled();              // 크레딧 mutation 스킵
+  });
+
+  test('applyPlanChange(실제 함수): apply_plan_change RPC 스킵하고 null 반환', async () => {
+    const supabase = makeSupabaseMock();
+    const result = await applyPlanChange(supabase, WL, 'enterprise');
+
+    expect(result).toBeNull();
+    expect(supabase.rpc).not.toHaveBeenCalled();
+  });
+
+  test('expireSubscription: profiles UPDATE 스킵', async () => {
+    const supabase = makeSupabaseMock();
+    await expireSubscription(supabase, WL);
+
+    expect(supabase.from).not.toHaveBeenCalled();
+  });
+
+  test('revokeCreditsForRefund: 화이트리스트 계정이면 환불 mutation 스킵', async () => {
+    const supabase = makeSupabaseMock({
+      selectData: { id: 1, user_id: WL, credits_granted: 4000, status: 'completed', transaction_type: 'plan_upgrade' }
+    });
+    const res = await revokeCreditsForRefund(supabase, 'txn_wl_refund', 'full');
+
+    expect(res).toEqual({ action: 'test_account_skip' });
+    expect(supabase.rpc).not.toHaveBeenCalled();
+    expect(supabase._updateFn).not.toHaveBeenCalled();
+  });
+
+  test('화이트리스트가 아닌 계정은 정상 mutation (apply_plan_change 호출)', async () => {
+    const supabase = makeSupabaseMock();
+    await applyPlanChange(supabase, 'normal-user', 'pro');
+
+    expect(supabase.rpc).toHaveBeenCalledWith('apply_plan_change', expect.objectContaining({ p_user_id: 'normal-user' }));
   });
 });
 
