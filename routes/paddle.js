@@ -655,14 +655,39 @@ router.post('/webhook',
       } else if (eventType === 'subscription.canceled') {
         // End-of-period cancellation took effect — revoke access
         const data = payload?.data;
-        const userId = data?.custom_data?.userId;
+        let userId = data?.custom_data?.userId;
+
+        // userId fallback: same pattern as subscription.updated handler — if
+        // custom_data.userId is absent, look up the profile by paddle_customer_id
+        // stored during the initial purchase.
+        const supabase = makeAdminClient();
+        if (!userId) {
+          const customerId = data?.customer_id;
+          if (customerId) {
+            const { data: profile, error: lookupError } = await supabase
+              .from('profiles')
+              .select('id')
+              .eq('paddle_customer_id', customerId)
+              .single();
+            if (!lookupError && profile?.id) {
+              userId = profile.id;
+              console.log('[paddle/webhook] subscription.canceled — resolved userId=' + userId + ' from paddle_customer_id=' + customerId);
+            }
+          }
+        }
 
         if (!userId) {
-          console.error('[paddle/webhook] No userId in subscription custom_data — cannot expire subscription');
+          // Both custom_data.userId and paddle_customer_id lookup failed — cannot
+          // identify the user. Log as CRITICAL (no change made).
+          console.error(
+            '[paddle/webhook] [CRITICAL] subscription.canceled — userId 특정 불가',
+            '(custom_data.userId 없음, paddle_customer_id 조회 실패) — 구독 만료 처리 생략 |',
+            'subscription_id=' + (data?.id || 'n/a'),
+            '| customer_id=' + (data?.customer_id || 'n/a')
+          );
           return res.status(200).send('OK');
         }
 
-        const supabase = makeAdminClient();
         await expireSubscription(supabase, userId);
 
       } else {

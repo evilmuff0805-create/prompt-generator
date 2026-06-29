@@ -966,3 +966,48 @@ describe('subscription.updated userId 폴백 로직', () => {
     expect(supabase.from).not.toHaveBeenCalled();
   });
 });
+
+describe('subscription.canceled userId 폴백 로직', () => {
+  // Mirrors the subscription.canceled handler's userId resolution — identical
+  // pattern to subscription.updated (custom_data.userId → paddle_customer_id).
+  async function resolveCanceledUserId(supabase, data) {
+    let userId = data?.custom_data?.userId;
+    if (!userId) {
+      const customerId = data?.customer_id;
+      if (customerId) {
+        const { data: profile, error: lookupError } = await supabase
+          .from('profiles')
+          .select('id')
+          .eq('paddle_customer_id', customerId)
+          .single();
+        if (!lookupError && profile?.id) {
+          userId = profile.id;
+        }
+      }
+    }
+    return userId || null;
+  }
+
+  test('정상 케이스: custom_data.userId 있으면 그대로 사용, DB 조회 없음 (기존 동작 무변경)', async () => {
+    const supabase = makeSupabaseMock();
+    const userId = await resolveCanceledUserId(supabase, { custom_data: { userId: 'user-direct' }, customer_id: 'ctm_abc' });
+
+    expect(userId).toBe('user-direct');
+    expect(supabase.from).not.toHaveBeenCalled();
+  });
+
+  test('폴백: userId 없고 customer_id만 있으면 paddle_customer_id로 유저를 찾아야 한다', async () => {
+    const supabase = makeSupabaseMock({ selectData: { id: 'user-from-db' } });
+    const userId = await resolveCanceledUserId(supabase, { customer_id: 'ctm_abc' });
+
+    expect(userId).toBe('user-from-db');
+    expect(supabase.from).toHaveBeenCalledWith('profiles');
+  });
+
+  test('둘 다 없으면 null (CRITICAL 로그 후 안전 종료 — expire 미실행)', async () => {
+    const supabase = makeSupabaseMock({ selectData: null, selectError: { message: 'not found' } });
+    const userId = await resolveCanceledUserId(supabase, { customer_id: 'ctm_abc' });
+
+    expect(userId).toBeNull();
+  });
+});
