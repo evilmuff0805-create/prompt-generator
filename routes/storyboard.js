@@ -37,6 +37,13 @@ function checkRateLimit(userId, action, windowSeconds) {
   return true;
 }
 
+// Roll back a rate-limit stamp set earlier in this request. Used when a request
+// passes the rate-limit gate but then fails (moderation/validation/credits/etc.)
+// so failed attempts don't consume the cooldown — only successful generations do.
+function clearRateLimit(userId, action) {
+  rateLimitMap.delete(`${userId}:${action}`);
+}
+
 function getAdminClient() {
   return createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, {
     auth: { persistSession: false }
@@ -102,6 +109,12 @@ function estimateRemaining(sb) {
 router.post('/generate', requireAuth, async (req, res) => {
   const userId = req.user.id;
 
+  // Rate-limit rollback bookkeeping: we stamp the cooldown at the gate (so a
+  // rapid double-submit is blocked synchronously), but roll it back unless the
+  // generation actually starts — failed/blocked attempts must not cost 60s.
+  let rateLimitStamped = false;
+  let rateLimitCommitted = false;
+
   try {
     // 1. Single profile query: plan + credits
     const profile = await creditManager.getProfileWithCredits(userId);
@@ -117,6 +130,7 @@ router.post('/generate', requireAuth, async (req, res) => {
     if (!checkRateLimit(userId, 'storyboard_generate', rateLimitSec)) {
       return res.status(429).json({ code: 'RATE_LIMITED', message: `Wait ${rateLimitSec}s between requests.` });
     }
+    rateLimitStamped = true; // we set the cooldown; finally rolls it back unless committed
 
     // 4. Input validation
     const { scenario, genres, style, cutCount, referenceImageIds = [] } = req.body;
@@ -204,6 +218,9 @@ router.post('/generate', requireAuth, async (req, res) => {
       console.error('[storyboard] async job error:', err.message);
     });
 
+    // Generation committed — keep the cooldown stamp (throttles only on success).
+    rateLimitCommitted = true;
+
     return res.status(200).json({
       success: true,
       storyboard: {
@@ -217,6 +234,12 @@ router.post('/generate', requireAuth, async (req, res) => {
   } catch (err) {
     console.error('[storyboard /generate] error:', err.message);
     return res.status(500).json({ code: 'INTERNAL_ERROR' });
+  } finally {
+    // Roll back the cooldown if we stamped it but generation never started
+    // (moderation/validation/credit/concurrency failures, or any exception).
+    if (rateLimitStamped && !rateLimitCommitted) {
+      clearRateLimit(userId, 'storyboard_generate');
+    }
   }
 });
 

@@ -14,8 +14,10 @@ async function getAuthToken() {
 }
 
 async function getCurrentUser() {
-  const { data: { user } } = await _sbClient.auth.getUser();
-  return user;
+  // Local session read (no remote round-trip). The token is still validated
+  // server-side on every /api call, so a remote getUser() here is redundant.
+  const { data: { session } } = await _sbClient.auth.getSession();
+  return session?.user || null;
 }
 
 async function signInWithGoogle() {

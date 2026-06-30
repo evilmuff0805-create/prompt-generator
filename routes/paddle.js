@@ -51,6 +51,30 @@ function priceIdToPlan(priceId) {
 
 const PLAN_CREDITS = { pro: 1000, enterprise: 4000 };
 
+/* ── Test-account whitelist (env-managed, no code deploy) ── */
+// Accounts in TEST_ACCOUNT_USER_IDS (comma-separated user_id list) are FROZEN:
+// every webhook plan/credits mutation is skipped so their plan/credits stay
+// exactly as set manually. Parsing is safe by default — unset/empty → empty set
+// → nobody is whitelisted. Pure function (envStr injectable) for testability.
+function isTestAccount(userId, envStr = process.env.TEST_ACCOUNT_USER_IDS) {
+  if (!userId || !envStr) return false;
+  const ids = String(envStr)
+    .split(',')
+    .map(function (s) { return s.trim(); })
+    .filter(Boolean);
+  return ids.indexOf(String(userId).trim()) !== -1;
+}
+
+/* ── Check if subscription status allows plan changes ── */
+// Only 'active' and 'trialing' subscriptions should have their plan/credits
+// recalculated. When Paddle fires subscription.updated + subscription.canceled
+// together (e.g. immediate cancel), the two events can race. If updated arrives
+// after canceled has already set plan=free/credits=0, applying a plan change
+// would re-grant credits to a canceled account. Guarding on status prevents that.
+function isActiveSubscription(status) {
+  return status === 'active' || status === 'trialing';
+}
+
 /* ── Route a transaction.completed event by its `data.origin` ── */
 // Returns one of:
 //   'grant'  → new purchase or renewal: existing credit grant/reset (unchanged)
@@ -94,6 +118,12 @@ async function grantCreditsForPurchase(supabase, transactionId, userId, plan) {
     throw new Error('Failed to insert purchase record: ' + insertError.message);
   }
 
+  // Whitelist: ledger row recorded above, but skip the credit mutation (frozen account).
+  if (isTestAccount(userId)) {
+    console.warn('[paddle/webhook] [TEST_ACCOUNT] grant_credits 스킵(결제해도 크레딧 미지급) userId=' + userId + ' transaction=' + transactionId);
+    return;
+  }
+
   // Atomically reset credits to the plan allotment via RPC
   const { error: rpcError } = await supabase.rpc('grant_credits', {
     p_user_id: userId,
@@ -106,6 +136,35 @@ async function grantCreditsForPurchase(supabase, transactionId, userId, plan) {
   }
 
   console.log('[paddle/webhook] Reset credits to ' + credits + ' (' + plan + ') for userId=' + userId + ' transaction=' + transactionId);
+}
+
+/* ── Record plan-upgrade transaction in purchases ledger (defer branch) ── */
+// Inserts a ledger row for a plan-change transaction. Credits are NOT touched here —
+// apply_plan_change in subscription.updated handles credit recalculation exclusively.
+// UNIQUE(transaction_id) 23505 = idempotent skip (safe for Paddle re-delivery).
+async function recordPlanUpgradePurchase(supabase, { transactionId, userId, plan, subscriptionId }) {
+  const credits = PLAN_CREDITS[plan] || 0;
+  const { error } = await supabase
+    .from('purchases')
+    .insert({
+      transaction_id:   transactionId,
+      user_id:          userId,
+      plan,
+      credits_granted:  credits,
+      status:           'completed',
+      subscription_id:  subscriptionId || null,
+      transaction_type: 'plan_upgrade'
+    });
+
+  if (error) {
+    if (error.code === '23505') {
+      console.log('[paddle/webhook] plan_upgrade already recorded for transaction_id=' + transactionId + ', skipping');
+      return;
+    }
+    throw new Error('Failed to record plan_upgrade purchase: ' + error.message);
+  }
+
+  console.log('[paddle/webhook] Recorded plan_upgrade: transaction_id=' + transactionId + ' plan=' + plan + ' userId=' + userId);
 }
 
 /* ── Store Paddle customer/subscription IDs for future portal session use ── */
@@ -152,6 +211,12 @@ async function syncPlanFromSubscription(supabase, userId, plan) {
 //   - Same plan → credits unchanged (idempotent re-delivery safe)
 // Returns the new credits value.
 async function applyPlanChange(supabase, userId, plan) {
+  // Whitelist: frozen account — skip plan/credit recalculation.
+  if (isTestAccount(userId)) {
+    console.warn('[paddle/webhook] [TEST_ACCOUNT] apply_plan_change 스킵(plan 변경 무시) userId=' + userId + ' plan=' + plan);
+    return null;
+  }
+
   const allotment = PLAN_CREDITS[plan];
   const { data, error } = await supabase.rpc('apply_plan_change', {
     p_user_id: userId,
@@ -172,6 +237,12 @@ async function applyPlanChange(supabase, userId, plan) {
 // takes effect (status → canceled). At that point the user loses access:
 // plan → free, credits → 0.
 async function expireSubscription(supabase, userId) {
+  // Whitelist: frozen account — do not expire.
+  if (isTestAccount(userId)) {
+    console.warn('[paddle/webhook] [TEST_ACCOUNT] expireSubscription 스킵(취소돼도 plan/credits 유지) userId=' + userId);
+    return;
+  }
+
   const { error } = await supabase
     .from('profiles')
     .update({ plan: 'free', credits: 0 })
@@ -184,12 +255,38 @@ async function expireSubscription(supabase, userId) {
   console.log('[paddle/webhook] Subscription expired (plan=free, credits=0) for userId=' + userId);
 }
 
+/* ── Derive the plan in effect BEFORE a given plan-change row ── */
+// previous_plan = result plan of the immediately-prior ledger row for the same
+// subscription_id (ordered by created_at, id). No prior row → 'free'. This avoids
+// reverse-inference: the value comes from committed history, not a guess.
+// LIMITATION: the ledger records upgrades + new purchases only (not downgrades),
+// so a downgrade between two upgrades is invisible here.
+async function derivePreviousPlan(supabase, { subscriptionId, beforeCreatedAt, beforeId }) {
+  if (!subscriptionId) return 'free';
+  const { data: prior, error } = await supabase
+    .from('purchases')
+    .select('plan, created_at, id')
+    .eq('subscription_id', subscriptionId)
+    .lt('created_at', beforeCreatedAt)
+    .order('created_at', { ascending: false })
+    .order('id', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) {
+    console.error('[paddle/webhook] derivePreviousPlan query error for subscription_id=' + subscriptionId + ':', error.message);
+    return 'free';
+  }
+  return prior?.plan || 'free';
+}
+
 /* ── Revoke credits on refund ── */
-async function revokeCreditsForRefund(supabase, transactionId) {
+// adjustmentType: Paddle adjustment.data.type — 'full' | 'partial' (may be undefined).
+async function revokeCreditsForRefund(supabase, transactionId, adjustmentType) {
   // Look up original purchase by transaction_id
   const { data: purchase, error: lookupError } = await supabase
     .from('purchases')
-    .select('id, user_id, credits_granted, status')
+    .select('id, user_id, credits_granted, status, transaction_type, subscription_id, created_at')
     .eq('transaction_id', transactionId)
     .single();
 
@@ -200,6 +297,79 @@ async function revokeCreditsForRefund(supabase, transactionId) {
 
   if (purchase.status === 'refunded') {
     console.log('[paddle/webhook] Purchase already refunded for transaction_id=' + transactionId + ', skipping');
+    return;
+  }
+
+  // Whitelist: frozen account — skip any credit/plan mutation on refund.
+  // (userId only known here, after the ledger lookup — guard must live inside this fn.)
+  if (isTestAccount(purchase.user_id)) {
+    console.warn('[paddle/webhook] [TEST_ACCOUNT] 환불 mutation 스킵(plan/credits 유지) userId=' + purchase.user_id + ' transaction=' + transactionId);
+    return;
+  }
+
+  // ── plan_upgrade refund: auto-revert via revert_plan_change (usage-guarded in RPC) ──
+  if (purchase.transaction_type === 'plan_upgrade') {
+    // Partial refunds have no clean plan-revert mapping (money-only). Skip + flag.
+    if (adjustmentType !== 'full') {
+      console.error(
+        '[paddle/webhook] [CRITICAL] plan_upgrade 부분환불(type=' + (adjustmentType || 'n/a') +
+        ') — plan revert 매핑 불가, 스킵(운영자 수동 처리 필요) |',
+        'transaction_id=' + transactionId,
+        '| userId=' + purchase.user_id
+      );
+      return;
+    }
+
+    const previousPlan = await derivePreviousPlan(supabase, {
+      subscriptionId: purchase.subscription_id,
+      beforeCreatedAt: purchase.created_at,
+      beforeId: purchase.id
+    });
+    const previousAllotment = PLAN_CREDITS[previousPlan] || 0;
+
+    const { data: result, error: rpcError } = await supabase.rpc('revert_plan_change', {
+      p_user_id: purchase.user_id,
+      p_previous_plan: previousPlan,
+      p_previous_allotment: previousAllotment,
+      p_granted: purchase.credits_granted
+    });
+
+    if (rpcError) {
+      throw new Error('revert_plan_change RPC failed: ' + rpcError.message);
+    }
+
+    if (result?.plan_restored) {
+      // Only mark refunded when the plan was actually reverted.
+      const { error: updateError } = await supabase
+        .from('purchases')
+        .update({ status: 'refunded' })
+        .eq('id', purchase.id);
+      if (updateError) {
+        throw new Error('Failed to mark plan_upgrade purchase as refunded: ' + updateError.message);
+      }
+      console.log(
+        '[paddle/webhook] plan_upgrade 환불 복원 완료: plan→' + previousPlan +
+        ' credits=' + result.new_balance + ' userId=' + purchase.user_id + ' transaction=' + transactionId
+      );
+    } else if (result?.reason === 'credits_used') {
+      // Policy violation: credits were used but a refund was issued (operator error).
+      // Leave plan/credits untouched — do not compound the mistake. Flag loudly.
+      console.error(
+        '[paddle/webhook] [CRITICAL] 정책위반 환불 — 크레딧 사용된 계정이 환불됨, plan 복원 스킵(무변경) |',
+        'transaction_id=' + transactionId,
+        '| userId=' + purchase.user_id,
+        '| current_credits=' + result.new_balance,
+        '| granted=' + purchase.credits_granted
+      );
+    } else {
+      // account_free (already canceled) — free-guard prevented plan resurrection.
+      console.warn(
+        '[paddle/webhook] plan_upgrade 환불 — 계정이 이미 free(취소됨), plan 복원 스킵 |',
+        'transaction_id=' + transactionId,
+        '| userId=' + purchase.user_id,
+        '| reason=' + (result?.reason || 'unknown')
+      );
+    }
     return;
   }
 
@@ -298,11 +468,51 @@ router.post('/webhook',
         // else is ignored. This must not alter the checkout/recurring behavior.
         const decision = classifyTransactionOrigin(data?.origin);
         if (decision === 'defer') {
-          console.log(
-            '[paddle/webhook] transaction.completed origin=subscription_update (plan change) — credit handling deferred to next step |',
-            'transaction_id=' + transactionId,
-            '| userId=' + (userId || 'n/a')
-          );
+          // Record plan-change transaction in the purchases ledger for refund tracking.
+          // Credits are NOT changed here — apply_plan_change in subscription.updated handles that.
+          const supabase = makeAdminClient();
+          let deferUserId = userId;
+
+          // userId fallback: same pattern as subscription.updated handler
+          if (!deferUserId) {
+            const customerId = data?.customer_id;
+            if (customerId) {
+              const { data: profile, error: lookupError } = await supabase
+                .from('profiles')
+                .select('id')
+                .eq('paddle_customer_id', customerId)
+                .single();
+              if (!lookupError && profile?.id) {
+                deferUserId = profile.id;
+                console.log('[paddle/webhook] defer — resolved userId=' + deferUserId + ' from paddle_customer_id=' + customerId);
+              }
+            }
+          }
+
+          if (!deferUserId) {
+            console.error(
+              '[paddle/webhook] [CRITICAL] transaction.completed defer — userId 특정 불가',
+              '(custom_data.userId 없음, paddle_customer_id 조회 실패) — 원장 기록 불가 |',
+              'transaction_id=' + (transactionId || 'n/a'),
+              '| customer_id=' + (data?.customer_id || 'n/a')
+            );
+            return res.status(200).send('OK');
+          }
+
+          if (plan && transactionId) {
+            await recordPlanUpgradePurchase(supabase, {
+              transactionId,
+              userId: deferUserId,
+              plan,
+              subscriptionId: data?.subscription_id
+            });
+          } else {
+            console.warn(
+              '[paddle/webhook] defer — plan 또는 transactionId 없어 원장 기록 생략 |',
+              'plan=' + plan,
+              '| transaction_id=' + (transactionId || 'n/a')
+            );
+          }
           return res.status(200).send('OK');
         }
         if (decision === 'ignore') {
@@ -369,7 +579,7 @@ router.post('/webhook',
         }
 
         const supabase = makeAdminClient();
-        await revokeCreditsForRefund(supabase, transactionId);
+        await revokeCreditsForRefund(supabase, transactionId, data?.type);
 
       } else if (eventType === 'subscription.updated') {
         // Subscription changed (incl. plan up/downgrade).
@@ -421,6 +631,20 @@ router.post('/webhook',
           return res.status(200).send('OK');
         }
 
+        // Guard: skip plan change for non-active subscriptions.
+        // Prevents a late subscription.updated (status=canceled) from re-granting
+        // credits after subscription.canceled already set plan=free.
+        const subscriptionStatus = data?.status;
+        if (!isActiveSubscription(subscriptionStatus)) {
+          console.log(
+            '[paddle/webhook] subscription.updated status=' + subscriptionStatus +
+            ' — not active/trialing, skipping plan change |',
+            'subscription_id=' + (data?.id || 'n/a'),
+            '| userId=' + userId
+          );
+          return res.status(200).send('OK');
+        }
+
         // KNOWN LIMITATION: if Paddle issues a credit_to_balance adjustment for a
         // downgrade, the resulting adjustment.created event will not find a matching
         // purchases row (plan changes have no transaction_id in the ledger), so
@@ -431,14 +655,39 @@ router.post('/webhook',
       } else if (eventType === 'subscription.canceled') {
         // End-of-period cancellation took effect — revoke access
         const data = payload?.data;
-        const userId = data?.custom_data?.userId;
+        let userId = data?.custom_data?.userId;
+
+        // userId fallback: same pattern as subscription.updated handler — if
+        // custom_data.userId is absent, look up the profile by paddle_customer_id
+        // stored during the initial purchase.
+        const supabase = makeAdminClient();
+        if (!userId) {
+          const customerId = data?.customer_id;
+          if (customerId) {
+            const { data: profile, error: lookupError } = await supabase
+              .from('profiles')
+              .select('id')
+              .eq('paddle_customer_id', customerId)
+              .single();
+            if (!lookupError && profile?.id) {
+              userId = profile.id;
+              console.log('[paddle/webhook] subscription.canceled — resolved userId=' + userId + ' from paddle_customer_id=' + customerId);
+            }
+          }
+        }
 
         if (!userId) {
-          console.error('[paddle/webhook] No userId in subscription custom_data — cannot expire subscription');
+          // Both custom_data.userId and paddle_customer_id lookup failed — cannot
+          // identify the user. Log as CRITICAL (no change made).
+          console.error(
+            '[paddle/webhook] [CRITICAL] subscription.canceled — userId 특정 불가',
+            '(custom_data.userId 없음, paddle_customer_id 조회 실패) — 구독 만료 처리 생략 |',
+            'subscription_id=' + (data?.id || 'n/a'),
+            '| customer_id=' + (data?.customer_id || 'n/a')
+          );
           return res.status(200).send('OK');
         }
 
-        const supabase = makeAdminClient();
         await expireSubscription(supabase, userId);
 
       } else {
@@ -455,5 +704,9 @@ router.post('/webhook',
 
 module.exports = router;
 module.exports.classifyTransactionOrigin = classifyTransactionOrigin;
+module.exports.isActiveSubscription = isActiveSubscription;
+module.exports.isTestAccount = isTestAccount;
+module.exports.recordPlanUpgradePurchase = recordPlanUpgradePurchase;
+module.exports.derivePreviousPlan = derivePreviousPlan;
 module.exports.syncPlanFromSubscription = syncPlanFromSubscription;
 module.exports.applyPlanChange = applyPlanChange;
