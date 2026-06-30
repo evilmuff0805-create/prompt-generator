@@ -2388,6 +2388,98 @@ button { font-family: inherit; }
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 
+/* Pac-style loading: a chomping circle travels left→right eating dots (seamless loop).
+   Generic motion (not the Bandai Namco character). Pure CSS, decorative. */
+.storyboard-pacman {
+  --pac: #FFCA3A;
+  position: relative;
+  width: 100%;
+  max-width: 280px;
+  height: 36px;
+  margin: 0 auto 1.5rem;
+  overflow: hidden;
+}
+.storyboard-pacman__char {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  width: 32px;
+  height: 32px;
+  margin-top: -16px;
+  z-index: 2;
+  animation: pacMove 3s linear infinite;
+}
+.storyboard-pacman__char::before,
+.storyboard-pacman__char::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  width: 32px;
+  height: 16px;
+  background: var(--pac);
+}
+.storyboard-pacman__char::before {
+  top: 0;
+  border-radius: 16px 16px 0 0;
+  transform-origin: 50% 100%;
+  animation: pacChompTop 0.45s ease-in-out infinite;
+}
+.storyboard-pacman__char::after {
+  bottom: 0;
+  border-radius: 0 0 16px 16px;
+  transform-origin: 50% 0;
+  animation: pacChompBottom 0.45s ease-in-out infinite;
+}
+.storyboard-pacman__dot {
+  position: absolute;
+  top: 50%;
+  width: 7px;
+  height: 7px;
+  margin-top: -3.5px;
+  border-radius: 50%;
+  background: var(--clr-mint);
+  z-index: 1;
+}
+/* Dot positions + per-dot eat timing synced to pacMove (3s). char is nth-child(1). */
+.storyboard-pacman__dot:nth-child(2) { left: 18%; animation: pacEat 3s linear infinite; animation-delay: 0.80s; }
+.storyboard-pacman__dot:nth-child(3) { left: 33%; animation: pacEat 3s linear infinite; animation-delay: 1.21s; }
+.storyboard-pacman__dot:nth-child(4) { left: 48%; animation: pacEat 3s linear infinite; animation-delay: 1.61s; }
+.storyboard-pacman__dot:nth-child(5) { left: 63%; animation: pacEat 3s linear infinite; animation-delay: 2.01s; }
+.storyboard-pacman__dot:nth-child(6) { left: 78%; animation: pacEat 3s linear infinite; animation-delay: 2.41s; }
+.storyboard-pacman__dot:nth-child(7) { left: 92%; animation: pacEat 3s linear infinite; animation-delay: 2.79s; }
+
+@keyframes pacMove {
+  from { left: -12%; }
+  to   { left: 100%; }
+}
+@keyframes pacChompTop {
+  0%, 100% { transform: rotate(0); }
+  50%      { transform: rotate(-32deg); }
+}
+@keyframes pacChompBottom {
+  0%, 100% { transform: rotate(0); }
+  50%      { transform: rotate(32deg); }
+}
+@keyframes pacEat {
+  0%, 4%   { opacity: 1; transform: scale(1); }
+  8%, 100% { opacity: 0; transform: scale(0.2); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .storyboard-pacman__char,
+  .storyboard-pacman__char::before,
+  .storyboard-pacman__char::after,
+  .storyboard-pacman__dot { animation: none; }
+  .storyboard-pacman__char { left: 50%; margin-left: -16px; }
+}
+@media (max-width: 480px) {
+  .storyboard-pacman { max-width: 220px; height: 32px; }
+  .storyboard-pacman__char { width: 28px; height: 28px; margin-top: -14px; }
+  .storyboard-pacman__char::before,
+  .storyboard-pacman__char::after { width: 28px; height: 14px; }
+  .storyboard-pacman__char::before { border-radius: 14px 14px 0 0; }
+  .storyboard-pacman__char::after  { border-radius: 0 0 14px 14px; }
+}
+
 .storyboard-progress-bar-wrap {
   background: var(--clr-border);
   border-radius: 999px;
