@@ -11,15 +11,13 @@
       document.getElementById('navbar').classList.toggle('scrolled', window.scrollY > 10);
     });
 
-    // Auth state
+    // Auth state — onAuthStateChange fires INITIAL_SESSION on subscribe, so it
+    // drives the first render too (no separate getCurrentUser round-trip, no
+    // duplicate render). currentUser comes from the local session.
     StoryboardAPI.onAuthStateChange(async (event, session) => {
       currentUser = session?.user || null;
       await renderAuthState();
     });
-
-    // Initial auth check
-    currentUser = await StoryboardAPI.getCurrentUser();
-    await renderAuthState();
 
     // Login button
     document.getElementById('loginBtn')?.addEventListener('click', () => StoryboardAPI.signInWithGoogle());
@@ -39,25 +37,37 @@
     try {
       const authGate = document.getElementById('authGate');
       const planGate = document.getElementById('planGate');
+      const loadingGate = document.getElementById('loadingGate');
       const mainForm = document.getElementById('mainForm');
       const creditsDisplay = document.getElementById('creditsDisplay');
       const errorBanner = document.getElementById('errorBanner');
 
-      if (!currentUser) {
-        authGate.style.display = '';
+      const hideAll = () => {
+        authGate.style.display = 'none';
         planGate.style.display = 'none';
+        if (loadingGate) loadingGate.style.display = 'none';
         mainForm.style.display = 'none';
+      };
+
+      if (!currentUser) {
+        hideAll();
+        authGate.style.display = '';
         return;
       }
+
+      // Optimistic render: show a lightweight loading skeleton immediately while
+      // the profile (plan + credits) loads in the background — no blank screen.
+      hideAll();
+      if (loadingGate) loadingGate.style.display = '';
+      if (creditsDisplay) creditsDisplay.textContent = 'Loading…';
 
       let profile = null;
       try {
         const fetchTimeout = new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 8000));
         profile = await Promise.race([StoryboardAPI.getUserProfile(), fetchTimeout]);
       } catch {
-        authGate.style.display = 'none';
-        planGate.style.display = 'none';
-        mainForm.style.display = 'none';
+        hideAll();
+        if (creditsDisplay) creditsDisplay.textContent = '';
         if (errorBanner) {
           errorBanner.textContent = '프로필을 불러오지 못했습니다. 페이지를 새로고침해 주세요.';
           errorBanner.style.display = '';
@@ -69,14 +79,14 @@
       const planOk = profile && allowedPlans.includes((profile.plan || 'free').toLowerCase());
 
       if (!planOk) {
-        authGate.style.display = 'none';
+        hideAll();
+        if (creditsDisplay) creditsDisplay.textContent = '';
         planGate.style.display = '';
-        mainForm.style.display = 'none';
         return;
       }
 
-      authGate.style.display = 'none';
-      planGate.style.display = 'none';
+      // Profile resolved and plan allowed — reveal the form with accurate credits.
+      hideAll();
       mainForm.style.display = '';
 
       if (errorBanner) errorBanner.style.display = 'none';
