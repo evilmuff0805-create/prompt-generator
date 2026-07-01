@@ -2440,13 +2440,17 @@ button { font-family: inherit; }
   background: var(--clr-mint);
   z-index: 1;
 }
-/* Dot positions + per-dot eat timing synced to pacMove (3s). char is nth-child(1). */
-.storyboard-pacman__dot:nth-child(2) { left: 18%; animation: pacEat 3s linear infinite; animation-delay: 0.80s; }
-.storyboard-pacman__dot:nth-child(3) { left: 33%; animation: pacEat 3s linear infinite; animation-delay: 1.21s; }
-.storyboard-pacman__dot:nth-child(4) { left: 48%; animation: pacEat 3s linear infinite; animation-delay: 1.61s; }
-.storyboard-pacman__dot:nth-child(5) { left: 63%; animation: pacEat 3s linear infinite; animation-delay: 2.01s; }
-.storyboard-pacman__dot:nth-child(6) { left: 78%; animation: pacEat 3s linear infinite; animation-delay: 2.41s; }
-.storyboard-pacman__dot:nth-child(7) { left: 92%; animation: pacEat 3s linear infinite; animation-delay: 2.79s; }
+/* All dots share pacMove's 3s timeline (NO per-dot delay) so they reset together
+   with the char at 0% (dots refill every loop). Each dot vanishes at the % where
+   the char passes its position — eat percent ≈ (pos + 6) / 1.12, matching pacMove
+   (left: -12% → 100%). char is nth-child(1). */
+.storyboard-pacman__dot { animation: none; }
+.storyboard-pacman__dot:nth-child(2) { left: 18%; animation: pacEat1 3s linear infinite; }
+.storyboard-pacman__dot:nth-child(3) { left: 33%; animation: pacEat2 3s linear infinite; }
+.storyboard-pacman__dot:nth-child(4) { left: 48%; animation: pacEat3 3s linear infinite; }
+.storyboard-pacman__dot:nth-child(5) { left: 63%; animation: pacEat4 3s linear infinite; }
+.storyboard-pacman__dot:nth-child(6) { left: 78%; animation: pacEat5 3s linear infinite; }
+.storyboard-pacman__dot:nth-child(7) { left: 92%; animation: pacEat6 3s linear infinite; }
 
 @keyframes pacMove {
   from { left: -12%; }
@@ -2460,10 +2464,14 @@ button { font-family: inherit; }
   0%, 100% { transform: rotate(0); }
   50%      { transform: rotate(32deg); }
 }
-@keyframes pacEat {
-  0%, 4%   { opacity: 1; transform: scale(1); }
-  8%, 100% { opacity: 0; transform: scale(0.2); }
-}
+/* eat percents: 21 / 35 / 48 / 62 / 75 / 88 — char reaches each dot at these points.
+   1% snap window = "eaten the instant the mouth arrives"; refill at 0% next loop. */
+@keyframes pacEat1 { 0%, 20% { opacity: 1; transform: scale(1); } 21%, 100% { opacity: 0; transform: scale(0.2); } }
+@keyframes pacEat2 { 0%, 34% { opacity: 1; transform: scale(1); } 35%, 100% { opacity: 0; transform: scale(0.2); } }
+@keyframes pacEat3 { 0%, 47% { opacity: 1; transform: scale(1); } 48%, 100% { opacity: 0; transform: scale(0.2); } }
+@keyframes pacEat4 { 0%, 61% { opacity: 1; transform: scale(1); } 62%, 100% { opacity: 0; transform: scale(0.2); } }
+@keyframes pacEat5 { 0%, 74% { opacity: 1; transform: scale(1); } 75%, 100% { opacity: 0; transform: scale(0.2); } }
+@keyframes pacEat6 { 0%, 87% { opacity: 1; transform: scale(1); } 88%, 100% { opacity: 0; transform: scale(0.2); } }
 @media (prefers-reduced-motion: reduce) {
   .storyboard-pacman__char,
   .storyboard-pacman__char::before,
