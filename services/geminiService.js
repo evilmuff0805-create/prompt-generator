@@ -1,6 +1,9 @@
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 
-const MODEL = 'gemini-2.5-flash';
+// Model is env-switchable (GEMINI_MODEL) so rollback/swap needs no code deploy.
+// gemini-2.5-flash retires 2026-10-16; stable replacement is gemini-3.1-flash-lite
+// (thinking_level defaults to 'minimal' — no added cost/latency).
+const MODEL = process.env.GEMINI_MODEL || 'gemini-3.1-flash-lite';
 const API_TIMEOUT_MS = 30_000;
 
 function withTimeout(promise, ms, label) {
