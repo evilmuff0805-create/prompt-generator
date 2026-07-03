@@ -50,6 +50,13 @@ function getAdminClient() {
   });
 }
 
+// Single source of truth for the storyboard credit cost. The same value drives
+// the actual deduction (/generate) AND the UI display (/config), so changing
+// STORYBOARD_CREDIT_COST in the environment updates both together.
+function getStoryboardCost() {
+  return parseInt(process.env.STORYBOARD_CREDIT_COST || '120', 10);
+}
+
 function validateInput(body) {
   const errors = [];
   const { scenario, genres, style, cutCount, referenceImageIds } = body;
@@ -104,6 +111,12 @@ function estimateRemaining(sb) {
 // CRITICAL: Route registration order must be preserved.
 // Static paths BEFORE /:id to prevent /list matching as id="list".
 // ============================================================
+
+// GET /config — public UI config (no auth: the plan gate shows the cost to
+// logged-out users too). Cost comes from the same helper /generate deducts with.
+router.get('/config', (req, res) => {
+  res.json({ success: true, storyboardCost: getStoryboardCost() });
+});
 
 // POST /generate
 router.post('/generate', requireAuth, async (req, res) => {
@@ -177,7 +190,7 @@ router.post('/generate', requireAuth, async (req, res) => {
     }
 
     // 8. Credit balance check
-    const cost = parseInt(process.env.STORYBOARD_CREDIT_COST || '250', 10);
+    const cost = getStoryboardCost();
     if (profile.credits < cost) {
       return res.status(402).json({ code: 'INSUFFICIENT_CREDITS', required: cost, available: profile.credits });
     }

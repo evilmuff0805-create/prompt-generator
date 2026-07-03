@@ -4,8 +4,24 @@
   let currentUser = null;
   let _rendering = false;
   let _pendingRender = false;
+  // Storyboard credit cost for display. Safe default matches the backend env
+  // fallback; overwritten by /api/storyboard/config so env changes need no deploy.
+  let storyboardCost = 120;
+
+  async function loadConfig() {
+    const cfg = await StoryboardAPI.getConfig();
+    if (cfg && typeof cfg.storyboardCost === 'number') {
+      storyboardCost = cfg.storyboardCost;
+      document.querySelectorAll('.sb-cost-value').forEach(el => {
+        el.textContent = String(storyboardCost);
+      });
+    }
+    // On failure the static "120" defaults stay — no blanks, no NaN.
+  }
 
   async function init() {
+    loadConfig(); // fire-and-forget: display-only, must not block first render
+
     // Navbar scroll
     window.addEventListener('scroll', () => {
       document.getElementById('navbar').classList.toggle('scrolled', window.scrollY > 10);
@@ -109,7 +125,7 @@
     if (!result.success) {
       const messages = {
         PLAN_NOT_ALLOWED: 'Your plan does not allow Storyboard generation.',
-        INSUFFICIENT_CREDITS: 'Not enough credits. Storyboard requires 250 credits.',
+        INSUFFICIENT_CREDITS: `Not enough credits. Storyboard requires ${storyboardCost} credits.`,
         RATE_LIMITED: 'Please wait 60 seconds between requests.',
         TOO_MANY_CONCURRENT_JOBS: 'You already have the maximum number of jobs running.',
         MODERATION_REJECTED: 'Your scenario was flagged by our safety system. Please revise it.',

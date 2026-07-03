@@ -89,6 +89,19 @@ async function uploadReference(file, onProgress) {
   return res.json();
 }
 
+async function getConfig() {
+  // Public endpoint — safe default keeps UI sane if the fetch fails.
+  try {
+    const res = await fetch('/api/storyboard/config');
+    if (!res.ok) return null;
+    const data = await res.json();
+    return (data && typeof data.storyboardCost === 'number' && isFinite(data.storyboardCost))
+      ? data : null;
+  } catch {
+    return null;
+  }
+}
+
 async function getUserProfile() {
   const token = await getAuthToken();
   if (!token) return null;
@@ -102,5 +115,5 @@ async function getUserProfile() {
 window.StoryboardAPI = {
   getAuthToken, getCurrentUser, signInWithGoogle, signOut, onAuthStateChange,
   generateStoryboard, getStatus, getStoryboard, listStoryboards, deleteStoryboard,
-  uploadReference, getUserProfile
+  uploadReference, getUserProfile, getConfig
 };

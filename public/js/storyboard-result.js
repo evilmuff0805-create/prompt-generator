@@ -10,6 +10,15 @@
       document.getElementById('navbar').classList.toggle('scrolled', window.scrollY > 10);
     });
 
+    // Display-only: insert the configured cost into the refund note.
+    // On failure the number-free default text stays (never blank/NaN).
+    StoryboardAPI.getConfig().then(cfg => {
+      if (cfg && typeof cfg.storyboardCost === 'number') {
+        const note = document.getElementById('refundNote');
+        if (note) note.textContent = `Your ${cfg.storyboardCost} credits have been refunded.`;
+      }
+    }).catch(() => {});
+
     const user = await StoryboardAPI.getCurrentUser();
     if (!user) {
       window.location.href = '/storyboard';
