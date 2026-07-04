@@ -63,6 +63,7 @@
         planGate.style.display = 'none';
         if (loadingGate) loadingGate.style.display = 'none';
         mainForm.style.display = 'none';
+        if (creditsDisplay) creditsDisplay.style.display = 'none';
       };
 
       if (!currentUser) {
@@ -75,7 +76,6 @@
       // the profile (plan + credits) loads in the background — no blank screen.
       hideAll();
       if (loadingGate) loadingGate.style.display = '';
-      if (creditsDisplay) creditsDisplay.textContent = 'Loading…';
 
       let profile = null;
       try {
@@ -83,7 +83,6 @@
         profile = await Promise.race([StoryboardAPI.getUserProfile(), fetchTimeout]);
       } catch {
         hideAll();
-        if (creditsDisplay) creditsDisplay.textContent = '';
         if (errorBanner) {
           errorBanner.textContent = '프로필을 불러오지 못했습니다. 페이지를 새로고침해 주세요.';
           errorBanner.style.display = '';
@@ -96,7 +95,6 @@
 
       if (!planOk) {
         hideAll();
-        if (creditsDisplay) creditsDisplay.textContent = '';
         planGate.style.display = '';
         return;
       }
@@ -107,13 +105,38 @@
 
       if (errorBanner) errorBanner.style.display = 'none';
 
-      if (creditsDisplay && profile) {
-        creditsDisplay.textContent = `${profile.credits.toLocaleString()} credits available`;
-      }
+      renderUserChip(profile);
     } finally {
       _rendering = false;
       if (_pendingRender) { _pendingRender = false; renderAuthState(); }
     }
+  }
+
+  // Fill the header user chip — same rendering rules as app.js refreshUserProfile
+  // (name, plan badge label/class, "Credits: N / total") for cross-page consistency.
+  function renderUserChip(profile) {
+    const chip = document.getElementById('creditsDisplay');
+    if (!chip || !profile) return;
+    const nameEl = document.getElementById('sbUserName');
+    const badgeEl = document.getElementById('sbPlanBadge');
+    const usageEl = document.getElementById('sbUsageDisplay');
+
+    const planLabels = { free: 'Free', pro: 'Pro', enterprise: 'Enterprise', paid: 'Pro' };
+    const planKey = (profile.plan || 'free').toLowerCase();
+    if (nameEl) nameEl.textContent = profile.user?.full_name || profile.user?.email || '';
+    if (badgeEl) {
+      badgeEl.textContent = planLabels[planKey] || 'Free';
+      const badgeClass = planKey === 'enterprise' ? 'enterprise' : (planKey === 'free' ? 'free' : 'pro');
+      badgeEl.className = `plan-badge plan-badge--${badgeClass}`;
+    }
+    if (usageEl) {
+      const totals = { enterprise: 4000, pro: 1000, paid: 1000 };
+      const total = totals[planKey] || 0;
+      usageEl.textContent = total > 0
+        ? `Credits: ${(profile.credits || 0).toLocaleString()} / ${total.toLocaleString()}`
+        : `Today ${profile.daily_used ?? 0}/1 used`;
+    }
+    chip.style.display = 'inline-flex';
   }
 
   async function handleGenerate(formData) {

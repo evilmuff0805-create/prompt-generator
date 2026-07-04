@@ -35,7 +35,15 @@
         <div class="section-label">AI Storyboard</div>
         <h1 class="storyboard-title">Storyboard Generator</h1>
         <p class="storyboard-subtitle">Create cinematic storyboard grids with Seedance 2.0-ready prompts</p>
-        <div class="storyboard-credits-display" id="creditsDisplay"></div>
+        <!-- Same component structure/classes as the main page navbar userProfile -->
+        <div class="storyboard-user-chip" id="creditsDisplay" style="display:none">
+          <span class="user-avatar" id="sbUserAvatar">🤖</span>
+          <div class="user-info">
+            <span class="user-name" id="sbUserName"></span>
+            <span class="plan-badge plan-badge--free" id="sbPlanBadge">Free</span>
+          </div>
+          <span class="usage-display" id="sbUsageDisplay"></span>
+        </div>
         <a href="/storyboard/history" class="storyboard-history-link">📜 View History</a>
       </div>
 
