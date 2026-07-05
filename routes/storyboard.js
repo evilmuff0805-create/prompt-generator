@@ -531,11 +531,16 @@ router.delete('/:id', requireAuth, async (req, res) => {
       return res.status(404).json({ code: 'NOT_FOUND' });
     }
 
-    // Soft-delete
-    await admin
+    // Soft-delete — must not silently fail (user would see success:true while
+    // the storyboard is still listed).
+    const { error: deleteErr } = await admin
       .from('storyboards')
       .update({ deleted_at: new Date().toISOString(), status: 'deleted' })
       .eq('id', storyboardId);
+    if (deleteErr) {
+      console.error('[storyboard DELETE /:id] soft-delete failed:', deleteErr.message, '| id:', storyboardId);
+      return res.status(500).json({ code: 'INTERNAL_ERROR' });
+    }
 
     // Immediate Storage file removal (best-effort)
     if (sb.grid_storage_path) {

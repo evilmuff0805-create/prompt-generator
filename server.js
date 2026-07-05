@@ -162,9 +162,12 @@ app.get('/api/user/profile', async (req, res) => {
   // Auto-reset daily usage on new day
   let dailyUsed = profile.daily_used;
   if (profile.last_reset_date !== today) {
-    await supabase.from('profiles')
+    const { error: resetError } = await supabase.from('profiles')
       .update({ daily_used: 0, last_reset_date: today })
       .eq('id', user.id);
+    if (resetError) {
+      console.error('[GET /api/user/profile] daily reset update failed:', resetError.message, '| user:', user.id);
+    }
     dailyUsed = 0;
   }
 

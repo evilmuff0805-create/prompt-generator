@@ -96,10 +96,13 @@ router.post('/analyze', authMiddleware, upload.single('image'), async (req, res,
     // Reset daily usage if new day
     let dailyUsed = profile.daily_used;
     if (profile.last_reset_date !== today) {
-      await req.supabase
+      const { error: resetError } = await req.supabase
         .from('profiles')
         .update({ daily_used: 0, last_reset_date: today })
         .eq('id', req.user.id);
+      if (resetError) {
+        console.error('[analyze] daily reset update failed:', resetError.message, '| user:', req.user.id);
+      }
       dailyUsed = 0;
     }
 
@@ -145,25 +148,37 @@ router.post('/analyze', authMiddleware, upload.single('image'), async (req, res,
         return res.status(403).json({ success: false, error: 'Not enough credits', code: 'NO_CREDITS' });
       }
     } else {
-      await req.supabase
+      // Free-plan daily counter. A silent failure here would bypass the daily
+      // limit unnoticed — log it (do not block: the analysis already succeeded).
+      const { error: usedError } = await req.supabase
         .from('profiles')
         .update({ daily_used: dailyUsed + 1 })
         .eq('id', req.user.id);
+      if (usedError) {
+        console.error('[analyze] daily_used increment failed:', usedError.message, '| user:', req.user.id);
+      }
     }
 
-    // Log usage
-    await req.supabase
+    // Log usage — aggregation only. Never block the user's response on this,
+    // but a silent failure means undercounted stats (credit-forensics lesson).
+    const { error: usageLogError } = await req.supabase
       .from('usage_logs')
       .insert({ user_id: req.user.id });
+    if (usageLogError) {
+      console.error('[analyze] usage_logs insert failed:', usageLogError.message, '| user:', req.user.id);
+    }
 
-    // 프롬프트 히스토리 저장
-    await req.supabase
+    // 프롬프트 히스토리 저장 — same policy: log failures, don't block.
+    const { error: promptError } = await req.supabase
       .from('prompts')
       .insert({
         user_id: req.user.id,
         prompt:  result.prompt || '',
         analysis: result.analysis || {}
       });
+    if (promptError) {
+      console.error('[analyze] prompts history insert failed:', promptError.message, '| user:', req.user.id);
+    }
 
     res.json({ success: true, ...result });
   } catch (err) {
