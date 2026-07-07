@@ -96,6 +96,12 @@
       <span class="storyboard-meta-date">${date}</span>
     `;
 
+    // ① My Scenario — textContent (XSS-safe); hidden when absent (older rows)
+    if (sb.scenario) {
+      document.getElementById('scenarioText').textContent = sb.scenario;
+      document.getElementById('scenarioCard').style.display = '';
+    }
+
     // Grid image
     if (sb.gridUrl) {
       const img = document.getElementById('gridImage');

@@ -2580,6 +2580,14 @@ button { font-family: inherit; }
 
 .storyboard-prompts-hint { font-size: 0.8rem; color: var(--clr-text-muted); margin-bottom: 1.25rem; }
 
+.storyboard-scenario-text {
+  font-size: 0.95rem;
+  line-height: 1.75;
+  color: var(--clr-text);
+  white-space: pre-wrap;   /* 사용자가 넣은 줄바꿈 보존 */
+  word-break: break-word;
+}
+
 .storyboard-shot-list { display: flex; flex-direction: column; gap: 1rem; }
 .storyboard-shot-item {
   background: var(--clr-bg);
