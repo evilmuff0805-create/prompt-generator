@@ -27,6 +27,39 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/style.css" />
   <link rel="icon" href="/favicon.png" type="image/png">
+  <!-- Structured data (schema.org). FAQPage는 페이지에 노출된 FAQ 콘텐츠가 없어 의도적으로 제외
+       (비노출 콘텐츠의 구조화 데이터는 Google 가이드라인 위반 위험). -->
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "WebApplication",
+    "name": "PromptGen",
+    "url": "https://promptgen-ai.com/",
+    "description": "Upload any image and instantly generate detailed, bracket-segmented AI prompts optimized for Midjourney, GPT Image 2, and Nano Banana Pro. Includes an endframe extractor and an AI storyboard generator for Seedance 2.0.",
+    "applicationCategory": "MultimediaApplication",
+    "operatingSystem": "Web",
+    "offers": [
+      {
+        "@type": "Offer",
+        "name": "Free",
+        "price": "0",
+        "priceCurrency": "USD"
+      },
+      {
+        "@type": "Offer",
+        "name": "Pro",
+        "price": "9.99",
+        "priceCurrency": "USD"
+      },
+      {
+        "@type": "Offer",
+        "name": "Enterprise",
+        "price": "19.99",
+        "priceCurrency": "USD"
+      }
+    ]
+  }
+  </script>
 </head>
 <body>
 
