@@ -83,6 +83,16 @@ function makeUserClient(token) {
   });
 }
 
+// All profile mutations must flow through the server's service-role client.
+// Browser JWT clients are intentionally read-only for profile data.
+function makeAdminClient() {
+  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!serviceKey) return null;
+  return createClient(process.env.SUPABASE_URL, serviceKey, {
+    auth: { persistSession: false }
+  });
+}
+
 async function verifyToken(token) {
   if (!process.env.SUPABASE_URL || !process.env.SUPABASE_ANON_KEY) {
     console.error('[verifyToken] SUPABASE_URL or SUPABASE_ANON_KEY is missing from environment');
@@ -123,14 +133,11 @@ app.get('/api/user/profile', async (req, res) => {
 
     // PGRST116: 행이 없음 → 프로필 자동 생성 후 반환
     if (profileError.code === 'PGRST116') {
-      const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-      if (!serviceKey) {
+      const adminClient = makeAdminClient();
+      if (!adminClient) {
         console.error('[GET /api/user/profile] SUPABASE_SERVICE_ROLE_KEY is not configured');
         return res.status(500).json({ success: false, error: 'Server configuration error' });
       }
-      const adminClient = createClient(process.env.SUPABASE_URL, serviceKey, {
-        auth: { persistSession: false }
-      });
       const { data: newProfile, error: insertError } = await adminClient
         .from('profiles')
         .insert({ id: user.id, plan: 'free', credits: 0, daily_used: 0, last_reset_date: new Date().toISOString().split('T')[0] })
@@ -162,11 +169,17 @@ app.get('/api/user/profile', async (req, res) => {
   // Auto-reset daily usage on new day
   let dailyUsed = profile.daily_used;
   if (profile.last_reset_date !== today) {
-    const { error: resetError } = await supabase.from('profiles')
+    const adminClient = makeAdminClient();
+    if (!adminClient) {
+      console.error('[GET /api/user/profile] SUPABASE_SERVICE_ROLE_KEY is not configured');
+      return res.status(500).json({ success: false, error: 'Server configuration error' });
+    }
+    const { error: resetError } = await adminClient.from('profiles')
       .update({ daily_used: 0, last_reset_date: today })
       .eq('id', user.id);
     if (resetError) {
       console.error('[GET /api/user/profile] daily reset update failed:', resetError.message, '| user:', user.id);
+      return res.status(500).json({ success: false, error: 'Failed to reset daily usage' });
     }
     dailyUsed = 0;
   }
