@@ -2,10 +2,19 @@ const express = require('express');
 const multer = require('multer');
 const fs = require('fs');
 const path = require('path');
+const { createClient } = require('@supabase/supabase-js');
 const { analyzeImage } = require('../services/geminiService');
 const authMiddleware = require('../middleware/auth');
 
 const router = express.Router();
+
+function makeAdminClient() {
+  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!serviceKey) return null;
+  return createClient(process.env.SUPABASE_URL, serviceKey, {
+    auth: { persistSession: false }
+  });
+}
 
 const uploadsDir = path.join(__dirname, '..', 'uploads');
 fs.mkdirSync(uploadsDir, { recursive: true });
@@ -59,6 +68,12 @@ router.post('/analyze', authMiddleware, upload.single('image'), async (req, res,
 
     const today = new Date().toISOString().split('T')[0];
 
+    const adminClient = makeAdminClient();
+    if (!adminClient) {
+      console.error('[analyze] SUPABASE_SERVICE_ROLE_KEY is not configured');
+      return res.status(500).json({ success: false, error: 'Server configuration error' });
+    }
+
     // Fetch user profile
     let { data: profile, error: profileError } = await req.supabase
       .from('profiles')
@@ -68,13 +83,6 @@ router.post('/analyze', authMiddleware, upload.single('image'), async (req, res,
 
     // 프로필이 없으면 자동 생성 (PGRST116: no rows)
     if (profileError?.code === 'PGRST116') {
-      const { createClient } = require('@supabase/supabase-js');
-      const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-      if (!serviceKey) {
-        return res.status(500).json({ success: false, error: 'Server configuration error' });
-      }
-      const adminClient = createClient(process.env.SUPABASE_URL, serviceKey, { auth: { persistSession: false } });
-      const today = new Date().toISOString().split('T')[0];
       const { data: newProfile, error: insertError } = await adminClient
         .from('profiles')
         .insert({ id: req.user.id, plan: 'free', credits: 0, daily_used: 0, last_reset_date: today })
@@ -96,12 +104,13 @@ router.post('/analyze', authMiddleware, upload.single('image'), async (req, res,
     // Reset daily usage if new day
     let dailyUsed = profile.daily_used;
     if (profile.last_reset_date !== today) {
-      const { error: resetError } = await req.supabase
+      const { error: resetError } = await adminClient
         .from('profiles')
         .update({ daily_used: 0, last_reset_date: today })
         .eq('id', req.user.id);
       if (resetError) {
         console.error('[analyze] daily reset update failed:', resetError.message, '| user:', req.user.id);
+        return res.status(500).json({ success: false, error: 'Failed to reset daily usage' });
       }
       dailyUsed = 0;
     }
@@ -138,7 +147,7 @@ router.post('/analyze', authMiddleware, upload.single('image'), async (req, res,
 
     // 원자적 크레딧 차감 (레이스 컨디션 방지)
     if (isPaidPlan) {
-      const { data: remaining, error: rpcError } = await req.supabase
+      const { data: remaining, error: rpcError } = await adminClient
         .rpc('deduct_credits', { p_user_id: req.user.id, p_amount: 10 });
       if (rpcError) {
         console.error('[analyze] deduct_credits RPC error:', rpcError.message);
@@ -150,7 +159,7 @@ router.post('/analyze', authMiddleware, upload.single('image'), async (req, res,
     } else {
       // Free-plan daily counter. A silent failure here would bypass the daily
       // limit unnoticed — log it (do not block: the analysis already succeeded).
-      const { error: usedError } = await req.supabase
+      const { error: usedError } = await adminClient
         .from('profiles')
         .update({ daily_used: dailyUsed + 1 })
         .eq('id', req.user.id);
