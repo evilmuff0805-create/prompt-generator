@@ -48,17 +48,24 @@ function verifyMagicBytes(buffer, mimeType) {
   return true;
 }
 
-const upload = multer({
-  storage,
-  fileFilter: (req, file, cb) => {
-    if (ALLOWED_MIMES.includes(file.mimetype)) {
-      cb(null, true);
-    } else {
-      cb(new Error('Only JPEG, PNG, WebP, and GIF images are allowed'));
-    }
-  },
-  limits: { fileSize: 20 * 1024 * 1024 }
-});
+function createAnalysisUpload(options = {}) {
+  const storageEngine = options.storage || storage;
+  const maxFileSize = options.maxFileSize || 20 * 1024 * 1024;
+
+  return multer({
+    storage: storageEngine,
+    fileFilter: (req, file, cb) => {
+      if (ALLOWED_MIMES.includes(file.mimetype)) {
+        cb(null, true);
+      } else {
+        cb(new Error('Only JPEG, PNG, WebP, and GIF images are allowed'));
+      }
+    },
+    limits: { fileSize: maxFileSize }
+  });
+}
+
+const upload = createAnalysisUpload();
 
 router.post('/analyze', authMiddleware, upload.single('image'), async (req, res, next) => {
   const filePath = req.file?.path;
@@ -210,5 +217,11 @@ router.post('/analyze', authMiddleware, upload.single('image'), async (req, res,
     }
   }
 });
+
+router._uploadSecurity = {
+  createAnalysisUpload,
+  verifyMagicBytes,
+  allowedMimes: new Set(ALLOWED_MIMES)
+};
 
 module.exports = router;

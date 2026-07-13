@@ -15,12 +15,22 @@ const storyboardWorker = require('../lib/storyboard-worker');
 const { recordServerEvent } = require('../lib/product-analytics');
 
 // Multer: memory storage, 10MB limit
-const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: parseInt(process.env.STORYBOARD_MAX_FILE_SIZE_MB || '10', 10) * 1024 * 1024 }
-});
+function createStoryboardUpload(options = {}) {
+  const configuredMb = parseInt(process.env.STORYBOARD_MAX_FILE_SIZE_MB || '10', 10);
+  const maxFileSize = options.maxFileSize || configuredMb * 1024 * 1024;
 
+  return multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: maxFileSize }
+  });
+}
+
+const upload = createStoryboardUpload();
 const ALLOWED_MIME_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
+
+function isAllowedStoryboardMime(mimeType) {
+  return ALLOWED_MIME_TYPES.has(mimeType);
+}
 const VALID_GENRES = new Set(['Romance', 'Drama', 'Thriller', 'Comedy', 'Action', 'Horror', 'Sci-Fi', 'Fantasy', 'Mystery']);
 const VALID_STYLES = new Set(['Pixar 3D', 'Cinematic', 'Documentary', 'Animation']);
 
@@ -283,7 +293,7 @@ router.post('/upload-reference', requireAuth, upload.single('image'), async (req
 
     // MIME validation
     const detectedMime = req.file.mimetype;
-    if (!ALLOWED_MIME_TYPES.has(detectedMime)) {
+    if (!isAllowedStoryboardMime(detectedMime)) {
       return res.status(400).json({ code: 'INVALID_MIME', message: 'Only JPEG, PNG, and WebP are allowed.' });
     }
 
@@ -524,5 +534,10 @@ router.delete('/:id', requireAuth, async (req, res) => {
     return res.status(500).json({ code: 'INTERNAL_ERROR' });
   }
 });
+
+router._uploadSecurity = {
+  createStoryboardUpload,
+  isAllowedStoryboardMime
+};
 
 module.exports = router;
