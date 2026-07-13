@@ -10,8 +10,8 @@ const router = express.Router();
 const requireAuth = require('../middleware/auth');
 const creditManager = require('../lib/credit-manager');
 const { moderateContent } = require('../lib/moderation');
-const { processStoryboardAsync, fetchStoryboard, markFailed } = require('../lib/storyboard-processor');
-const semaphore = require('../lib/semaphore');
+const jobStore = require('../lib/storyboard-job-store');
+const storyboardWorker = require('../lib/storyboard-worker');
 
 // Multer: memory storage, 10MB limit
 const upload = multer({
@@ -82,28 +82,25 @@ function validateInput(body) {
   return { ok: errors.length === 0, errors };
 }
 
-async function countActiveJobs(userId) {
-  const admin = getAdminClient();
-  const { count } = await admin
-    .from('storyboards')
-    .select('id', { count: 'exact', head: true })
-    .eq('user_id', userId)
-    .eq('status', 'processing');
-  return count || 0;
-}
 
 function getStepLabel(step) {
   const labels = {
     analyzing_scenario: 'Analyzing your scenario...',
     generating_grid: 'Generating storyboard grid...',
-    finalizing: 'Finalizing results...'
+    finalizing: 'Finalizing results...',
+    retry_wait: 'Temporary issue detected. Retrying safely...'
   };
   return labels[step] || 'Processing...';
 }
 
 function estimateRemaining(sb) {
+  if (sb.status === 'pending') {
+    const retryDelay = Math.max(0, (new Date(sb.next_attempt_at).getTime() - Date.now()) / 1000);
+    return Math.round(retryDelay + 90);
+  }
   if (sb.status !== 'processing') return 0;
-  const elapsed = (Date.now() - new Date(sb.created_at).getTime()) / 1000;
+  const startedAt = sb.updated_at || sb.created_at;
+  const elapsed = (Date.now() - new Date(startedAt).getTime()) / 1000;
   return Math.max(0, Math.round(90 - elapsed));
 }
 
@@ -173,12 +170,6 @@ router.post('/generate', requireAuth, async (req, res) => {
       }
     }
 
-    // 6. Concurrent job limit
-    const activeCount = await countActiveJobs(userId);
-    const maxConcurrent = parseInt(process.env.STORYBOARD_MAX_CONCURRENT_JOBS || '5', 10);
-    if (activeCount >= maxConcurrent) {
-      return res.status(429).json({ code: 'TOO_MANY_CONCURRENT_JOBS' });
-    }
 
     // 7. Moderation on scenario text (pre-deduction — no charge on rejection)
     const modResult = await moderateContent({ text: scenario });
@@ -195,41 +186,49 @@ router.post('/generate', requireAuth, async (req, res) => {
       return res.status(402).json({ code: 'INSUFFICIENT_CREDITS', required: cost, available: profile.credits });
     }
 
-    // 9. Insert storyboard row (status=pending)
+    // 8. Atomically insert the durable job and deduct credits. The RPC also
+    // serializes per-user submissions and enforces the active-job limit.
+    const cost = getStoryboardCost();
     const storyboardId = `sb_${randomUUID().replace(/-/g, '')}`;
-    const admin = getAdminClient();
-    const { error: insertErr } = await admin.from('storyboards').insert({
-      id: storyboardId,
-      user_id: userId,
-      scenario,
-      genres,
-      style,
-      cut_count: cutCount,
-      reference_image_ids: referenceImageIds,
-      status: 'pending',
-      credits_used: cost
-    });
+    const maxConcurrent = parseInt(process.env.STORYBOARD_MAX_CONCURRENT_JOBS || '5', 10);
+    const maxAttempts = parseInt(process.env.STORYBOARD_MAX_ATTEMPTS || '3', 10);
 
-    if (insertErr) {
-      console.error('[storyboard] insert error:', insertErr.message);
-      return res.status(500).json({ code: 'INTERNAL_ERROR' });
-    }
-
-    // 10. Atomic credit deduction
+    let enqueueResult;
     try {
-      await creditManager.deductStoryboardCredits(userId, cost, storyboardId);
-    } catch (deductErr) {
-      await admin.from('storyboards').delete().eq('id', storyboardId);
-      if (deductErr.code === 'INSUFFICIENT_CREDITS') {
+      enqueueResult = await jobStore.enqueueJob({
+        id: storyboardId,
+        userId,
+        scenario,
+        genres,
+        style,
+        cutCount,
+        referenceImageIds,
+        creditCost: cost,
+        maxConcurrent,
+        maxAttempts
+      });
+    } catch (queueErr) {
+      if (queueErr.code === 'INSUFFICIENT_CREDITS') {
         return res.status(402).json({ code: 'INSUFFICIENT_CREDITS' });
       }
-      throw deductErr;
+      if (queueErr.code === 'PLAN_NOT_ALLOWED') {
+        return res.status(403).json({ code: 'PLAN_NOT_ALLOWED' });
+      }
+      if (queueErr.code === 'TOO_MANY_CONCURRENT_JOBS') {
+        return res.status(429).json({ code: 'TOO_MANY_CONCURRENT_JOBS' });
+      }
+      if (queueErr.code === 'USER_NOT_FOUND') {
+        return res.status(404).json({ code: 'USER_NOT_FOUND' });
+      }
+      console.error('[storyboard] durable enqueue error:', queueErr.message);
+      return res.status(503).json({
+        code: 'QUEUE_UNAVAILABLE',
+        message: 'Storyboard queue is temporarily unavailable. No credits were charged.'
+      });
     }
 
-    // 11. Fire async (do not await) — semaphore gates concurrency
-    semaphore.run(() => processStoryboardAsync(storyboardId)).catch(err => {
-      console.error('[storyboard] async job error:', err.message);
-    });
+    // Wake this instance for low latency; any healthy instance may claim the row.
+    storyboardWorker.wake();
 
     // Generation committed — keep the cooldown stamp (throttles only on success).
     rateLimitCommitted = true;
@@ -238,10 +237,10 @@ router.post('/generate', requireAuth, async (req, res) => {
       success: true,
       storyboard: {
         id: storyboardId,
-        status: 'processing',
+        status: 'pending',
         estimatedSeconds: 90,
         creditsUsed: cost,
-        remainingCredits: profile.credits - cost
+        remainingCredits: enqueueResult.newBalance
       }
     });
   } catch (err) {
@@ -400,7 +399,7 @@ router.get('/:id/status', requireAuth, async (req, res) => {
     const admin = getAdminClient();
     const { data: sb, error } = await admin
       .from('storyboards')
-      .select('id, user_id, status, progress, current_step, created_at, credits_used')
+      .select('id, status, progress, current_step, created_at, updated_at, error_message, attempt_count, max_attempts, next_attempt_at')
       .eq('id', storyboardId)
       .eq('user_id', userId)
       .single();
@@ -409,51 +408,17 @@ router.get('/:id/status', requireAuth, async (req, res) => {
       return res.status(404).json({ code: 'NOT_FOUND' });
     }
 
-    // Lazy watchdog: detect stuck jobs
-    const timeoutMin = parseInt(process.env.STORYBOARD_STUCK_JOB_TIMEOUT_MINUTES || '5', 10);
-    if (sb.status === 'processing' &&
-        new Date(sb.created_at) < new Date(Date.now() - timeoutMin * 60 * 1000)) {
-      // Atomic mark-failed: only refund if we actually changed a row
-      const changed = await markFailed(storyboardId, 'Job timed out (stuck)');
-      if (changed) {
-        try {
-          const creditMgr = require('../lib/credit-manager');
-          await creditMgr.refundStoryboardCredits(
-            sb.user_id,
-            sb.credits_used,
-            storyboardId,
-            'stuck_job_timeout'
-          );
-        } catch (refErr) {
-          console.error('[storyboard watchdog] refund error:', refErr.message);
-        }
-      }
-
-      // Re-fetch after update
-      const { data: updated } = await admin
-        .from('storyboards')
-        .select('id, user_id, status, progress, current_step, created_at, credits_used')
-        .eq('id', storyboardId)
-        .single();
-
-      const latest = updated || { ...sb, status: 'failed' };
-      return res.json({
-        id: latest.id,
-        status: latest.status,
-        progress: latest.progress || 0,
-        currentStep: latest.current_step,
-        stepLabel: getStepLabel(latest.current_step),
-        estimatedSecondsRemaining: 0
-      });
-    }
-
     return res.json({
       id: sb.id,
       status: sb.status,
       progress: sb.progress || 0,
       currentStep: sb.current_step,
       stepLabel: getStepLabel(sb.current_step),
-      estimatedSecondsRemaining: estimateRemaining(sb)
+      estimatedSecondsRemaining: estimateRemaining(sb),
+      errorMessage: sb.status === 'failed' ? sb.error_message : null,
+      attempt: sb.attempt_count || 0,
+      maxAttempts: sb.max_attempts || 0,
+      retryAt: sb.status === 'pending' ? sb.next_attempt_at : null
     });
   } catch (err) {
     console.error('[storyboard /:id/status] error:', err.message);
