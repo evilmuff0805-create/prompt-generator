@@ -47,6 +47,12 @@ The Railway web process starts a Storage-aware cleanup scheduler after boot and 
 
 Use `npm run cleanup:dry-run` before any manual cleanup.
 
+## Product analytics
+
+PromptGen records a small, allowlisted first-party funnel without third-party SDKs or persistent tracking cookies. Browser navigation and intent use a session-scoped UUID; analysis, Storyboard, signup, and payment outcomes come from authoritative server or database events.
+
+The event table is service-role-only, rejects unknown properties and raw query/fragment paths, and is purged after 180 days. See [docs/product-analytics.md](docs/product-analytics.md) for the privacy contract, taxonomy, baseline, and read-only funnel queries.
+
 ## Deployment runbook
 
 ### Before merge
