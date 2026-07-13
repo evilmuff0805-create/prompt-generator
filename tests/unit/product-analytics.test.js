@@ -62,9 +62,37 @@ describe('product analytics', () => {
       sessionId: SESSION_ID,
       pagePath: '/',
       properties: { email: 'user@example.com' }
-    }, 'not allowed']
+    }, 'not allowed'],
+    [{
+      eventId: EVENT_ID,
+      eventName: 'analysis_started',
+      source: 'client',
+      sessionId: SESSION_ID,
+      pagePath: '/',
+      properties: { plan: 'user@example.com' }
+    }, 'value is not allowed'],
+    [{
+      eventId: EVENT_ID,
+      eventName: 'signup_completed',
+      source: 'client',
+      sessionId: SESSION_ID,
+      pagePath: '/'
+    }, 'event name']
   ])('rejects malformed or privacy-unsafe events', (input, message) => {
     expect(() => analytics.validateProductEvent(input)).toThrow(message);
+  });
+
+  test('accepts signup completion only as an authoritative server event', () => {
+    expect(analytics.validateProductEvent({
+      eventName: 'signup_completed',
+      source: 'server',
+      userId: USER_ID,
+      properties: { provider: 'supabase_auth' }
+    })).toMatchObject({
+      event_name: 'signup_completed',
+      source: 'server',
+      user_id: USER_ID
+    });
   });
 
   test('requires server events to have an authenticated user', () => {
