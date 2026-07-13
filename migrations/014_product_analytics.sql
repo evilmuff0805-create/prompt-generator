@@ -75,7 +75,7 @@ returns trigger
 language plpgsql
 security definer
 set search_path = public, pg_temp
-as $
+as $capture$
 begin
   insert into public.product_events (
     event_name,
@@ -91,7 +91,7 @@ begin
   );
   return new;
 end;
-$;
+$capture$;
 
 revoke all on function public.capture_profile_signup_event()
   from public, anon, authenticated;
