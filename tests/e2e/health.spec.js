@@ -51,6 +51,8 @@ test.describe('Health & Page Load', () => {
   test('법적 페이지(privacy)가 접근 가능해야 한다', async ({ page }) => {
     const res = await page.goto('/privacy.html');
     expect(res.status()).toBe(200);
+    await expect(page.getByText('Cloudflare:', { exact: false })).toBeVisible();
+    await expect(page.getByText("separate from PromptGen's first-party product funnel events", { exact: false })).toBeVisible();
   });
 
   test('법적 페이지(refund)가 접근 가능해야 한다', async ({ page }) => {
@@ -74,4 +76,10 @@ test.describe('보안 헤더', () => {
     const res = await request.get('/');
     expect(res.headers()['content-security-policy']).toBeTruthy();
   });
+
+  test('HSTS 헤더가 장기 max-age와 하위 도메인 보호를 포함해야 한다', async ({ request }) => {
+    const res = await request.get('/');
+    expect(res.headers()['strict-transport-security']).toBe('max-age=31536000; includeSubDomains');
+  });
 });
+
