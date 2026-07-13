@@ -78,6 +78,49 @@ describe('storyboard job store', () => {
     })).rejects.toMatchObject({ code: 'INSUFFICIENT_CREDITS' });
   });
 
+  test('reconciles a committed enqueue after a lost RPC response', async () => {
+    const { client, query } = createClient();
+    client.rpc.mockResolvedValue({
+      data: null,
+      error: { message: 'network response lost' }
+    });
+    query.maybeSingle
+      .mockResolvedValueOnce({
+        data: {
+          id: 'sb_1',
+          user_id: 'user-1',
+          status: 'pending',
+          credit_charged_at: '2026-07-13T00:00:00Z'
+        },
+        error: null
+      })
+      .mockResolvedValueOnce({
+        data: { credits: 880 },
+        error: null
+      });
+    jobStore._setAdminClientForTests(client);
+
+    const result = await jobStore.enqueueJob({
+      id: 'sb_1',
+      userId: 'user-1',
+      scenario: 'scenario',
+      genres: ['Drama'],
+      style: 'Cinematic',
+      cutCount: 4,
+      creditCost: 120,
+      maxConcurrent: 5,
+      maxAttempts: 3
+    });
+
+    expect(result).toMatchObject({
+      success: true,
+      storyboardId: 'sb_1',
+      status: 'pending',
+      newBalance: 880,
+      reconciled: true
+    });
+  });
+
   test('reconciles a lost completion response before grid cleanup', async () => {
     const { client, query } = createClient();
     client.rpc.mockResolvedValue({
