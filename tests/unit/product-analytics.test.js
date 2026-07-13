@@ -13,8 +13,9 @@ describe('product analytics', () => {
   });
 
   test('normalizes Storyboard result paths without recording identifiers', () => {
-    expect(analytics.normalizePagePath('/storyboard/sb_secret123?token=nope'))
+    expect(analytics.normalizePagePath('/storyboard/sb_secret123'))
       .toBe('/storyboard/:id');
+    expect(analytics.normalizePagePath('/storyboard/sb_secret123?token=nope')).toBeNull();
     expect(analytics.normalizePagePath('/unknown')).toBeNull();
   });
 
