@@ -1,5 +1,8 @@
 'use strict';
 
+process.env.OPENAI_TEXT_MODEL = 'test-text-model';
+process.env.OPENAI_API_KEY = 'test-api-key';
+
 const http = require('http');
 const express = require('express');
 const multer = require('multer');
