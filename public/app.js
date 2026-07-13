@@ -690,7 +690,7 @@ sbClient.auth.onAuthStateChange(async (event, session) => {
     await refreshUserProfile(session);
   }
   if (event === 'SIGNED_IN') {
-    window.PromptGenAnalytics?.track('signup_completed', {
+    window.PromptGenAnalytics?.track('auth_completed', {
       surface: 'home',
       provider: 'google'
     });
