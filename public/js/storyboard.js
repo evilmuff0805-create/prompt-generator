@@ -32,12 +32,27 @@
     // duplicate render). currentUser comes from the local session.
     StoryboardAPI.onAuthStateChange(async (event, session) => {
       currentUser = session?.user || null;
+      window.PromptGenAnalytics?.setAuthToken(session?.access_token || null);
+      if (event === 'SIGNED_IN') {
+        window.PromptGenAnalytics?.track('signup_completed', {
+          surface: 'storyboard',
+          provider: 'google'
+        });
+      }
       await renderAuthState();
     });
 
+    async function startStoryboardSignIn() {
+      window.PromptGenAnalytics?.track('signup_started', {
+        surface: 'storyboard',
+        provider: 'google'
+      });
+      await StoryboardAPI.signInWithGoogle();
+    }
+
     // Login button
-    document.getElementById('loginBtn')?.addEventListener('click', () => StoryboardAPI.signInWithGoogle());
-    document.getElementById('googleLoginBtn')?.addEventListener('click', () => StoryboardAPI.signInWithGoogle());
+    document.getElementById('loginBtn')?.addEventListener('click', startStoryboardSignIn);
+    document.getElementById('googleLoginBtn')?.addEventListener('click', startStoryboardSignIn);
     document.getElementById('modalClose')?.addEventListener('click', () => {
       document.getElementById('loginModal').setAttribute('aria-hidden', 'true');
     });
@@ -141,6 +156,13 @@
 
   async function handleGenerate(formData) {
     const errorBanner = document.getElementById('errorBanner');
+    const token = await StoryboardAPI.getAuthToken();
+    window.PromptGenAnalytics?.setAuthToken(token);
+    window.PromptGenAnalytics?.track('storyboard_started', {
+      style: formData.style,
+      cutCount: formData.cutCount,
+      referenceCount: formData.referenceImageIds.length
+    });
 
     const result = await StoryboardAPI.generateStoryboard(formData);
     if (!result.success) console.error('[storyboard] generate error:', JSON.stringify(result));
