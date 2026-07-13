@@ -4,6 +4,7 @@ const express = require('express');
 const crypto = require('crypto');
 const { createClient } = require('@supabase/supabase-js');
 const router = express.Router();
+const { reportIncident } = require('../lib/incident-reporter');
 
 /* ── Supabase admin client ── */
 function makeAdminClient() {
@@ -317,6 +318,18 @@ async function revokeCreditsForRefund(supabase, transactionId, adjustmentType) {
         'transaction_id=' + transactionId,
         '| userId=' + purchase.user_id
       );
+      await reportIncident({
+        severity: 'critical',
+        source: 'paddle-webhook',
+        eventCode: 'PLAN_UPGRADE_PARTIAL_REFUND',
+        message: 'Plan upgrade received a partial refund that cannot be mapped automatically',
+        fingerprint: `paddle-webhook:PLAN_UPGRADE_PARTIAL_REFUND:${transactionId}`,
+        context: {
+          transactionId,
+          userId: purchase.user_id,
+          adjustmentType: adjustmentType || null
+        }
+      });
       return;
     }
 
@@ -361,6 +374,19 @@ async function revokeCreditsForRefund(supabase, transactionId, adjustmentType) {
         '| current_credits=' + result.new_balance,
         '| granted=' + purchase.credits_granted
       );
+      await reportIncident({
+        severity: 'critical',
+        source: 'paddle-webhook',
+        eventCode: 'REFUND_AFTER_CREDIT_USAGE',
+        message: 'A refunded plan upgrade had already-used credits and requires manual review',
+        fingerprint: `paddle-webhook:REFUND_AFTER_CREDIT_USAGE:${transactionId}`,
+        context: {
+          transactionId,
+          userId: purchase.user_id,
+          currentCredits: result.new_balance,
+          grantedCredits: purchase.credits_granted
+        }
+      });
     } else {
       // account_free (already canceled) — free-guard prevented plan resurrection.
       console.warn(
@@ -496,6 +522,19 @@ router.post('/webhook',
               'transaction_id=' + (transactionId || 'n/a'),
               '| customer_id=' + (data?.customer_id || 'n/a')
             );
+            await reportIncident({
+              severity: 'critical',
+              source: 'paddle-webhook',
+              eventCode: 'PAYMENT_USER_UNRESOLVED',
+              message: 'Plan-change transaction could not be matched to a user',
+              fingerprint: `paddle-webhook:PAYMENT_USER_UNRESOLVED:${transactionId || eventId || 'unknown'}`,
+              context: {
+                requestId: req.id,
+                eventId,
+                transactionId,
+                customerId: data?.customer_id || null
+              }
+            });
             return res.status(200).send('OK');
           }
 
@@ -542,6 +581,21 @@ router.post('/webhook',
             '| customer_id=' + (data?.customer_id || 'n/a'),
             '| customer_email=' + (data?.customer?.email || 'n/a (payload 에 미포함)')
           );
+          await reportIncident({
+            severity: 'critical',
+            source: 'paddle-webhook',
+            eventCode: 'PAYMENT_PLAN_UNMAPPED',
+            message: 'A completed payment price ID did not map to a PromptGen plan',
+            fingerprint: `paddle-webhook:PAYMENT_PLAN_UNMAPPED:${transactionId || eventId || 'unknown'}`,
+            context: {
+              requestId: req.id,
+              eventId,
+              transactionId,
+              userId,
+              priceId,
+              customerId: data?.customer_id || null
+            }
+          });
           return res.status(200).send('OK');
         }
         if (!transactionId) {
@@ -617,6 +671,19 @@ router.post('/webhook',
             'subscription_id=' + (data?.id || 'n/a'),
             '| customer_id=' + (data?.customer_id || 'n/a')
           );
+          await reportIncident({
+            severity: 'critical',
+            source: 'paddle-webhook',
+            eventCode: 'SUBSCRIPTION_USER_UNRESOLVED',
+            message: 'Subscription update could not be matched to a user',
+            fingerprint: `paddle-webhook:SUBSCRIPTION_USER_UNRESOLVED:${data?.id || eventId || 'unknown'}`,
+            context: {
+              requestId: req.id,
+              eventId,
+              subscriptionId: data?.id || null,
+              customerId: data?.customer_id || null
+            }
+          });
           return res.status(200).send('OK');
         }
         if (!plan) {
@@ -628,6 +695,20 @@ router.post('/webhook',
             '| subscription_id=' + (data?.id || 'n/a'),
             '| userId=' + userId
           );
+          await reportIncident({
+            severity: 'critical',
+            source: 'paddle-webhook',
+            eventCode: 'SUBSCRIPTION_PLAN_UNMAPPED',
+            message: 'Subscription update price ID did not map to a PromptGen plan',
+            fingerprint: `paddle-webhook:SUBSCRIPTION_PLAN_UNMAPPED:${data?.id || eventId || 'unknown'}`,
+            context: {
+              requestId: req.id,
+              eventId,
+              subscriptionId: data?.id || null,
+              userId,
+              priceId
+            }
+          });
           return res.status(200).send('OK');
         }
 
@@ -685,6 +766,19 @@ router.post('/webhook',
             'subscription_id=' + (data?.id || 'n/a'),
             '| customer_id=' + (data?.customer_id || 'n/a')
           );
+          await reportIncident({
+            severity: 'critical',
+            source: 'paddle-webhook',
+            eventCode: 'CANCELLATION_USER_UNRESOLVED',
+            message: 'Subscription cancellation could not be matched to a user',
+            fingerprint: `paddle-webhook:CANCELLATION_USER_UNRESOLVED:${data?.id || eventId || 'unknown'}`,
+            context: {
+              requestId: req.id,
+              eventId,
+              subscriptionId: data?.id || null,
+              customerId: data?.customer_id || null
+            }
+          });
           return res.status(200).send('OK');
         }
 
@@ -695,6 +789,19 @@ router.post('/webhook',
       }
     } catch (err) {
       console.error('[paddle/webhook] Error processing event:', eventType, '—', err.message);
+      await reportIncident({
+        severity: 'critical',
+        source: 'paddle-webhook',
+        eventCode: 'PADDLE_EVENT_PROCESSING_FAILED',
+        message: err.message,
+        fingerprint: `paddle-webhook:PADDLE_EVENT_PROCESSING_FAILED:${eventId || eventType || 'unknown'}`,
+        context: {
+          requestId: req.id,
+          eventId,
+          eventType,
+          error: err
+        }
+      });
       return res.status(500).send('Internal error');
     }
 
