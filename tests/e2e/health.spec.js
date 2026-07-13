@@ -82,4 +82,3 @@ test.describe('보안 헤더', () => {
     expect(res.headers()['strict-transport-security']).toBe('max-age=31536000; includeSubDomains');
   });
 });
-
