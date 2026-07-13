@@ -27,3 +27,36 @@ jobs:
         run: npm run test:unit -- --runInBand
       - name: Audit production dependencies
         run: npm audit --omit=dev --audit-level=high
+
+  refresh-security-lock:
+    if: github.event_name == 'pull_request' && github.head_ref == 'agent/p1-dependency-security'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout feature branch
+        uses: actions/checkout@v6
+        with:
+          ref: agent/p1-dependency-security
+      - name: Use Node.js 24
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+      - name: Generate and validate secure lockfile
+        run: |
+          npm install --package-lock-only --ignore-scripts
+          npm audit fix --package-lock-only --omit=dev --ignore-scripts
+          npm audit --omit=dev --audit-level=high
+      - name: Commit generated lockfile
+        run: |
+          git add package-lock.json
+          if git diff --cached --quiet; then
+            echo "Lockfile already current"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "security: lock patched Node dependencies"
+          git push origin HEAD:agent/p1-dependency-security
