@@ -3,6 +3,7 @@ const express = require('express');
 const path = require('path');
 const { createClient } = require('@supabase/supabase-js');
 const rateLimit = require('express-rate-limit');
+const logger = require('./lib/logger');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -25,6 +26,29 @@ const analyzeLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   message: { success: false, error: 'Too many analysis requests, please slow down.' }
+});
+
+/* ── Correlation ID + structured API access log ── */
+app.use((req, res, next) => {
+  const requestId = logger.createRequestId(req.headers['x-request-id']);
+  const startedAt = process.hrtime.bigint();
+
+  req.id = requestId;
+  res.setHeader('X-Request-ID', requestId);
+
+  res.on('finish', () => {
+    if (req.path === '/api/health') return;
+    const durationMs = Number(process.hrtime.bigint() - startedAt) / 1e6;
+    logger.info('http.request.completed', {
+      requestId,
+      method: req.method,
+      path: req.path,
+      statusCode: res.statusCode,
+      durationMs: Math.round(durationMs)
+    });
+  });
+
+  next();
 });
 
 /* ── Paddle webhook router — MUST be mounted before express.json() ── */
@@ -72,7 +96,11 @@ app.use('/api/payment', paymentRouter);
 app.use('/api/storyboard', storyboardRouter);
 
 app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok' });
+  res.json({
+    status: 'ok',
+    commit: process.env.RAILWAY_GIT_COMMIT_SHA?.slice(0, 12) || null,
+    timestamp: new Date().toISOString()
+  });
 });
 
 /* ── Helper: get user-scoped Supabase client ── */
@@ -282,25 +310,41 @@ app.get('*', (req, res) => {
 });
 
 app.use((err, req, res, next) => {
-  console.error(err);
-  res.status(err.status || 500).json({ success: false, error: err.message || 'Internal server error' });
+  logger.error('http.request.failed', {
+    requestId: req.id,
+    method: req.method,
+    path: req.path,
+    statusCode: err.status || 500,
+    error: err
+  });
+  res.status(err.status || 500).json({
+    success: false,
+    error: err.message || 'Internal server error',
+    requestId: req.id
+  });
 });
 
 const storyboardWorker = require('./lib/storyboard-worker');
+const cleanupScheduler = require('./lib/cleanup-scheduler');
 
 const server = app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+  logger.info('server.started', {
+    port: Number(PORT),
+    commit: process.env.RAILWAY_GIT_COMMIT_SHA?.slice(0, 12) || null
+  });
   storyboardWorker.start();
+  cleanupScheduler.start();
 });
 
 let shuttingDown = false;
 async function shutdown(signal) {
   if (shuttingDown) return;
   shuttingDown = true;
-  console.log(`[server] ${signal} received; draining Storyboard worker`);
+  logger.info('server.shutdown.started', { signal });
+  cleanupScheduler.stop();
 
   const forceExit = setTimeout(() => {
-    console.error('[server] Graceful shutdown timed out');
+    logger.critical('server.shutdown.timeout', { signal });
     process.exit(1);
   }, 30000);
   forceExit.unref?.();
