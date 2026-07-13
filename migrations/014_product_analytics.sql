@@ -19,6 +19,7 @@ create table if not exists public.product_events (
     event_name in (
       'page_viewed',
       'signup_started',
+      'auth_completed',
       'signup_completed',
       'analysis_started',
       'analysis_succeeded',
@@ -68,6 +69,37 @@ create index if not exists idx_product_events_user_created
 create index if not exists idx_product_events_session_created
   on public.product_events (session_id, created_at desc)
   where session_id is not null;
+
+create or replace function public.capture_profile_signup_event()
+returns trigger
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $
+begin
+  insert into public.product_events (
+    event_name,
+    source,
+    user_id,
+    properties
+  )
+  values (
+    'signup_completed',
+    'server',
+    new.id,
+    jsonb_build_object('provider', 'supabase_auth')
+  );
+  return new;
+end;
+$;
+
+revoke all on function public.capture_profile_signup_event()
+  from public, anon, authenticated;
+
+drop trigger if exists profiles_capture_signup_event on public.profiles;
+create trigger profiles_capture_signup_event
+after insert on public.profiles
+for each row execute function public.capture_profile_signup_event();
 
 create or replace function public.purge_product_events(
   p_retention_days integer default 180
