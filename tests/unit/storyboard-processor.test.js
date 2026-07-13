@@ -14,8 +14,13 @@ jest.mock('../../lib/storyboard-job-store', () => ({
   removeGrid: jest.fn()
 }));
 
+jest.mock('../../lib/incident-reporter', () => ({
+  reportIncident: jest.fn()
+}));
+
 const engine = require('../../lib/storyboard-engine');
 const jobStore = require('../../lib/storyboard-job-store');
+const { reportIncident } = require('../../lib/incident-reporter');
 const {
   processStoryboardJob,
   isRetryableError
@@ -51,6 +56,7 @@ describe('durable storyboard processor', () => {
       refunded: false
     });
     jobStore.removeGrid.mockResolvedValue();
+    reportIncident.mockResolvedValue({ persisted: true });
     engine.generateScenarioAndPrompts.mockResolvedValue(resultData);
     engine.generateGridImage.mockResolvedValue(
       'user/sb_test/grid-10000000-0000-0000-0000-000000000001.png'
@@ -93,6 +99,7 @@ describe('durable storyboard processor', () => {
       true,
       15
     );
+    expect(reportIncident).not.toHaveBeenCalled();
   });
 
   test('does not retry permanent provider request errors', async () => {
@@ -115,6 +122,11 @@ describe('durable storyboard processor', () => {
       false,
       15
     );
+    expect(reportIncident).toHaveBeenCalledWith(expect.objectContaining({
+      severity: 'error',
+      eventCode: 'STORYBOARD_FINAL_FAILURE',
+      fingerprint: expect.stringContaining(job.id)
+    }));
   });
 
   test('deletes an attempt grid when fenced completion loses ownership', async () => {
@@ -136,6 +148,10 @@ describe('durable storyboard processor', () => {
     await expect(
       processStoryboardJob(job, { leaseSeconds: 180 })
     ).rejects.toThrow('database unavailable');
+    expect(reportIncident).toHaveBeenCalledWith(expect.objectContaining({
+      severity: 'critical',
+      eventCode: 'FAILURE_TRANSITION_UNAVAILABLE'
+    }));
   });
 });
 
