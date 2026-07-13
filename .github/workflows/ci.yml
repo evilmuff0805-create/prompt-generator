@@ -25,5 +25,9 @@ jobs:
         run: npm ci
       - name: Run unit tests
         run: npm run test:unit -- --runInBand
+      - name: Explain production audit paths
+        run: |
+          npm ls form-data path-to-regexp qs ws multer express body-parser --all || true
+          npm audit fix --omit=dev --dry-run || true
       - name: Audit production dependencies
         run: npm audit --omit=dev --audit-level=high
