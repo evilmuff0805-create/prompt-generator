@@ -28,6 +28,14 @@ const analyzeLimiter = rateLimit({
   message: { success: false, error: 'Too many analysis requests, please slow down.' }
 });
 
+const analyticsLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 120,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { accepted: false, code: 'ANALYTICS_RATE_LIMITED' }
+});
+
 /* ── Correlation ID + structured API access log ── */
 app.use((req, res, next) => {
   const requestId = logger.createRequestId(req.headers['x-request-id']);
@@ -89,7 +97,9 @@ app.use(express.static('public'));
 const analyzeRouter = require('./routes/analyze');
 const paymentRouter = require('./routes/payment');
 const storyboardRouter = require('./routes/storyboard');
+const analyticsRouter = require('./routes/analytics');
 app.use('/api/analyze', analyzeLimiter);   // 분석 엔드포인트에 엄격한 제한
+app.use('/api/analytics', analyticsLimiter, analyticsRouter);
 app.use('/api', apiLimiter);               // 나머지 API 전체에 일반 제한
 app.use('/api', analyzeRouter);
 app.use('/api/payment', paymentRouter);

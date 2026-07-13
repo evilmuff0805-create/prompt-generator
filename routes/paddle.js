@@ -5,6 +5,7 @@ const crypto = require('crypto');
 const { createClient } = require('@supabase/supabase-js');
 const router = express.Router();
 const { reportIncident } = require('../lib/incident-reporter');
+const { recordServerEvent } = require('../lib/product-analytics');
 
 /* ── Supabase admin client ── */
 function makeAdminClient() {
@@ -137,6 +138,15 @@ async function grantCreditsForPurchase(supabase, transactionId, userId, plan) {
   }
 
   console.log('[paddle/webhook] Reset credits to ' + credits + ' (' + plan + ') for userId=' + userId + ' transaction=' + transactionId);
+  await recordServerEvent({
+    eventName: 'purchase_completed',
+    userId,
+    properties: {
+      plan,
+      creditsGranted: credits,
+      transactionType: 'subscription_payment'
+    }
+  });
 }
 
 /* ── Record plan-upgrade transaction in purchases ledger (defer branch) ── */

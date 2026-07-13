@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const { createClient } = require('@supabase/supabase-js');
 const { analyzeImage } = require('../services/geminiService');
+const { recordServerEvent } = require('../lib/product-analytics');
 const authMiddleware = require('../middleware/auth');
 
 const router = express.Router();
@@ -188,6 +189,15 @@ router.post('/analyze', authMiddleware, upload.single('image'), async (req, res,
     if (promptError) {
       console.error('[analyze] prompts history insert failed:', promptError.message, '| user:', req.user.id);
     }
+
+    await recordServerEvent({
+      eventName: 'analysis_succeeded',
+      userId: req.user.id,
+      properties: {
+        plan: profile.plan || 'free',
+        creditsCharged: isPaidPlan ? 10 : 0
+      }
+    });
 
     res.json({ success: true, ...result });
   } catch (err) {

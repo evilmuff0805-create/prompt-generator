@@ -12,6 +12,7 @@ const creditManager = require('../lib/credit-manager');
 const { moderateContent } = require('../lib/moderation');
 const jobStore = require('../lib/storyboard-job-store');
 const storyboardWorker = require('../lib/storyboard-worker');
+const { recordServerEvent } = require('../lib/product-analytics');
 
 // Multer: memory storage, 10MB limit
 const upload = multer({
@@ -226,6 +227,17 @@ router.post('/generate', requireAuth, async (req, res) => {
 
     // Generation committed — keep the cooldown stamp (throttles only on success).
     rateLimitCommitted = true;
+
+    await recordServerEvent({
+      eventName: 'storyboard_enqueued',
+      userId,
+      properties: {
+        style,
+        cutCount,
+        referenceCount: referenceImageIds.length,
+        creditsUsed: cost
+      }
+    });
 
     return res.status(200).json({
       success: true,

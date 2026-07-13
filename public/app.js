@@ -10,6 +10,7 @@ Paddle.Initialize({
   token: 'live_81a81f812ec882e5536a9188161',
   eventCallback: function (event) {
     if (event.name === 'checkout.completed') {
+      window.PromptGenAnalytics?.track('checkout_completed', { surface: 'paddle_overlay' });
       sbClient.auth.getSession().then(function ({ data: { session } }) {
         if (session) {
           setTimeout(function () { refreshUserProfile(session); }, 1500);
@@ -136,6 +137,12 @@ analyzeBtn.addEventListener('click', async () => {
     openAuthRequiredModal();
     return;
   }
+
+  window.PromptGenAnalytics?.setAuthToken(session.access_token);
+  window.PromptGenAnalytics?.track('analysis_started', {
+    surface: 'home_generator',
+    plan: currentUserPlan || 'unknown'
+  });
 
   setLoading(true);
   hideError();
@@ -523,6 +530,10 @@ function isInAppBrowser() {
 /* ── Google Sign-In ── */
 async function signInWithGoogle() {
   if (isInAppBrowser()) return; // blocked; warning already shown in modal
+  window.PromptGenAnalytics?.track('signup_started', {
+    surface: 'home',
+    provider: 'google'
+  });
   await sbClient.auth.signInWithOAuth({
     provider: 'google',
     options: { redirectTo: window.location.origin }
@@ -674,10 +685,15 @@ function updateNavUI(session) {
 
 sbClient.auth.onAuthStateChange(async (event, session) => {
   updateNavUI(session);
+  window.PromptGenAnalytics?.setAuthToken(session?.access_token || null);
   if (session) {
     await refreshUserProfile(session);
   }
   if (event === 'SIGNED_IN') {
+    window.PromptGenAnalytics?.track('auth_completed', {
+      surface: 'home',
+      provider: 'google'
+    });
     closeModal();
     closeAuthRequiredModal();
   }
@@ -687,6 +703,7 @@ sbClient.auth.onAuthStateChange(async (event, session) => {
 (async () => {
   const { data: { session } } = await sbClient.auth.getSession();
   updateNavUI(session);
+  window.PromptGenAnalytics?.setAuthToken(session?.access_token || null);
   if (session) {
     await refreshUserProfile(session);
   }
@@ -838,6 +855,12 @@ async function handleCheckout(plan) {
   const priceId = plan === 'pro'
     ? 'pri_01kqntd17xt6hwpf7m7v4m6n4x'
     : 'pri_01kqntg37hydkapmpycwh1x29b';
+
+  window.PromptGenAnalytics?.setAuthToken(session.access_token);
+  window.PromptGenAnalytics?.track('checkout_started', {
+    plan: plan,
+    surface: 'pricing'
+  });
 
   Paddle.Checkout.open({
     items: [{ priceId: priceId, quantity: 1 }],

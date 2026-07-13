@@ -18,9 +18,14 @@ jest.mock('../../lib/incident-reporter', () => ({
   reportIncident: jest.fn()
 }));
 
+jest.mock('../../lib/product-analytics', () => ({
+  recordServerEvent: jest.fn()
+}));
+
 const engine = require('../../lib/storyboard-engine');
 const jobStore = require('../../lib/storyboard-job-store');
 const { reportIncident } = require('../../lib/incident-reporter');
+const { recordServerEvent } = require('../../lib/product-analytics');
 const {
   processStoryboardJob,
   isRetryableError
@@ -57,6 +62,7 @@ describe('durable storyboard processor', () => {
     });
     jobStore.removeGrid.mockResolvedValue();
     reportIncident.mockResolvedValue({ persisted: true });
+    recordServerEvent.mockResolvedValue({ persisted: true });
     engine.generateScenarioAndPrompts.mockResolvedValue(resultData);
     engine.generateGridImage.mockResolvedValue(
       'user/sb_test/grid-10000000-0000-0000-0000-000000000001.png'
@@ -82,6 +88,10 @@ describe('durable storyboard processor', () => {
     );
     expect(jobStore.failJob).not.toHaveBeenCalled();
     expect(jobStore.removeGrid).not.toHaveBeenCalled();
+    expect(recordServerEvent).toHaveBeenCalledWith(expect.objectContaining({
+      eventName: 'storyboard_completed',
+      userId: job.user_id
+    }));
   });
 
   test('queues a bounded retry for transient provider failures', async () => {
@@ -100,6 +110,7 @@ describe('durable storyboard processor', () => {
       15
     );
     expect(reportIncident).not.toHaveBeenCalled();
+    expect(recordServerEvent).not.toHaveBeenCalled();
   });
 
   test('does not retry permanent provider request errors', async () => {
@@ -126,6 +137,11 @@ describe('durable storyboard processor', () => {
       severity: 'error',
       eventCode: 'STORYBOARD_FINAL_FAILURE',
       fingerprint: expect.stringContaining(job.id)
+    }));
+    expect(recordServerEvent).toHaveBeenCalledWith(expect.objectContaining({
+      eventName: 'storyboard_failed',
+      userId: job.user_id,
+      properties: expect.objectContaining({ refunded: true })
     }));
   });
 
