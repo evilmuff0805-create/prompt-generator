@@ -8,7 +8,9 @@
     "test:unit": "jest tests/unit --forceExit",
     "test:e2e": "playwright test tests/e2e",
     "test": "npm run test:unit && npm run test:e2e",
-    "cleanup": "node scripts/daily-cleanup.js"
+    "cleanup": "node scripts/daily-cleanup.js",
+    "cleanup:dry-run": "node scripts/daily-cleanup.js --dry-run",
+    "smoke": "node scripts/smoke-test.js"
   },
   "dependencies": {
     "@google/generative-ai": "^0.24.1",
