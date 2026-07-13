@@ -3,7 +3,10 @@
 process.env.OPENAI_TEXT_MODEL = 'test-text-model';
 process.env.OPENAI_API_KEY = 'test-api-key';
 
+const fs = require('fs');
 const http = require('http');
+const os = require('os');
+const path = require('path');
 const express = require('express');
 const multer = require('multer');
 const analyzeRouter = require('../../routes/analyze');
@@ -142,6 +145,32 @@ describe('Multer 2 upload security regression', () => {
       status: 413,
       body: { code: 'LIMIT_FILE_SIZE' }
     });
+  });
+
+  test('analysis disk storage removes partial files after a size rejection', async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'promptgen-upload-'));
+    const diskStorage = multer.diskStorage({
+      destination: directory,
+      filename: (req, file, callback) => callback(null, 'partial-upload.bin')
+    });
+    const middleware = analysisPolicy.createAnalysisUpload({
+      storage: diskStorage,
+      maxFileSize: 64
+    }).single('image');
+
+    try {
+      const result = await runUpload(middleware, multipartBody({
+        data: Buffer.alloc(65, 0x41)
+      }));
+
+      expect(result).toMatchObject({
+        status: 413,
+        body: { code: 'LIMIT_FILE_SIZE' }
+      });
+      expect(fs.readdirSync(directory)).toEqual([]);
+    } finally {
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
   });
 
   test('analysis rejects unexpected file field names', async () => {
