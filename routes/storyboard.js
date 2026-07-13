@@ -171,7 +171,7 @@ router.post('/generate', requireAuth, async (req, res) => {
     }
 
 
-    // 7. Moderation on scenario text (pre-deduction — no charge on rejection)
+    // 6. Moderation on scenario text (pre-deduction — no charge on rejection)
     const modResult = await moderateContent({ text: scenario });
     if (modResult.flagged) {
       if (modResult.reason === 'moderation_error') {
@@ -180,13 +180,7 @@ router.post('/generate', requireAuth, async (req, res) => {
       return res.status(422).json({ code: 'MODERATION_REJECTED', message: 'Content flagged by safety system.' });
     }
 
-    // 8. Credit balance check
-    const cost = getStoryboardCost();
-    if (profile.credits < cost) {
-      return res.status(402).json({ code: 'INSUFFICIENT_CREDITS', required: cost, available: profile.credits });
-    }
-
-    // 8. Atomically insert the durable job and deduct credits. The RPC also
+    // 7. Atomically insert the durable job and deduct credits. The RPC also
     // serializes per-user submissions and enforces the active-job limit.
     const cost = getStoryboardCost();
     const storyboardId = `sb_${randomUUID().replace(/-/g, '')}`;
