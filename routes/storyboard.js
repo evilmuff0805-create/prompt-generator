@@ -217,7 +217,7 @@ router.post('/generate', requireAuth, async (req, res) => {
       console.error('[storyboard] durable enqueue error:', queueErr.message);
       return res.status(503).json({
         code: 'QUEUE_UNAVAILABLE',
-        message: 'Storyboard queue is temporarily unavailable. No credits were charged.'
+        message: 'Queue confirmation is unavailable. Check Storyboard history before retrying.'
       });
     }
 
