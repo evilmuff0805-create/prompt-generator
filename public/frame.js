@@ -97,7 +97,7 @@ const sbClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
     updateNavAuth(session);
     window.PromptGenAnalytics?.setAuthToken(session?.access_token || null);
     if (event === 'SIGNED_IN') {
-      window.PromptGenAnalytics?.track('signup_completed', {
+      window.PromptGenAnalytics?.track('auth_completed', {
         surface: 'endframe',
         provider: 'google'
       });
