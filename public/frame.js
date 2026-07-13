@@ -72,6 +72,10 @@ const sbClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
 
   // Sign in with Google — redirect back to /frame
   function signIn() {
+    window.PromptGenAnalytics?.track('signup_started', {
+      surface: 'endframe',
+      provider: 'google'
+    });
     sbClient.auth.signInWithOAuth({
       provider: 'google',
       options: { redirectTo: window.location.origin + '/frame' }
@@ -85,11 +89,19 @@ const sbClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
   (async function () {
     const { data: { session } } = await sbClient.auth.getSession();
     updateNavAuth(session);
+    window.PromptGenAnalytics?.setAuthToken(session?.access_token || null);
     if (!session) showAuthGate();
   })();
 
   sbClient.auth.onAuthStateChange(function (event, session) {
     updateNavAuth(session);
+    window.PromptGenAnalytics?.setAuthToken(session?.access_token || null);
+    if (event === 'SIGNED_IN') {
+      window.PromptGenAnalytics?.track('signup_completed', {
+        surface: 'endframe',
+        provider: 'google'
+      });
+    }
     if (session) hideAuthGate();
     else showAuthGate();
   });
