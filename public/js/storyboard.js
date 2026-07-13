@@ -34,7 +34,7 @@
       currentUser = session?.user || null;
       window.PromptGenAnalytics?.setAuthToken(session?.access_token || null);
       if (event === 'SIGNED_IN') {
-        window.PromptGenAnalytics?.track('signup_completed', {
+        window.PromptGenAnalytics?.track('auth_completed', {
           surface: 'storyboard',
           provider: 'google'
         });
