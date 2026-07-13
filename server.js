@@ -286,6 +286,34 @@ app.use((err, req, res, next) => {
   res.status(err.status || 500).json({ success: false, error: err.message || 'Internal server error' });
 });
 
-app.listen(PORT, () => {
+const storyboardWorker = require('./lib/storyboard-worker');
+
+const server = app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
+  storyboardWorker.start();
 });
+
+let shuttingDown = false;
+async function shutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`[server] ${signal} received; draining Storyboard worker`);
+
+  const forceExit = setTimeout(() => {
+    console.error('[server] Graceful shutdown timed out');
+    process.exit(1);
+  }, 30000);
+  forceExit.unref?.();
+
+  const httpClosed = new Promise(resolve => server.close(resolve));
+  await Promise.allSettled([
+    httpClosed,
+    storyboardWorker.stop(25000)
+  ]);
+
+  clearTimeout(forceExit);
+  process.exit(0);
+}
+
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
