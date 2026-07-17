@@ -1260,6 +1260,15 @@ button { font-family: inherit; }
   font-size: 0.875rem;
 }
 
+.pricing-note {
+  max-width: 860px;
+  margin: 1.25rem auto 0;
+  color: var(--clr-text-muted);
+  font-size: 0.8rem;
+  line-height: 1.6;
+  text-align: center;
+}
+
 .feat-yes { color: var(--clr-text); }
 .feat-no  { color: var(--clr-text-muted); }
 

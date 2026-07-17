@@ -6,6 +6,7 @@ const { createClient } = require('@supabase/supabase-js');
 const router = express.Router();
 const { reportIncident } = require('../lib/incident-reporter');
 const { recordServerEvent } = require('../lib/product-analytics');
+const { PLAN_CREDITS, getPaddlePriceId } = require('../lib/product-catalog');
 
 /* ── Supabase admin client ── */
 function makeAdminClient() {
@@ -46,12 +47,10 @@ function verifyPaddleSignature(secret, rawBody, signatureHeader) {
 
 /* ── Plan mapping by Paddle price ID ── */
 function priceIdToPlan(priceId) {
-  if (priceId === process.env.PADDLE_PRO_PRICE_ID) return 'pro';
-  if (priceId === process.env.PADDLE_ENTERPRISE_PRICE_ID) return 'enterprise';
+  if (priceId === getPaddlePriceId('pro')) return 'pro';
+  if (priceId === getPaddlePriceId('enterprise')) return 'enterprise';
   return null;
 }
-
-const PLAN_CREDITS = { pro: 1000, enterprise: 4000 };
 
 /* ── Test-account whitelist (env-managed, no code deploy) ── */
 // Accounts in TEST_ACCOUNT_USER_IDS (comma-separated user_id list) are FROZEN:

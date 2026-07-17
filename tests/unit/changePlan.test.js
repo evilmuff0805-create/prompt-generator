@@ -103,6 +103,11 @@ describe('calcCreditWarning', () => {
     const result = calcCreditWarning(1000, 'enterprise');
     expect(result.show).toBe(false);
   });
+
+  test('서버 카탈로그 한도가 전달되면 정적 fallback보다 우선해야 한다', () => {
+    const result = calcCreditWarning(1500, 'pro', 1200);
+    expect(result).toEqual({ show: true, from: 1500, to: 1200 });
+  });
 });
 
 // ── createPlanPoller ─────────────────────────────────────────────────────────

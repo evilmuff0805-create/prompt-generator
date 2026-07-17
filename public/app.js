@@ -5,20 +5,115 @@ const sbClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
   auth: { storage: window.sessionStorage, persistSession: true, autoRefreshToken: true }
 });
 
-/* ── Paddle Init ── */
-Paddle.Initialize({
-  token: 'live_81a81f812ec882e5536a9188161',
-  eventCallback: function (event) {
-    if (event.name === 'checkout.completed') {
-      window.PromptGenAnalytics?.track('checkout_completed', { surface: 'paddle_overlay' });
-      sbClient.auth.getSession().then(function ({ data: { session } }) {
-        if (session) {
-          setTimeout(function () { refreshUserProfile(session); }, 1500);
-        }
+/* ── Product catalog + Paddle Init ── */
+let productCatalog = null;
+let productCatalogPromise = null;
+let paddleInitialized = false;
+
+async function loadProductCatalog() {
+  if (productCatalog) return productCatalog;
+  if (!productCatalogPromise) {
+    productCatalogPromise = fetch('/api/catalog')
+      .then(async (res) => {
+        if (!res.ok) throw new Error('Product catalog request failed');
+        const body = await res.json();
+        if (!body?.catalog?.plans) throw new Error('Product catalog is invalid');
+        productCatalog = body.catalog;
+        hydrateProductCatalog(productCatalog);
+        return productCatalog;
+      })
+      .catch((error) => {
+        console.error('[catalog] Failed to load public product catalog:', error.message);
+        productCatalogPromise = null;
+        throw error;
       });
+  }
+  return productCatalogPromise;
+}
+
+function getCatalogPlan(plan) {
+  const key = plan === 'paid' ? 'pro' : plan;
+  return productCatalog?.plans?.[key] || null;
+}
+
+function getPlanLabel(plan) {
+  return getCatalogPlan(plan)?.name || (plan === 'paid' ? 'Pro' : String(plan || 'free').replace(/^./, c => c.toUpperCase()));
+}
+
+function getPlanTotalCredits(plan) {
+  const catalogPlan = getCatalogPlan(plan);
+  if (!catalogPlan || !Number.isFinite(Number(catalogPlan.credits))) return undefined;
+  return Number(catalogPlan.credits);
+}
+
+function getAnalysisCreditCost() {
+  return Number(productCatalog?.analysisCreditCost) || 10;
+}
+
+function formatUsd(value) {
+  const amount = Number(value);
+  if (!Number.isFinite(amount)) return null;
+  return `$${amount.toFixed(2).replace(/\.00$/, '')}`;
+}
+
+function setCatalogText(card, field, value) {
+  const element = card.querySelector(`[data-catalog-field="${field}"]`);
+  if (element && value != null) element.textContent = value;
+}
+
+function hydrateProductCatalog(catalog) {
+  for (const card of document.querySelectorAll('[data-catalog-plan]')) {
+    const plan = catalog?.plans?.[card.dataset.catalogPlan];
+    if (!plan) continue;
+    setCatalogText(card, 'name', plan.name);
+    setCatalogText(card, 'description', plan.description);
+    setCatalogText(card, 'price', formatUsd(plan.monthlyPriceUsd));
+    if (plan.credits > 0) {
+      setCatalogText(card, 'credits', `✓ ${plan.credits.toLocaleString('en-US')} credits reset each billing month`);
+      setCatalogText(card, 'storyboards', `✓ Up to ${plan.storyboards.toLocaleString('en-US')} storyboards (${catalog.storyboardCreditCost.toLocaleString('en-US')} credits each)`);
+      setCatalogText(card, 'analyses', `✓ Up to ${plan.imageAnalyses.toLocaleString('en-US')} image analyses (${catalog.analysisCreditCost.toLocaleString('en-US')} credits each)`);
     }
   }
-});
+
+  const structuredData = document.getElementById('productStructuredData');
+  if (!structuredData) return;
+  try {
+    const schema = JSON.parse(structuredData.textContent);
+    schema.offers = Object.values(catalog.plans).map(plan => ({
+      '@type': 'Offer',
+      name: plan.name,
+      price: Number(plan.monthlyPriceUsd).toFixed(2),
+      priceCurrency: 'USD'
+    }));
+    structuredData.textContent = JSON.stringify(schema);
+  } catch (error) {
+    console.error('[catalog] Failed to hydrate structured pricing data:', error.message);
+  }
+}
+
+async function ensurePaddleInitialized() {
+  const catalog = await loadProductCatalog();
+  if (paddleInitialized) return catalog;
+  const clientToken = catalog?.paddle?.clientToken;
+  if (!clientToken || !window.Paddle) {
+    throw new Error('Checkout configuration is unavailable');
+  }
+  Paddle.Initialize({
+    token: clientToken,
+    eventCallback: function (event) {
+      if (event.name === 'checkout.completed') {
+        window.PromptGenAnalytics?.track('checkout_completed', { surface: 'paddle_overlay' });
+        sbClient.auth.getSession().then(function ({ data: { session } }) {
+          if (session) {
+            setTimeout(function () { refreshUserProfile(session); }, 1500);
+          }
+        });
+      }
+    }
+  });
+  paddleInitialized = true;
+  return catalog;
+}
 
 /* ── State ── */
 const state = {
@@ -32,28 +127,23 @@ const state = {
 let currentUserPlan = null;
 let currentUserCredits = 0;
 
-function getPlanTotalCredits(plan) {
-  if (plan === 'enterprise') return 4000;
-  if (['pro', 'paid'].includes(plan)) return 1000;
-  return 0;
-}
-
 function updateAnalyzeButtonState() {
   const creditsErrorEl = document.getElementById('creditsError');
   const isPaid = ['pro', 'enterprise', 'paid'].includes(currentUserPlan);
+  const analysisCreditCost = getAnalysisCreditCost();
   if (!state.file) {
     analyzeBtn.disabled = true;
-    analyzeBtn.textContent = isPaid ? '✨ Analyze (10 Credits)' : '✨ Analyze Image';
+    analyzeBtn.textContent = isPaid ? `✨ Analyze (${analysisCreditCost} Credits)` : '✨ Analyze Image';
     if (creditsErrorEl) creditsErrorEl.style.display = 'none';
     return;
   }
-  if (isPaid && currentUserCredits < 10) {
+  if (isPaid && currentUserCredits < analysisCreditCost) {
     analyzeBtn.disabled = true;
-    analyzeBtn.textContent = '✨ Analyze (10 Credits)';
+    analyzeBtn.textContent = `✨ Analyze (${analysisCreditCost} Credits)`;
     if (creditsErrorEl) { creditsErrorEl.textContent = 'Not enough credits. Upgrade your plan.'; creditsErrorEl.style.display = ''; }
   } else if (isPaid) {
     analyzeBtn.disabled = false;
-    analyzeBtn.textContent = '✨ Analyze (10 Credits)';
+    analyzeBtn.textContent = `✨ Analyze (${analysisCreditCost} Credits)`;
     if (creditsErrorEl) creditsErrorEl.style.display = 'none';
   } else {
     analyzeBtn.disabled = false;
@@ -643,6 +733,7 @@ const logoutBtn      = document.getElementById('logoutBtn');
 async function refreshUserProfile(session) {
   if (!session) return;
   try {
+    await loadProductCatalog().catch(() => null);
     const resp = await fetch('/api/user/profile', {
       headers: { 'Authorization': `Bearer ${session.access_token}` }
     });
@@ -650,16 +741,17 @@ async function refreshUserProfile(session) {
     if (data.success) {
       userNameEl.textContent = data.user.full_name || data.user.email;
       if (userAvatarEl) userAvatarEl.style.display = 'flex';
-      const planLabels = { free: 'Free', pro: 'Pro', enterprise: 'Enterprise', paid: 'Pro' };
       const planKey = data.plan || 'free';
-      planBadgeEl.textContent = planLabels[planKey] || 'Free';
+      planBadgeEl.textContent = getPlanLabel(planKey);
       const badgeClass = planKey === 'enterprise' ? 'enterprise' : (planKey === 'free' ? 'free' : 'pro');
       planBadgeEl.className = `plan-badge plan-badge--${badgeClass}`;
       currentUserPlan = planKey;
       currentUserCredits = data.credits || 0;
       if (['pro', 'enterprise', 'paid'].includes(planKey)) {
         const total = getPlanTotalCredits(planKey);
-        usageDisplayEl.textContent = `Credits: ${currentUserCredits.toLocaleString()} / ${total.toLocaleString()}`;
+        usageDisplayEl.textContent = total == null
+          ? `Credits: ${currentUserCredits.toLocaleString()}`
+          : `Credits: ${currentUserCredits.toLocaleString()} / ${total.toLocaleString()}`;
         if (manageSubBtn) manageSubBtn.style.display = '';
       } else {
         usageDisplayEl.textContent = `Today ${data.daily_used}/1 used`;
@@ -852,9 +944,20 @@ async function handleCheckout(plan) {
     return;
   }
 
-  const priceId = plan === 'pro'
-    ? 'pri_01kqntd17xt6hwpf7m7v4m6n4x'
-    : 'pri_01kqntg37hydkapmpycwh1x29b';
+  let catalog;
+  try {
+    catalog = await ensurePaddleInitialized();
+  } catch (error) {
+    console.error('[checkout] Catalog/Paddle initialization failed:', error.message);
+    alert('Checkout is temporarily unavailable. Please try again later.');
+    return;
+  }
+  const priceId = catalog?.paddle?.priceIds?.[plan];
+  if (!priceId) {
+    console.error('[checkout] Missing server-provided Paddle price ID for plan=' + plan);
+    alert('Checkout is temporarily unavailable. Please try again later.');
+    return;
+  }
 
   window.PromptGenAnalytics?.setAuthToken(session.access_token);
   window.PromptGenAnalytics?.track('checkout_started', {
@@ -887,7 +990,6 @@ async function handlePlanButtonClick(targetPlan) {
 /* ── Pricing button states based on current plan ── */
 // Tiers: free(0) < pro/paid(1) < enterprise(2)
 const PLAN_TIER = { free: 0, paid: 1, pro: 1, enterprise: 2 };
-const PLAN_LABEL = { free: 'Free', pro: 'Pro', enterprise: 'Enterprise' };
 const SWITCH_TOOLTIP = 'Plan switching is coming soon. Contact support to change your plan.';
 
 const PRICING_BUTTONS = [
@@ -895,6 +997,13 @@ const PRICING_BUTTONS = [
   { el: document.getElementById('proPlanBtn'),        plan: 'pro',        defaultLabel: 'Get Started' },
   { el: document.getElementById('enterprisePlanBtn'), plan: 'enterprise', defaultLabel: 'Get Started' }
 ];
+
+loadProductCatalog()
+  .then(() => {
+    updateAnalyzeButtonState();
+    updatePricingButtons();
+  })
+  .catch(() => null);
 
 function resetPricingButton(btn) {
   if (!btn.el) return;
@@ -925,13 +1034,13 @@ function updatePricingButtons() {
       btn.el.removeAttribute('title');
     } else if (btnTier > curTier) {
       btn.el.classList.remove('btn--current');
-      btn.el.textContent = `Upgrade to ${PLAN_LABEL[btn.plan]}`;
+      btn.el.textContent = `Upgrade to ${getPlanLabel(btn.plan)}`;
       btn.el.disabled = false;
       btn.el.removeAttribute('title');
     } else {
       // Downgrade
       btn.el.classList.remove('btn--current');
-      btn.el.textContent = `Downgrade to ${PLAN_LABEL[btn.plan]}`;
+      btn.el.textContent = `Downgrade to ${getPlanLabel(btn.plan)}`;
       btn.el.disabled = false;
       btn.el.removeAttribute('title');
     }
@@ -992,8 +1101,8 @@ function openChangePlanModal(targetPlan) {
 
   changePlanIcon.textContent  = isUpgrade ? '⬆️' : '⬇️';
   changePlanTitle.textContent = isUpgrade
-    ? `Upgrade to ${PLAN_LABEL[targetPlan]}`
-    : `Downgrade to ${PLAN_LABEL[targetPlan]}`;
+    ? `Upgrade to ${getPlanLabel(targetPlan)}`
+    : `Downgrade to ${getPlanLabel(targetPlan)}`;
   changePlanCreditWarn.style.display = 'none';
   changePlanPriceInfo.textContent    = '';
   cpShowState(cpStateLoading);
@@ -1057,7 +1166,7 @@ function _cpRenderReady(preview, targetPlan, isUpgrade) {
   changePlanPriceInfo.textContent = lines.join('\n');
 
   if (!isUpgrade) {
-    const warn = ChangePlanHelpers.calcCreditWarning(currentUserCredits, targetPlan);
+    const warn = ChangePlanHelpers.calcCreditWarning(currentUserCredits, targetPlan, getPlanTotalCredits(targetPlan));
     if (warn.show) {
       changePlanCreditText.textContent =
         `⚠ Credits will change: ${warn.from.toLocaleString()} → ${warn.to.toLocaleString()}`;

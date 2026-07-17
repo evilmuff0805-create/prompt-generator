@@ -4,6 +4,7 @@ const path = require('path');
 const { createClient } = require('@supabase/supabase-js');
 const rateLimit = require('express-rate-limit');
 const logger = require('./lib/logger');
+const { getPublicProductCatalog } = require('./lib/product-catalog');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -114,6 +115,11 @@ app.get('/api/health', (req, res) => {
     commit: process.env.RAILWAY_GIT_COMMIT_SHA?.slice(0, 12) || null,
     timestamp: new Date().toISOString()
   });
+});
+
+app.get('/api/catalog', (req, res) => {
+  res.setHeader('Cache-Control', 'public, max-age=300');
+  res.json({ success: true, catalog: getPublicProductCatalog() });
 });
 
 /* ── Helper: get user-scoped Supabase client ── */

@@ -29,7 +29,7 @@
   <link rel="icon" href="/favicon.png" type="image/png">
   <!-- Structured data (schema.org). FAQPage는 페이지에 노출된 FAQ 콘텐츠가 없어 의도적으로 제외
        (비노출 콘텐츠의 구조화 데이터는 Google 가이드라인 위반 위험). -->
-  <script type="application/ld+json">
+  <script id="productStructuredData" type="application/ld+json">
   {
     "@context": "https://schema.org",
     "@type": "WebApplication",
@@ -116,8 +116,8 @@
   <section id="tools" class="tools-section section-reveal">
     <div class="container">
       <div class="section-label">The Pipeline</div>
-      <h2 class="section-title">From a Single Image to a Finished Video</h2>
-      <p class="tools-subtitle">Three tools, one workflow — your complete AI video pipeline.</p>
+      <h2 class="section-title">From a Single Image to a Seedance-Ready Storyboard</h2>
+      <p class="tools-subtitle">Three tools for prompt development and video pre-production. Final video generation happens in Seedance.</p>
       <div class="tools-grid">
 
         <a href="/" class="tool-card">
@@ -149,7 +149,7 @@
           </div>
           <div class="tool-card__body">
             <h3 class="tool-card__title">🎬 Storyboard</h3>
-            <p class="tool-card__desc">Drop in a key image and your idea — get a full storyboard with multiple camera angles, shot by shot. Paste the prompts into Seedance and your 15-second video is ready.</p>
+            <p class="tool-card__desc">Drop in a key image and your idea to create a storyboard grid and shot-by-shot prompts, then use those prompts in Seedance to generate the final video.</p>
           </div>
         </a>
 
@@ -294,11 +294,11 @@
       <h2 class="section-title">Simple Pricing</h2>
       <div class="pricing-grid">
 
-        <div class="pricing-card">
+        <div class="pricing-card" data-catalog-plan="free">
           <div class="pricing-card__header">
-            <h3>Free</h3>
-            <div class="pricing-card__price"><span class="price-amount">$0</span><span class="price-period">/month</span></div>
-            <p class="pricing-card__desc">Perfect for trying out</p>
+            <h3 data-catalog-field="name">Free</h3>
+            <div class="pricing-card__price"><span class="price-amount" data-catalog-field="price">$0</span><span class="price-period">/month</span></div>
+            <p class="pricing-card__desc" data-catalog-field="description">For trying the core tools</p>
           </div>
           <ul class="pricing-card__features">
             <li class="feat-yes">✓ 1 analysis per day</li>
@@ -311,20 +311,20 @@
           <button id="freePlanBtn" class="btn btn--outline">Get Started</button>
         </div>
 
-        <div class="pricing-card pricing-card--popular">
+        <div class="pricing-card pricing-card--popular" data-catalog-plan="pro">
           <div class="popular-badge">POPULAR</div>
           <div class="pricing-card__header">
-            <h3>Pro</h3>
+            <h3 data-catalog-field="name">Pro</h3>
             <div class="pricing-card__price">
-              <span class="price-amount">$9.99</span>
+              <span class="price-amount" data-catalog-field="price">$9.99</span>
               <span class="price-period">/month</span>
             </div>
-            <p class="pricing-card__desc">For creators who need more</p>
+            <p class="pricing-card__desc" data-catalog-field="description">For individual creators</p>
           </div>
-          <!-- 스토리보드 120크레딧은 env(STORYBOARD_CREDIT_COST) 기반 — 값 바뀌면 아래 보드 수 갱신 필요 -->
           <ul class="pricing-card__features">
-            <li class="feat-yes">✓ 1,000 credits (8 storyboards or 100 analyses)</li>
-            <li class="feat-yes">✓ Storyboard Generator (120 credits/board)</li>
+            <li class="feat-yes" data-catalog-field="credits">✓ 1,000 credits reset each billing month</li>
+            <li class="feat-yes" data-catalog-field="storyboards">✓ Up to 8 storyboards (120 credits each)</li>
+            <li class="feat-yes" data-catalog-field="analyses">✓ Up to 100 image analyses (10 credits each)</li>
             <li class="feat-yes">✓ Bracket editing</li>
             <li class="feat-yes">✓ Copy to clipboard</li>
             <li class="feat-yes">✓ Suggestion chips</li>
@@ -333,24 +333,24 @@
           <button id="proPlanBtn" class="btn btn--primary">Get Started</button>
         </div>
 
-        <div class="pricing-card">
+        <div class="pricing-card" data-catalog-plan="enterprise">
           <div class="pricing-card__header">
-            <h3>Enterprise</h3>
-            <div class="pricing-card__price"><span class="price-amount">$19.99</span><span class="price-period">/month</span></div>
-            <p class="pricing-card__desc">For teams and businesses</p>
+            <h3 data-catalog-field="name">Enterprise</h3>
+            <div class="pricing-card__price"><span class="price-amount" data-catalog-field="price">$19.99</span><span class="price-period">/month</span></div>
+            <p class="pricing-card__desc" data-catalog-field="description">For high-volume individual creators</p>
           </div>
           <ul class="pricing-card__features">
-            <li class="feat-yes">✓ 4,000 credits (33 storyboards or 400 analyses)</li>
-            <li class="feat-yes">✓ Storyboard Generator (120 credits/board)</li>
-            <li class="feat-yes">✓ Bracket editing</li>
-            <li class="feat-yes">✓ Copy to clipboard</li>
-            <li class="feat-yes">✓ Suggestion chips</li>
-            <li class="feat-yes">✓ Endframe Extractor (free with sign-in)</li>
+            <li class="feat-yes" data-catalog-field="credits">✓ 4,000 credits reset each billing month</li>
+            <li class="feat-yes" data-catalog-field="storyboards">✓ Up to 33 storyboards (120 credits each)</li>
+            <li class="feat-yes" data-catalog-field="analyses">✓ Up to 400 image analyses (10 credits each)</li>
+            <li class="feat-yes">✓ Same creation tools as Pro</li>
+            <li class="feat-yes">✓ Single-user plan</li>
           </ul>
           <button id="enterprisePlanBtn" class="btn btn--lavender">Get Started</button>
         </div>
 
       </div>
+      <p class="pricing-note">Pro and Enterprise are monthly subscriptions. Credits reset to the plan allotment at renewal and do not roll over. PromptGen does not currently include API access, team workspaces, custom models, or managed support.</p>
     </div>
   </section>
 
