@@ -9,6 +9,7 @@ const {
   getPlanCredits,
   isPaidPlan,
   getPaddlePriceId,
+  getPaddleCatalogMetadata,
   getPublicProductCatalog
 } = require('../../lib/product-catalog');
 
@@ -65,6 +66,38 @@ describe('public product catalog', () => {
     expect(isPaidPlan('enterprise')).toBe(true);
     expect(isPaidPlan('paid')).toBe(true);
     expect(isPaidPlan('free')).toBe(false);
+  });
+
+  test('canonical Paddle metadata matches public prices and contains only implemented promises', () => {
+    const metadata = getPaddleCatalogMetadata({
+      PADDLE_PRO_PRICE_ID: 'pri_pro_live',
+      PADDLE_ENTERPRISE_PRICE_ID: 'pri_enterprise_live'
+    });
+
+    expect(metadata.pro).toMatchObject({
+      productName: 'PromptGen AI Pro',
+      priceName: 'Pro Monthly',
+      unitAmount: '999',
+      currencyCode: 'USD',
+      billingCycle: { interval: 'month', frequency: 1 },
+      quantity: { minimum: 1, maximum: 1 },
+      priceId: 'pri_pro_live'
+    });
+    expect(metadata.enterprise).toMatchObject({
+      productName: 'PromptGen AI Enterprise',
+      priceName: 'Enterprise Monthly',
+      unitAmount: '1999',
+      priceId: 'pri_enterprise_live'
+    });
+
+    const salesCopy = JSON.stringify(metadata);
+    expect(salesCopy).not.toMatch(/teams and businesses|api access|custom models|team dashboard|priority (support|processing)/i);
+    expect(metadata.pro.productDescription).toContain('up to 8 storyboards or 100 image analyses');
+    expect(metadata.enterprise.productDescription).toContain('Single-user plan');
+
+    const alternateCost = getPaddleCatalogMetadata({ STORYBOARD_CREDIT_COST: '125' });
+    expect(alternateCost.enterprise.productDescription).toContain('up to 32 storyboards');
+    expect(alternateCost.enterprise.internalDescription).toContain('up to 32 storyboards');
   });
 });
 

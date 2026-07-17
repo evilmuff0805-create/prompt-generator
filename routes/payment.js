@@ -237,8 +237,16 @@ async function handleChangePlan(req, res) {
       console.error('[payment/change-plan] Paddle update error status=' + paddleRes.status + ' body=' + errBody);
     }
     // Money-related: do not leak Paddle internals; our DB is left untouched
-    // (plan stays in sync via webhook). Generic, safe message only.
-    return res.status(502).json({ success: false, error: 'Could not change your plan. Please try again later.' });
+    // (plan stays in sync via webhook). Give an actionable but provider-agnostic
+    // message for rejected changes, including canceled subscriptions.
+    const rejected = [400, 404, 409, 422].includes(paddleRes.status);
+    return res.status(502).json({
+      success: false,
+      error: rejected
+        ? 'This subscription cannot be changed right now. Check that it is active, or start a new subscription.'
+        : 'Could not change your plan. Please try again later.',
+      code: rejected ? 'PADDLE_CHANGE_REJECTED' : 'PADDLE_UNAVAILABLE'
+    });
   }
 
   const json = await paddleRes.json().catch(() => null);

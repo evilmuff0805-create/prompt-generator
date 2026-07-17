@@ -11,6 +11,30 @@
 }(typeof globalThis !== 'undefined' ? globalThis : this, function () {
 
   const PLAN_CREDIT_LIMIT = { free: 0, pro: 1000, paid: 1000, enterprise: 4000 };
+  const DEFAULT_API_ERROR = 'The billing service returned an invalid response. Please try again later.';
+
+  /**
+   * Parses an API response body without exposing HTML gateway/error pages to users.
+   * Always returns an object so callers can use the same success/error path for
+   * JSON errors, empty bodies, and non-JSON upstream responses.
+   */
+  function parseApiJson(text, fallbackError) {
+    const fallback = {
+      success: false,
+      error: fallbackError || DEFAULT_API_ERROR,
+      code: 'INVALID_RESPONSE'
+    };
+
+    if (typeof text !== 'string' || !text.trim()) return fallback;
+
+    try {
+      const parsed = JSON.parse(text);
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return fallback;
+      return parsed;
+    } catch (_) {
+      return fallback;
+    }
+  }
 
   /**
    * Extracts display-ready charge info from a change-plan preview response body.
@@ -69,5 +93,12 @@
     return function cancel() { clearInterval(id); };
   }
 
-  return { parsePlanPreview, calcCreditWarning, createPlanPoller, PLAN_CREDIT_LIMIT };
+  return {
+    parseApiJson,
+    parsePlanPreview,
+    calcCreditWarning,
+    createPlanPoller,
+    PLAN_CREDIT_LIMIT,
+    DEFAULT_API_ERROR
+  };
 }));
