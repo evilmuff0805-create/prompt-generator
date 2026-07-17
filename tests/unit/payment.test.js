@@ -394,6 +394,8 @@ describe('handleChangePlan (POST /api/payment/change-plan)', () => {
 
     expect(res.statusCode).toBe(502);
     expect(res.body.success).toBe(false);
+    expect(res.body.code).toBe('PADDLE_CHANGE_REJECTED');
+    expect(res.body.error).toContain('Check that it is active');
     expect(JSON.stringify(res.body)).not.toContain('some_paddle_detail');
   });
 
@@ -403,6 +405,7 @@ describe('handleChangePlan (POST /api/payment/change-plan)', () => {
     const res = makeRes();
     await handleChangePlan(req, res);
     expect(res.statusCode).toBe(502);
+    expect(res.body.code).toBe('PADDLE_UNAVAILABLE');
   });
 
   test('네트워크 실패 시 502, DB 무변경', async () => {

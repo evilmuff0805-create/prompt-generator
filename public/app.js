@@ -1134,7 +1134,10 @@ async function _cpLoadPreview(targetPlan, isUpgrade) {
       },
       body: JSON.stringify({ plan: targetPlan, preview: true })
     });
-    const json = await res.json();
+    const json = ChangePlanHelpers.parseApiJson(
+      await res.text(),
+      'Could not load plan details. Please try again later.'
+    );
 
     if (!res.ok || !json.success) throw new Error(json.error || 'Could not load plan details.');
 
@@ -1202,7 +1205,10 @@ changePlanConfirmBtn?.addEventListener('click', async () => {
       },
       body: JSON.stringify({ plan: targetPlan })
     });
-    const json = await res.json();
+    const json = ChangePlanHelpers.parseApiJson(
+      await res.text(),
+      'Could not change your plan. Please try again later.'
+    );
 
     if (!res.ok || !json.success) throw new Error(json.error || 'Could not change your plan. Please try again later.');
 

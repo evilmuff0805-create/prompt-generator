@@ -10,6 +10,7 @@
     "test": "npm run test:unit && npm run test:e2e",
     "cleanup": "node scripts/daily-cleanup.js",
     "cleanup:dry-run": "node scripts/daily-cleanup.js --dry-run",
+    "audit:paddle-catalog": "node scripts/audit-paddle-catalog.js",
     "smoke": "node scripts/smoke-test.js"
   },
   "dependencies": {

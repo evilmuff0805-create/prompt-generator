@@ -1,11 +1,41 @@
 'use strict';
 
 const {
+  parseApiJson,
   parsePlanPreview,
   calcCreditWarning,
   createPlanPoller,
   PLAN_CREDIT_LIMIT,
 } = require('../../public/js/changePlan-helpers');
+
+describe('parseApiJson', () => {
+  test('정상 JSON object를 그대로 반환', () => {
+    expect(parseApiJson('{"success":true,"data":{"amount":999}}')).toEqual({
+      success: true,
+      data: { amount: 999 }
+    });
+  });
+
+  test.each([
+    ['HTML gateway error', '<!DOCTYPE html><h1>Bad Gateway</h1>'],
+    ['빈 응답', ''],
+    ['JSON primitive', 'null']
+  ])('%s는 안전한 일반 오류로 변환', (_, body) => {
+    expect(parseApiJson(body, 'Could not load plan details.')).toEqual({
+      success: false,
+      error: 'Could not load plan details.',
+      code: 'INVALID_RESPONSE'
+    });
+  });
+
+  test('서버가 보낸 JSON 오류와 code는 보존', () => {
+    expect(parseApiJson('{"success":false,"error":"Inactive","code":"NO_SUBSCRIPTION"}')).toEqual({
+      success: false,
+      error: 'Inactive',
+      code: 'NO_SUBSCRIPTION'
+    });
+  });
+});
 
 // ── parsePlanPreview ─────────────────────────────────────────────────────────
 
