@@ -4,7 +4,7 @@ PromptGen is a Node.js/Express application that turns images and scenarios into 
 
 ## Local setup
 
-1. Install Node.js 20 or newer.
+1. Install Node.js 24.x. The repository `.nvmrc`, package engine, and CI use the same major version.
 2. Copy `.env.example` to `.env` and fill the required values.
 3. Install dependencies with `npm ci`.
 4. Start the app with `npm run dev`.
@@ -14,12 +14,16 @@ Never expose `SUPABASE_SERVICE_ROLE_KEY`, Paddle secrets, AI API keys, or alert 
 
 ## Validation
 
+- Full clean-clone gate: `npm test`
 - Unit tests: `npm run test:unit -- --runInBand`
+- Browser E2E only: `npm run test:e2e`
 - Production smoke: `APP_URL=https://promptgen-ai.com npm run smoke`
 - Cleanup dry-run: `npm run cleanup:dry-run`
 - Cleanup execution: `npm run cleanup`
 
-The smoke test performs read-only checks. It does not create a paid Storyboard, call Paddle, or spend AI credits.
+Playwright starts and stops an isolated local server for E2E. Its test environment uses placeholder provider credentials and disables the durable worker, cleanup scheduler, and alert delivery, so the 14 browser checks cannot call production Supabase, Paddle, or AI services. Install the local Chromium binary once with `npx playwright install chromium` when needed.
+
+The production smoke test performs read-only checks. It does not create a paid Storyboard, call Paddle, or spend AI credits.
 
 ## Operations model
 
