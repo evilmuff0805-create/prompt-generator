@@ -24,7 +24,7 @@
   <meta name="twitter:image" content="https://promptgen-ai.com/og-image.png" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/style.css" />
   <link rel="icon" href="/favicon.png" type="image/png">
   <!-- Structured data (schema.org). FAQPage는 페이지에 노출된 FAQ 콘텐츠가 없어 의도적으로 제외
@@ -66,7 +66,10 @@
   <!-- Navigation -->
   <nav id="navbar" class="navbar">
     <div class="navbar__inner">
-      <a href="#home" class="navbar__logo"><img src="/favicon.png" width="32" height="32" style="margin-right:8px;vertical-align:middle">PromptGen</a>
+      <a href="#home" class="navbar__logo" aria-label="PromptGen home">
+        <span class="navbar__logo-mark"><img src="/favicon.png" width="32" height="32" alt="" /></span>
+        <span>PromptGen</span>
+      </a>
       <!-- Tool Tabs -->
       <div class="tool-tabs" id="toolTabs">
         <a href="/" class="tool-tab">🎨 <span class="tab-label">Image to Prompt</span></a>
@@ -74,6 +77,10 @@
         <a href="/storyboard" class="tool-tab">🎬 <span class="tab-label">Storyboard</span></a>
       </div>
       <ul class="navbar__menu" id="navMenu">
+        <li class="navbar__menu-intro" aria-hidden="true">
+          <span>Explore PromptGen</span>
+          <strong>Visual ideas, translated into direction.</strong>
+        </li>
         <li><a href="#home" class="nav-link">Home</a></li>
         <li><a href="#how-it-works" class="nav-link">How it Works</a></li>
         <li><a href="#gallery" class="nav-link">Gallery</a></li>
@@ -95,7 +102,7 @@
           </div>
         </li>
       </ul>
-      <button class="navbar__hamburger" id="hamburger" aria-label="Toggle menu">
+      <button class="navbar__hamburger" id="hamburger" type="button" aria-label="Open navigation" aria-controls="navMenu" aria-expanded="false">
         <span></span><span></span><span></span>
       </button>
     </div>
@@ -103,12 +110,89 @@
 
   <!-- Hero Section -->
   <section id="home" class="hero">
-    <div class="hero__bg"></div>
-    <div class="hero__content">
-      <div class="hero__badge">✨ AI-Powered Prompt Engineering</div>
-      <h1 class="hero__title">Turn Any Image Into a<br /><span class="hero__title-highlight">Perfect AI Prompt</span></h1>
-      <p class="hero__sub">Analyze photos and generate detailed prompts optimized for Nano Banana Pro, Midjourney, and GPT Image 2</p>
-      <a href="#upload-section" class="btn btn--hero">Try It Free →</a>
+    <div class="hero__backdrop" aria-hidden="true">
+      <div class="hero__aurora hero__aurora--mint"></div>
+      <div class="hero__aurora hero__aurora--violet"></div>
+      <div class="hero__grid"></div>
+      <div class="hero__spotlight"></div>
+      <div class="hero__grain"></div>
+    </div>
+
+    <div class="hero__shell">
+      <div class="hero__content">
+        <div class="hero__badge"><span class="hero__badge-dot"></span>AI-powered visual direction</div>
+        <h1 class="hero__title">See the image.<br /><span class="hero__title-highlight">Direct the result.</span></h1>
+        <p class="hero__sub">Turn any reference image into a precise, editable prompt for Midjourney, GPT Image 2, and Nano Banana Pro.</p>
+        <div class="hero__actions">
+          <a href="#upload-section" class="btn btn--hero">
+            Generate free
+            <span aria-hidden="true">↗</span>
+          </a>
+          <a href="#tools" class="hero__text-link">Explore the workflow <span aria-hidden="true">↓</span></a>
+        </div>
+        <div class="hero__proof" aria-label="Product benefits">
+          <span><i aria-hidden="true">✓</i> 1 free generation daily</span>
+          <span><i aria-hidden="true">✓</i> Editable prompt segments</span>
+          <span><i aria-hidden="true">✓</i> No card required</span>
+        </div>
+      </div>
+
+      <div class="hero__visual" aria-hidden="true">
+        <div class="hero-demo liquid-glass">
+          <div class="hero-demo__topbar">
+            <div class="hero-demo__dots"><span></span><span></span><span></span></div>
+            <span class="hero-demo__mode">IMAGE <i>→</i> PROMPT</span>
+            <span class="hero-demo__status"><i></i> READY</span>
+          </div>
+
+          <div class="hero-demo__workspace">
+            <div class="hero-demo__source">
+              <div class="hero-demo__source-label">REFERENCE / 01</div>
+              <div class="hero-demo__scene">
+                <span class="scene__sun"></span>
+                <span class="scene__mountain scene__mountain--back"></span>
+                <span class="scene__mountain scene__mountain--front"></span>
+                <span class="scene__subject"></span>
+                <span class="scene__scan"></span>
+              </div>
+              <div class="hero-demo__meta"><span>4:5</span><span>PORTRAIT</span><span>ANALYZED</span></div>
+            </div>
+
+            <div class="hero-demo__prompt">
+              <div class="hero-demo__prompt-head">
+                <span>DIRECTOR PROMPT</span>
+                <span class="hero-demo__model">NANO BANANA PRO</span>
+              </div>
+              <div class="hero-demo__prompt-copy">
+                <span class="prompt-token prompt-token--mint">[subject: solitary figure]</span>
+                <span class="prompt-token prompt-token--violet">[lighting: diffused dusk]</span>
+                <span class="prompt-token prompt-token--coral">[camera: low angle, 50mm]</span>
+                <span class="prompt-token">[setting: sculptural desert ridge]</span>
+              </div>
+              <div class="hero-demo__lines"><span></span><span></span><span></span></div>
+              <div class="hero-demo__prompt-foot"><span>12 SEGMENTS</span><span>98% DETAIL</span></div>
+            </div>
+          </div>
+
+          <div class="hero-demo__footer">
+            <span>Visual language, made editable.</span>
+            <span class="hero-demo__generate">GENERATE <i>↗</i></span>
+          </div>
+        </div>
+
+        <div class="hero-float hero-float--analysis liquid-glass">
+          <span>COMPOSITION</span>
+          <strong>Layered depth</strong>
+        </div>
+        <div class="hero-float hero-float--accuracy liquid-glass">
+          <span class="hero-float__ring">98</span>
+          <span><small>DETAIL</small><strong>Prompt ready</strong></span>
+        </div>
+      </div>
+    </div>
+
+    <div class="hero__rail" aria-hidden="true">
+      <span>ANALYZE</span><i></i><span>EDIT</span><i></i><span>CREATE</span>
     </div>
   </section>
 

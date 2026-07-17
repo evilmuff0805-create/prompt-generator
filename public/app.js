@@ -578,18 +578,84 @@ window.addEventListener('scroll', () => {
 const hamburger = document.getElementById('hamburger');
 const navMenu   = document.getElementById('navMenu');
 
+function setNavigationOpen(isOpen, { restoreFocus = false } = {}) {
+  hamburger.classList.toggle('open', isOpen);
+  navMenu.classList.toggle('open', isOpen);
+  hamburger.setAttribute('aria-expanded', String(isOpen));
+  hamburger.setAttribute('aria-label', isOpen ? 'Close navigation' : 'Open navigation');
+  document.body.classList.toggle('nav-open', isOpen);
+
+  if (restoreFocus) hamburger.focus();
+}
+
 hamburger.addEventListener('click', e => {
   e.stopPropagation();
-  hamburger.classList.toggle('open');
-  navMenu.classList.toggle('open');
+  const willOpen = !navMenu.classList.contains('open');
+  setNavigationOpen(willOpen);
+
+  if (willOpen) {
+    window.setTimeout(() => {
+      if (navMenu.classList.contains('open')) navMenu.querySelector('.nav-link')?.focus();
+    }, 120);
+  }
 });
 
-navMenu.querySelectorAll('.nav-link').forEach(link => {
+navMenu.querySelectorAll('a, button').forEach(link => {
   link.addEventListener('click', () => {
-    hamburger.classList.remove('open');
-    navMenu.classList.remove('open');
+    setNavigationOpen(false);
   });
 });
+
+document.addEventListener('keydown', event => {
+  if (event.key === 'Escape' && navMenu.classList.contains('open')) {
+    setNavigationOpen(false, { restoreFocus: true });
+  }
+});
+
+window.addEventListener('resize', () => {
+  if (window.innerWidth > 1040 && navMenu.classList.contains('open')) {
+    setNavigationOpen(false);
+  }
+}, { passive: true });
+
+/* ══════════════════════════════════════
+   HERO POINTER LIGHT + PARALLAX
+   Fine pointers only; touch and reduced-motion users get a static composition.
+══════════════════════════════════════ */
+const hero = document.querySelector('.hero');
+const canTrackHeroPointer = window.matchMedia('(hover: hover) and (pointer: fine)');
+const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+
+if (hero && canTrackHeroPointer.matches && !prefersReducedMotion.matches) {
+  let pointerFrame = null;
+
+  hero.addEventListener('pointermove', event => {
+    if (pointerFrame) return;
+
+    pointerFrame = window.requestAnimationFrame(() => {
+      const bounds = hero.getBoundingClientRect();
+      const x = Math.max(0, Math.min(1, (event.clientX - bounds.left) / bounds.width));
+      const y = Math.max(0, Math.min(1, (event.clientY - bounds.top) / bounds.height));
+
+      hero.style.setProperty('--pointer-x', `${(x * 100).toFixed(2)}%`);
+      hero.style.setProperty('--pointer-y', `${(y * 100).toFixed(2)}%`);
+      hero.style.setProperty('--grid-x', `${((x - 0.5) * -16).toFixed(2)}px`);
+      hero.style.setProperty('--grid-y', `${((y - 0.5) * -12).toFixed(2)}px`);
+      hero.style.setProperty('--demo-x', `${((x - 0.5) * 3.2).toFixed(2)}deg`);
+      hero.style.setProperty('--demo-y', `${((0.5 - y) * 2.2).toFixed(2)}deg`);
+      pointerFrame = null;
+    });
+  }, { passive: true });
+
+  hero.addEventListener('pointerleave', () => {
+    hero.style.removeProperty('--pointer-x');
+    hero.style.removeProperty('--pointer-y');
+    hero.style.removeProperty('--grid-x');
+    hero.style.removeProperty('--grid-y');
+    hero.style.removeProperty('--demo-x');
+    hero.style.removeProperty('--demo-y');
+  }, { passive: true });
+}
 
 /* ══════════════════════════════════════
    LOGIN MODAL (Google OAuth)
