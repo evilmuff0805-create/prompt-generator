@@ -1,4 +1,16 @@
 require('dotenv').config();
+const { validateStartupEnvironment } = require('./lib/environment');
+
+const environmentReport = validateStartupEnvironment();
+if (environmentReport.missingFeatureVariables.length > 0) {
+  console.warn(JSON.stringify({
+    timestamp: new Date().toISOString(),
+    level: 'warn',
+    event: 'environment.features_unavailable',
+    missingFeatures: environmentReport.missingFeatures
+  }));
+}
+
 const express = require('express');
 const fs = require('fs');
 const path = require('path');

@@ -19,7 +19,6 @@
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
     "express-rate-limit": "^7.4.0",
-    "groq-sdk": "^0.3.3",
     "multer": "^2.2.0",
     "openai": "^6.36.0",
     "sharp": "^0.34.5"

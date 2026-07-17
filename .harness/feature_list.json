@@ -82,11 +82,11 @@
     "id": 7,
     "category": "functional",
     "priority": "high",
-    "description": "Gemini 실패 시 Groq AI로 폴백 분석한다",
+    "description": "이미지 분석은 Gemini 단일 provider 경로를 사용한다",
     "steps": [
-      "Gemini API 키 무효화 환경에서 분석 요청",
-      "Groq 서비스로 자동 전환 확인",
-      "동일한 형식의 프롬프트 결과 반환 확인"
+      "routes/analyze.js가 geminiService만 import하는지 확인",
+      "미사용 provider SDK와 키가 production dependency/env에서 제거됐는지 확인",
+      "Gemini 결과가 기존 프롬프트·브래킷 형식을 유지하는지 확인"
     ],
     "passes": true
   },
@@ -364,11 +364,11 @@
     "id": 29,
     "category": "functional",
     "priority": "high",
-    "description": "groqService 유닛 테스트가 통과한다",
+    "description": "환경변수 계약과 startup validation 유닛 테스트가 통과한다",
     "steps": [
-      "services/groqService.js의 섹션 파싱 함수 테스트",
-      "브래킷 추출 정규식 테스트",
-      "Llama 폴백 → LLaVA 폴백 로직 테스트",
+      "필수 startup 변수 누락 시 bind 전 실패 확인",
+      "기능별 변수 누락은 기본 경고·strict 모드 실패 확인",
+      "오류와 로그에 비밀값이 포함되지 않는지 확인",
       "npm run test:unit 전체 통과 확인"
     ],
     "passes": true
@@ -597,7 +597,7 @@
     "description": "AI API 호출에 30초 타임아웃이 적용된다",
     "steps": [
       "Gemini API 호출에 withTimeout 30,000ms 래퍼 적용 확인",
-      "Groq API 호출에 동일한 타임아웃 적용 확인",
+      "미사용 provider fallback 호출이 없는지 확인",
       "타임아웃 초과 시 명확한 오류 메시지 반환 확인"
     ],
     "passes": true

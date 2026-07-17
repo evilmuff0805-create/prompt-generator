@@ -54,7 +54,7 @@
 
   <div class="container">
     <h1 class="page-title">Privacy Policy</h1>
-    <p class="page-meta">Effective Date: May 1, 2026 &nbsp;·&nbsp; Last Updated: July 13, 2026</p>
+    <p class="page-meta">Effective Date: May 1, 2026 &nbsp;·&nbsp; Last Updated: July 17, 2026</p>
 
     <p>PromptGen ("we," "us," or "our") is committed to protecting your personal information. This Privacy Policy explains how we collect, use, and safeguard your data when you use <strong>promptgen-ai.com</strong>.</p>
 
@@ -65,7 +65,7 @@
     <ul>
       <li><strong>Account Information:</strong> When you sign in via Google, we receive your name, email address, and profile picture from Google OAuth.</li>
       <li><strong>Usage Data:</strong> Number of analyses performed, plan type, credit balance, product funnel event names, normalized page paths, a random tab-session identifier, and timestamps of activity. We do not include full URLs, query strings, raw referrers, prompts, scenarios, images, email addresses, or access tokens in product analytics events.</li>
-      <li><strong>Uploaded Images:</strong> Images you upload for analysis. These are processed by our AI models and are not stored permanently on our servers.</li>
+      <li><strong>Uploaded Images:</strong> Images you upload for Image to Prompt or as Storyboard references. Image to Prompt uploads are deleted after analysis. Storyboard references and generated grids may be retained temporarily in private storage for processing, result access, and scheduled cleanup.</li>
       <li><strong>Generated Prompts:</strong> Prompts generated from your images may be saved to your history for your reference.</li>
       <li><strong>Payment Information:</strong> Payment transactions are handled entirely by Paddle. We do not store your credit card or payment details.</li>
       <li><strong>Log Data:</strong> Server logs including IP addresses, request timestamps, and error information for security and debugging purposes.</li>
@@ -86,8 +86,8 @@
     <ul>
       <li><strong>Google OAuth / Supabase Auth:</strong> For authentication. Subject to Google's Privacy Policy.</li>
       <li><strong>Supabase:</strong> Our database and backend infrastructure.</li>
-      <li><strong>Google Gemini API:</strong> Your uploaded images are sent to Google's Gemini API for AI analysis.</li>
-      <li><strong>Groq API:</strong> Used as a fallback AI provider.</li>
+      <li><strong>Google Gemini API:</strong> Image to Prompt uploads are sent to Google's Gemini API for image analysis and prompt suggestions.</li>
+      <li><strong>OpenAI API:</strong> Storyboard scenarios, prompt text, and reference images may be sent to OpenAI for safety moderation, shot-prompt generation, and Storyboard grid generation.</li>
       <li><strong>Paddle:</strong> Our payment processor. Subject to Paddle's Privacy Policy.</li>
       <li><strong>Railway:</strong> Our hosting provider.</li>
       <li><strong>Cloudflare:</strong> Our content delivery and security provider. Cloudflare may also process cookie-free, page-level performance metrics through its Web Analytics RUM beacon. The beacon does not use browser storage or persistent identifiers and is separate from PromptGen's first-party product funnel events.</li>
@@ -97,7 +97,8 @@
     <h2>4. Data Retention</h2>
     <ul>
       <li><strong>Account data</strong> is retained as long as your account is active.</li>
-      <li><strong>Uploaded images</strong> are processed in memory and not permanently stored after analysis.</li>
+      <li><strong>Image to Prompt uploads</strong> are deleted after analysis.</li>
+      <li><strong>Storyboard references and generated grids</strong> are kept in private storage during the result-retention window and removed by scheduled cleanup after terminal Storyboards expire (30 days by default).</li>
       <li><strong>Prompt history</strong> is stored until you delete it or close your account.</li>
       <li><strong>Payment records</strong> are retained as required by applicable law.</li>
       <li><strong>First-party product analytics events</strong> are retained for 180 days and then automatically deleted.</li>
