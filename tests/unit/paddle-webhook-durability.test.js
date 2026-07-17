@@ -155,6 +155,39 @@ describe('durable Paddle webhook inbox', () => {
     expect(replay).toMatchObject({ statusCode: 200, outcome: 'completed' });
     expect(client.inbox.get(event.notification_id)).toMatchObject({ status: 'completed', attemptCount: 2 });
     expect(mutationCount).toBe(1);
+    expect(processor).toHaveBeenCalledTimes(2);
+
+    expect(client.rpc.mock.calls.map(([name]) => name)).toEqual([
+      'claim_paddle_webhook_event',
+      'fail_paddle_webhook_event',
+      'claim_paddle_webhook_event',
+      'complete_paddle_webhook_event'
+    ]);
+    const firstClaim = client.rpc.mock.calls[0][1];
+    const failedClaim = client.rpc.mock.calls[1][1];
+    const replayClaim = client.rpc.mock.calls[2][1];
+    const completedClaim = client.rpc.mock.calls[3][1];
+    expect(firstClaim.p_event_id).toBe(event.notification_id);
+    expect(failedClaim).toMatchObject({
+      p_event_id: event.notification_id,
+      p_claim_token: firstClaim.p_claim_token,
+      p_error: 'DB_TEMPORARY: temporary DB failure'
+    });
+    expect(replayClaim.p_event_id).toBe(event.notification_id);
+    expect(replayClaim.p_claim_token).not.toBe(firstClaim.p_claim_token);
+    expect(completedClaim).toEqual({
+      p_event_id: event.notification_id,
+      p_claim_token: replayClaim.p_claim_token
+    });
+    expect(incidentReporter).toHaveBeenCalledTimes(1);
+    expect(incidentReporter).toHaveBeenCalledWith(expect.objectContaining({
+      eventCode: 'PADDLE_EVENT_PROCESSING_FAILED',
+      fingerprint: `paddle-webhook:PADDLE_EVENT_PROCESSING_FAILED:${event.notification_id}`,
+      context: expect.objectContaining({
+        eventId: event.notification_id,
+        eventType
+      })
+    }));
 
     const completedDuplicateProcessor = jest.fn();
     const completedDuplicate = await executePaddleWebhook({
@@ -166,6 +199,14 @@ describe('durable Paddle webhook inbox', () => {
     });
     expect(completedDuplicate).toMatchObject({ statusCode: 200, outcome: 'duplicate' });
     expect(completedDuplicateProcessor).not.toHaveBeenCalled();
+    expect(processor).toHaveBeenCalledTimes(2);
+    expect(client.rpc.mock.calls.map(([name]) => name)).toEqual([
+      'claim_paddle_webhook_event',
+      'fail_paddle_webhook_event',
+      'claim_paddle_webhook_event',
+      'complete_paddle_webhook_event',
+      'claim_paddle_webhook_event'
+    ]);
   });
 
   test('notification_id가 없으면 claim이나 business 처리를 시작하지 않는다', async () => {
