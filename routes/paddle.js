@@ -95,46 +95,31 @@ function classifyTransactionOrigin(origin) {
 
 /* ── Reset credits on each subscription payment (initial + renewals) ── */
 // Subscription (reset, no rollover): Paddle fires transaction.completed every
-// billing cycle. grant_credits RPC SETs credits to the plan allotment (not +=),
-// so each renewal resets the balance to e.g. 1000 instead of accumulating.
+// billing cycle. apply_subscription_payment atomically records the transaction
+// and SETs credits to the plan allotment, so retries cannot reset twice.
 async function grantCreditsForPurchase(supabase, transactionId, userId, plan) {
   const credits = PLAN_CREDITS[plan] || 0;
-
-  // Record payment in ledger first (idempotency guard via UNIQUE on transaction_id).
-  // Each billing cycle has a distinct transaction_id → one ledger row per payment.
-  const { error: insertError } = await supabase
-    .from('purchases')
-    .insert({
-      transaction_id: transactionId,
-      user_id: userId,
-      plan,
-      credits_granted: credits,
-      status: 'completed'
-    });
-
-  if (insertError) {
-    if (insertError.code === '23505') {
-      console.log('[paddle/webhook] Payment already recorded for transaction_id=' + transactionId + ', skipping reset');
-      return;
-    }
-    throw new Error('Failed to insert purchase record: ' + insertError.message);
-  }
-
-  // Whitelist: ledger row recorded above, but skip the credit mutation (frozen account).
-  if (isTestAccount(userId)) {
-    console.warn('[paddle/webhook] [TEST_ACCOUNT] grant_credits 스킵(결제해도 크레딧 미지급) userId=' + userId + ' transaction=' + transactionId);
-    return;
-  }
-
-  // Atomically reset credits to the plan allotment via RPC
-  const { error: rpcError } = await supabase.rpc('grant_credits', {
+  const skipCreditMutation = isTestAccount(userId);
+  const { data: result, error } = await supabase.rpc('apply_subscription_payment', {
+    p_transaction_id: transactionId,
     p_user_id: userId,
     p_plan: plan,
-    p_amount: credits
+    p_amount: credits,
+    p_skip_credit_mutation: skipCreditMutation
   });
 
-  if (rpcError) {
-    throw new Error('grant_credits RPC failed: ' + rpcError.message);
+  if (error) {
+    throw new Error('apply_subscription_payment RPC failed: ' + error.message);
+  }
+
+  if (result?.reason === 'duplicate') {
+    console.log('[paddle/webhook] Payment already applied for transaction_id=' + transactionId + ', skipping reset');
+    return result;
+  }
+
+  if (skipCreditMutation) {
+    console.warn('[paddle/webhook] [TEST_ACCOUNT] grant_credits 스킵(결제해도 크레딧 미지급) userId=' + userId + ' transaction=' + transactionId);
+    return result;
   }
 
   console.log('[paddle/webhook] Reset credits to ' + credits + ' (' + plan + ') for userId=' + userId + ' transaction=' + transactionId);
@@ -147,6 +132,7 @@ async function grantCreditsForPurchase(supabase, transactionId, userId, plan) {
       transactionType: 'subscription_payment'
     }
   });
+  return result;
 }
 
 /* ── Record plan-upgrade transaction in purchases ledger (defer branch) ── */
@@ -191,8 +177,7 @@ async function saveSubscriptionIds(supabase, { userId, customerId, subscriptionI
     .eq('id', userId);
 
   if (error) {
-    // Credit grant already succeeded — log only, do not throw (keeps webhook 200 OK)
-    console.error('[paddle/webhook] Failed to save Paddle IDs for userId=' + userId + ':', error.message);
+    throw new Error('Failed to save Paddle subscription IDs: ' + error.message);
   }
 }
 
@@ -268,25 +253,23 @@ async function expireSubscription(supabase, userId) {
 
 /* ── Derive the plan in effect BEFORE a given plan-change row ── */
 // previous_plan = result plan of the immediately-prior ledger row for the same
-// subscription_id (ordered by created_at, id). No prior row → 'free'. This avoids
+// subscription_id (ordered by the monotonic purchase id). No prior row → 'free'. This avoids
 // reverse-inference: the value comes from committed history, not a guess.
 // LIMITATION: the ledger records upgrades + new purchases only (not downgrades),
 // so a downgrade between two upgrades is invisible here.
-async function derivePreviousPlan(supabase, { subscriptionId, beforeCreatedAt, beforeId }) {
+async function derivePreviousPlan(supabase, { subscriptionId, beforeId }) {
   if (!subscriptionId) return 'free';
   const { data: prior, error } = await supabase
     .from('purchases')
     .select('plan, created_at, id')
     .eq('subscription_id', subscriptionId)
-    .lt('created_at', beforeCreatedAt)
-    .order('created_at', { ascending: false })
+    .lt('id', beforeId)
     .order('id', { ascending: false })
     .limit(1)
     .maybeSingle();
 
   if (error) {
-    console.error('[paddle/webhook] derivePreviousPlan query error for subscription_id=' + subscriptionId + ':', error.message);
-    return 'free';
+    throw new Error('Failed to derive previous plan: ' + error.message);
   }
   return prior?.plan || 'free';
 }
@@ -302,77 +285,79 @@ async function revokeCreditsForRefund(supabase, transactionId, adjustmentType) {
     .single();
 
   if (lookupError || !purchase) {
-    console.error('[paddle/webhook] No purchase record found for transaction_id=' + transactionId + ' — cannot revoke credits');
-    return;
+    throw new Error('Purchase record not found for transaction_id=' + transactionId);
   }
 
   if (purchase.status === 'refunded') {
     console.log('[paddle/webhook] Purchase already refunded for transaction_id=' + transactionId + ', skipping');
-    return;
+    return { applied: false, reason: 'duplicate' };
   }
 
-  // Whitelist: frozen account — skip any credit/plan mutation on refund.
-  // (userId only known here, after the ledger lookup — guard must live inside this fn.)
+  // Partial refunds have no safe credit mapping. Never revoke a full allotment for
+  // a partial monetary refund; leave the account untouched and require review.
+  if (adjustmentType !== 'full') {
+    console.error(
+      '[paddle/webhook] [CRITICAL] 부분환불(type=' + (adjustmentType || 'n/a') +
+      ') — credit mapping 불가, 스킵(운영자 수동 처리 필요) |',
+      'transaction_id=' + transactionId,
+      '| userId=' + purchase.user_id
+    );
+    await reportIncident({
+      severity: 'critical',
+      source: 'paddle-webhook',
+      eventCode: 'PARTIAL_REFUND_REQUIRES_REVIEW',
+      message: 'A partial refund cannot be mapped safely to PromptGen credits',
+      fingerprint: `paddle-webhook:PARTIAL_REFUND_REQUIRES_REVIEW:${transactionId}`,
+      context: {
+        transactionId,
+        userId: purchase.user_id,
+        transactionType: purchase.transaction_type || null,
+        adjustmentType: adjustmentType || null
+      }
+    });
+    return { action: 'partial_skip' };
+  }
+
+  // Whitelist: record the full refund in the purchase ledger, but keep the
+  // account's plan/credits frozen.
   if (isTestAccount(purchase.user_id)) {
-    console.warn('[paddle/webhook] [TEST_ACCOUNT] 환불 mutation 스킵(plan/credits 유지) userId=' + purchase.user_id + ' transaction=' + transactionId);
-    return;
+    const { data: result, error: rpcError } = await supabase.rpc('apply_purchase_refund', {
+      p_transaction_id: transactionId,
+      p_previous_plan: null,
+      p_previous_allotment: null,
+      p_skip_credit_mutation: true
+    });
+    if (rpcError) {
+      throw new Error('apply_purchase_refund RPC failed: ' + rpcError.message);
+    }
+    console.warn('[paddle/webhook] [TEST_ACCOUNT] 환불 원장만 반영(plan/credits 유지) userId=' + purchase.user_id + ' transaction=' + transactionId);
+    return { action: 'test_account_skip', result };
   }
 
-  // ── plan_upgrade refund: auto-revert via revert_plan_change (usage-guarded in RPC) ──
+  // ── plan_upgrade refund: atomically restore plan and mark the purchase refunded ──
   if (purchase.transaction_type === 'plan_upgrade') {
-    // Partial refunds have no clean plan-revert mapping (money-only). Skip + flag.
-    if (adjustmentType !== 'full') {
-      console.error(
-        '[paddle/webhook] [CRITICAL] plan_upgrade 부분환불(type=' + (adjustmentType || 'n/a') +
-        ') — plan revert 매핑 불가, 스킵(운영자 수동 처리 필요) |',
-        'transaction_id=' + transactionId,
-        '| userId=' + purchase.user_id
-      );
-      await reportIncident({
-        severity: 'critical',
-        source: 'paddle-webhook',
-        eventCode: 'PLAN_UPGRADE_PARTIAL_REFUND',
-        message: 'Plan upgrade received a partial refund that cannot be mapped automatically',
-        fingerprint: `paddle-webhook:PLAN_UPGRADE_PARTIAL_REFUND:${transactionId}`,
-        context: {
-          transactionId,
-          userId: purchase.user_id,
-          adjustmentType: adjustmentType || null
-        }
-      });
-      return;
-    }
 
     const previousPlan = await derivePreviousPlan(supabase, {
       subscriptionId: purchase.subscription_id,
-      beforeCreatedAt: purchase.created_at,
       beforeId: purchase.id
     });
     const previousAllotment = PLAN_CREDITS[previousPlan] || 0;
 
-    const { data: result, error: rpcError } = await supabase.rpc('revert_plan_change', {
-      p_user_id: purchase.user_id,
+    const { data: result, error: rpcError } = await supabase.rpc('apply_purchase_refund', {
+      p_transaction_id: transactionId,
       p_previous_plan: previousPlan,
       p_previous_allotment: previousAllotment,
-      p_granted: purchase.credits_granted
+      p_skip_credit_mutation: false
     });
 
     if (rpcError) {
-      throw new Error('revert_plan_change RPC failed: ' + rpcError.message);
+      throw new Error('apply_purchase_refund RPC failed: ' + rpcError.message);
     }
 
-    if (result?.plan_restored) {
-      // Only mark refunded when the plan was actually reverted.
-      const { error: updateError } = await supabase
-        .from('purchases')
-        .update({ status: 'refunded' })
-        .eq('id', purchase.id);
-      if (updateError) {
-        throw new Error('Failed to mark plan_upgrade purchase as refunded: ' + updateError.message);
-      }
+    if (result?.reason === 'plan_restored') {
       console.log(
         '[paddle/webhook] plan_upgrade 환불 복원 완료: plan→' + previousPlan +
-        ' credits=' + result.new_balance + ' userId=' + purchase.user_id + ' transaction=' + transactionId
+        ' credits=' + result.newBalance + ' userId=' + purchase.user_id + ' transaction=' + transactionId
       );
     } else if (result?.reason === 'credits_used') {
       // Policy violation: credits were used but a refund was issued (operator error).
@@ -381,7 +366,7 @@ async function revokeCreditsForRefund(supabase, transactionId, adjustmentType) {
         '[paddle/webhook] [CRITICAL] 정책위반 환불 — 크레딧 사용된 계정이 환불됨, plan 복원 스킵(무변경) |',
         'transaction_id=' + transactionId,
         '| userId=' + purchase.user_id,
-        '| current_credits=' + result.new_balance,
+        '| current_credits=' + result.newBalance,
         '| granted=' + purchase.credits_granted
       );
       await reportIncident({
@@ -393,7 +378,7 @@ async function revokeCreditsForRefund(supabase, transactionId, adjustmentType) {
         context: {
           transactionId,
           userId: purchase.user_id,
-          currentCredits: result.new_balance,
+          currentCredits: result.newBalance,
           grantedCredits: purchase.credits_granted
         }
       });
@@ -406,30 +391,161 @@ async function revokeCreditsForRefund(supabase, transactionId, adjustmentType) {
         '| reason=' + (result?.reason || 'unknown')
       );
     }
-    return;
+    return result;
   }
 
-  // Mark purchase as refunded
-  const { error: updateError } = await supabase
-    .from('purchases')
-    .update({ status: 'refunded' })
-    .eq('id', purchase.id);
-
-  if (updateError) {
-    throw new Error('Failed to mark purchase as refunded: ' + updateError.message);
-  }
-
-  // Atomically deduct credits via RPC
-  const { error: rpcError } = await supabase.rpc('revoke_credits', {
-    p_user_id: purchase.user_id,
-    p_amount: purchase.credits_granted
+  const { data: result, error: rpcError } = await supabase.rpc('apply_purchase_refund', {
+    p_transaction_id: transactionId,
+    p_previous_plan: null,
+    p_previous_allotment: null,
+    p_skip_credit_mutation: false
   });
 
   if (rpcError) {
-    throw new Error('revoke_credits RPC failed: ' + rpcError.message);
+    throw new Error('apply_purchase_refund RPC failed: ' + rpcError.message);
   }
 
-  console.log('[paddle/webhook] Revoked ' + purchase.credits_granted + ' credits from userId=' + purchase.user_id + ' for refunded transaction=' + transactionId);
+  if (result?.reason === 'duplicate') {
+    console.log('[paddle/webhook] Purchase already refunded for transaction_id=' + transactionId + ', skipping');
+  } else {
+    console.log('[paddle/webhook] Revoked ' + purchase.credits_granted + ' credits from userId=' + purchase.user_id + ' for refunded transaction=' + transactionId);
+  }
+  return result;
+}
+
+const WEBHOOK_LEASE_SECONDS = 300;
+
+function webhookProcessingError(code, message) {
+  const error = new Error(message);
+  error.code = code;
+  return error;
+}
+
+function sanitizeWebhookError(error) {
+  const code = String(error?.code || error?.name || 'WEBHOOK_PROCESSING_ERROR')
+    .replace(/[^A-Za-z0-9_-]/g, '_')
+    .slice(0, 80);
+  const message = String(error?.message || 'Unknown webhook error')
+    .replace(/[\r\n\t]+/g, ' ')
+    .replace(/\s{2,}/g, ' ')
+    .trim()
+    .slice(0, 800);
+  return code + ': ' + message;
+}
+
+async function claimPaddleWebhookEvent(supabase, eventId, claimToken) {
+  const { data, error } = await supabase.rpc('claim_paddle_webhook_event', {
+    p_event_id: eventId,
+    p_claim_token: claimToken,
+    p_lease_seconds: WEBHOOK_LEASE_SECONDS
+  });
+  if (error) {
+    throw new Error('claim_paddle_webhook_event RPC failed: ' + error.message);
+  }
+  if (!data || !['claimed', 'completed', 'busy'].includes(data.outcome)) {
+    throw new Error('claim_paddle_webhook_event returned an invalid outcome');
+  }
+  return data;
+}
+
+async function completePaddleWebhookEvent(supabase, eventId, claimToken) {
+  const { data, error } = await supabase.rpc('complete_paddle_webhook_event', {
+    p_event_id: eventId,
+    p_claim_token: claimToken
+  });
+  if (error) {
+    throw new Error('complete_paddle_webhook_event RPC failed: ' + error.message);
+  }
+  if (data !== true) {
+    const claimError = new Error('Paddle webhook claim was lost before completion');
+    claimError.code = 'WEBHOOK_CLAIM_LOST';
+    throw claimError;
+  }
+}
+
+async function failPaddleWebhookEvent(supabase, eventId, claimToken, error) {
+  const sanitizedError = sanitizeWebhookError(error);
+  const { data, error: rpcError } = await supabase.rpc('fail_paddle_webhook_event', {
+    p_event_id: eventId,
+    p_claim_token: claimToken,
+    p_error: sanitizedError
+  });
+  if (rpcError) {
+    throw new Error('fail_paddle_webhook_event RPC failed: ' + rpcError.message);
+  }
+  return data === true;
+}
+
+async function executePaddleWebhook({
+  payload,
+  requestId,
+  supabase,
+  processEvent,
+  incidentReporter = reportIncident,
+  claimToken = crypto.randomUUID()
+}) {
+  const eventType = payload?.event_type;
+  const eventId = payload?.notification_id;
+
+  if (!eventId || typeof eventId !== 'string' || !eventId.trim() || eventId.length > 255) {
+    console.error('[paddle/webhook] notification_id is required for durable processing');
+    return { statusCode: 400, body: 'Missing notification_id', outcome: 'invalid' };
+  }
+  if (!eventType || typeof eventType !== 'string') {
+    console.error('[paddle/webhook] event_type is required for durable processing');
+    return { statusCode: 400, body: 'Missing event_type', outcome: 'invalid' };
+  }
+
+  let claim;
+  try {
+    claim = await claimPaddleWebhookEvent(supabase, eventId, claimToken);
+  } catch (error) {
+    console.error('[paddle/webhook] Failed to claim event:', eventId, '—', error.message);
+    await incidentReporter({
+      severity: 'critical',
+      source: 'paddle-webhook',
+      eventCode: 'PADDLE_EVENT_CLAIM_FAILED',
+      message: error.message,
+      fingerprint: `paddle-webhook:PADDLE_EVENT_CLAIM_FAILED:${eventId}`,
+      context: { requestId, eventId, eventType, error }
+    });
+    return { statusCode: 503, body: 'Webhook temporarily unavailable', outcome: 'claim_failed', retryAfter: '5' };
+  }
+
+  if (claim.outcome === 'completed') {
+    console.log('[paddle/webhook] Completed duplicate event, acknowledging:', eventId);
+    return { statusCode: 200, body: 'OK', outcome: 'duplicate' };
+  }
+  if (claim.outcome === 'busy') {
+    console.warn('[paddle/webhook] Concurrent event delivery is still processing:', eventId);
+    return { statusCode: 503, body: 'Event already processing', outcome: 'busy', retryAfter: '5' };
+  }
+
+  try {
+    await processEvent();
+    await completePaddleWebhookEvent(supabase, eventId, claimToken);
+    return { statusCode: 200, body: 'OK', outcome: 'completed' };
+  } catch (error) {
+    console.error('[paddle/webhook] Error processing event:', eventType, '—', error.message);
+    try {
+      const failed = await failPaddleWebhookEvent(supabase, eventId, claimToken, error);
+      if (!failed) {
+        console.error('[paddle/webhook] Could not mark failed event because the claim was lost:', eventId);
+      }
+    } catch (failError) {
+      console.error('[paddle/webhook] Failed to persist retryable event failure:', eventId, '—', failError.message);
+    }
+
+    await incidentReporter({
+      severity: 'critical',
+      source: 'paddle-webhook',
+      eventCode: 'PADDLE_EVENT_PROCESSING_FAILED',
+      message: error.message,
+      fingerprint: `paddle-webhook:PADDLE_EVENT_PROCESSING_FAILED:${eventId}`,
+      context: { requestId, eventId, eventType, error }
+    });
+    return { statusCode: 500, body: 'Internal error', outcome: 'failed' };
+  }
 }
 
 /* ── POST /api/paddle/webhook ── */
@@ -468,29 +584,22 @@ router.post('/webhook',
     }
 
     const eventType = payload?.event_type;
-    const eventId = payload?.notification_id || payload?.data?.id;
+    const eventId = payload?.notification_id;
     console.log('[paddle/webhook] Event received:', eventType, '| id:', eventId);
 
-    // Replay attack prevention: deduplicate by event_id
-    if (eventId) {
-      try {
-        const adminClient = makeAdminClient();
-        const { error: dupError } = await adminClient
-          .from('webhook_events')
-          .insert({ event_id: String(eventId) });
-        if (dupError) {
-          if (dupError.code === '23505') {
-            console.log('[paddle/webhook] Duplicate event_id, skipping:', eventId);
-            return res.status(200).send('OK');
-          }
-          console.error('[paddle/webhook] Failed to record event_id:', dupError.message);
-        }
-      } catch (err) {
-        console.error('[paddle/webhook] Replay check failed:', err.message);
-      }
+    let adminClient;
+    try {
+      adminClient = makeAdminClient();
+    } catch (error) {
+      console.error('[paddle/webhook] Admin client initialization failed:', error.message);
+      return res.status(503).send('Webhook temporarily unavailable');
     }
 
-    try {
+    const execution = await executePaddleWebhook({
+      payload,
+      requestId: req.id,
+      supabase: adminClient,
+      processEvent: async function () {
       if (eventType === 'transaction.completed') {
         const data = payload?.data;
         const transactionId = data?.id;
@@ -506,7 +615,7 @@ router.post('/webhook',
         if (decision === 'defer') {
           // Record plan-change transaction in the purchases ledger for refund tracking.
           // Credits are NOT changed here — apply_plan_change in subscription.updated handles that.
-          const supabase = makeAdminClient();
+          const supabase = adminClient;
           let deferUserId = userId;
 
           // userId fallback: same pattern as subscription.updated handler
@@ -545,10 +654,13 @@ router.post('/webhook',
                 customerId: data?.customer_id || null
               }
             });
-            return res.status(200).send('OK');
+            throw webhookProcessingError(
+              'PAYMENT_USER_UNRESOLVED',
+              'Plan-change transaction could not be matched to a user'
+            );
           }
 
-          if (plan && transactionId) {
+          if (plan && transactionId && data?.subscription_id) {
             await recordPlanUpgradePurchase(supabase, {
               transactionId,
               userId: deferUserId,
@@ -557,12 +669,17 @@ router.post('/webhook',
             });
           } else {
             console.warn(
-              '[paddle/webhook] defer — plan 또는 transactionId 없어 원장 기록 생략 |',
+              '[paddle/webhook] defer — plan, transactionId 또는 subscriptionId 없어 원장 기록 생략 |',
               'plan=' + plan,
-              '| transaction_id=' + (transactionId || 'n/a')
+              '| transaction_id=' + (transactionId || 'n/a'),
+              '| subscription_id=' + (data?.subscription_id || 'n/a')
+            );
+            throw webhookProcessingError(
+              'PAYMENT_LEDGER_DATA_MISSING',
+              'Plan-change transaction is missing a mapped plan, transaction ID, or subscription ID'
             );
           }
-          return res.status(200).send('OK');
+          return;
         }
         if (decision === 'ignore') {
           console.warn(
@@ -571,18 +688,21 @@ router.post('/webhook',
             'transaction_id=' + transactionId,
             '| userId=' + (userId || 'n/a')
           );
-          return res.status(200).send('OK');
+          return;
         }
         // decision === 'grant' → existing behavior below (UNCHANGED)
 
         if (!userId) {
           console.error('[paddle/webhook] No userId in custom_data — cannot grant credits');
-          return res.status(200).send('OK');
+          throw webhookProcessingError(
+            'PAYMENT_USER_UNRESOLVED',
+            'Completed subscription payment is missing custom_data.userId'
+          );
         }
         if (!plan) {
           // 결제는 성공했으나 priceId 가 env(PADDLE_*_PRICE_ID) 와 매칭 실패.
           // 크레딧이 지급되지 않으므로 매출 손실로 이어질 수 있는 치명적 케이스.
-          // 200 OK 는 유지 (Paddle 재전송 폭주 방지) — 대신 역추적 가능한 식별자를 error 로 남긴다.
+          // Keep the durable inbox in failed state so a corrected price mapping can be replayed.
           console.error(
             '[paddle/webhook] [CRITICAL] 결제 성공했으나 plan 매칭 실패 — 크레딧 미지급, 매출 손실 가능 |',
             'priceId=' + priceId,
@@ -606,14 +726,20 @@ router.post('/webhook',
               customerId: data?.customer_id || null
             }
           });
-          return res.status(200).send('OK');
+          throw webhookProcessingError(
+            'PAYMENT_PLAN_UNMAPPED',
+            'Completed payment price ID did not map to a PromptGen plan'
+          );
         }
         if (!transactionId) {
           console.error('[paddle/webhook] No transaction id in payload — cannot record purchase');
-          return res.status(200).send('OK');
+          throw webhookProcessingError(
+            'PAYMENT_TRANSACTION_ID_MISSING',
+            'Completed subscription payment is missing a transaction ID'
+          );
         }
 
-        const supabase = makeAdminClient();
+        const supabase = adminClient;
         await grantCreditsForPurchase(supabase, transactionId, userId, plan);
         await saveSubscriptionIds(supabase, {
           userId,
@@ -631,18 +757,21 @@ router.post('/webhook',
         // Only process approved credit refunds
         if (action !== 'refund' && action !== 'credit') {
           console.log('[paddle/webhook] Adjustment action \'' + action + '\' is not a refund/credit, ignoring');
-          return res.status(200).send('OK');
+          return;
         }
         if (status !== 'approved') {
           console.log('[paddle/webhook] Adjustment status \'' + status + '\' is not approved, ignoring');
-          return res.status(200).send('OK');
+          return;
         }
         if (!transactionId) {
           console.error('[paddle/webhook] No transaction_id in adjustment payload — cannot process refund');
-          return res.status(200).send('OK');
+          throw webhookProcessingError(
+            'REFUND_TRANSACTION_ID_MISSING',
+            'Approved refund is missing a transaction ID'
+          );
         }
 
-        const supabase = makeAdminClient();
+        const supabase = adminClient;
         await revokeCreditsForRefund(supabase, transactionId, data?.type);
 
       } else if (eventType === 'subscription.updated') {
@@ -656,7 +785,7 @@ router.post('/webhook',
         // userId fallback: if custom_data.userId is absent (e.g. older Paddle checkout
         // sessions before we started embedding it), look up the profile by the
         // paddle_customer_id stored during the initial purchase.
-        const supabase = makeAdminClient();
+        const supabase = adminClient;
         if (!userId) {
           const customerId = data?.customer_id;
           if (customerId) {
@@ -694,11 +823,14 @@ router.post('/webhook',
               customerId: data?.customer_id || null
             }
           });
-          return res.status(200).send('OK');
+          throw webhookProcessingError(
+            'SUBSCRIPTION_USER_UNRESOLVED',
+            'Subscription update could not be matched to a user'
+          );
         }
         if (!plan) {
           // priceId가 env(PADDLE_*_PRICE_ID)와 매칭 실패 — plan 동기화 불가.
-          // 200 OK 유지(재전송 폭주 방지) + 역추적 식별자를 error로 남긴다.
+          // Keep the durable inbox in failed state so a corrected price mapping can be replayed.
           console.error(
             '[paddle/webhook] [CRITICAL] subscription.updated priceId가 plan 매칭 실패 — plan 동기화 불가 |',
             'priceId=' + priceId,
@@ -719,7 +851,10 @@ router.post('/webhook',
               priceId
             }
           });
-          return res.status(200).send('OK');
+          throw webhookProcessingError(
+            'SUBSCRIPTION_PLAN_UNMAPPED',
+            'Subscription update price ID did not map to a PromptGen plan'
+          );
         }
 
         // Guard: skip plan change for non-active subscriptions.
@@ -733,14 +868,12 @@ router.post('/webhook',
             'subscription_id=' + (data?.id || 'n/a'),
             '| userId=' + userId
           );
-          return res.status(200).send('OK');
+          return;
         }
 
-        // KNOWN LIMITATION: if Paddle issues a credit_to_balance adjustment for a
-        // downgrade, the resulting adjustment.created event will not find a matching
-        // purchases row (plan changes have no transaction_id in the ledger), so
-        // revokeCreditsForRefund silently exits. Credits are not double-deducted, but
-        // the adjustment goes unlogged in the purchases table.
+        // transaction.completed records plan-change transaction IDs separately;
+        // if a refund arrives first, the durable inbox keeps it failed until the
+        // matching purchase row exists and the event can be replayed safely.
         await applyPlanChange(supabase, userId, plan);
 
       } else if (eventType === 'subscription.canceled') {
@@ -751,7 +884,7 @@ router.post('/webhook',
         // userId fallback: same pattern as subscription.updated handler — if
         // custom_data.userId is absent, look up the profile by paddle_customer_id
         // stored during the initial purchase.
-        const supabase = makeAdminClient();
+        const supabase = adminClient;
         if (!userId) {
           const customerId = data?.customer_id;
           if (customerId) {
@@ -789,7 +922,10 @@ router.post('/webhook',
               customerId: data?.customer_id || null
             }
           });
-          return res.status(200).send('OK');
+          throw webhookProcessingError(
+            'CANCELLATION_USER_UNRESOLVED',
+            'Subscription cancellation could not be matched to a user'
+          );
         }
 
         await expireSubscription(supabase, userId);
@@ -797,25 +933,13 @@ router.post('/webhook',
       } else {
         console.log('[paddle/webhook] Unhandled event type, ignoring:', eventType);
       }
-    } catch (err) {
-      console.error('[paddle/webhook] Error processing event:', eventType, '—', err.message);
-      await reportIncident({
-        severity: 'critical',
-        source: 'paddle-webhook',
-        eventCode: 'PADDLE_EVENT_PROCESSING_FAILED',
-        message: err.message,
-        fingerprint: `paddle-webhook:PADDLE_EVENT_PROCESSING_FAILED:${eventId || eventType || 'unknown'}`,
-        context: {
-          requestId: req.id,
-          eventId,
-          eventType,
-          error: err
-        }
-      });
-      return res.status(500).send('Internal error');
-    }
+      }
+    });
 
-    return res.status(200).send('OK');
+    if (execution.retryAfter) {
+      res.set('Retry-After', execution.retryAfter);
+    }
+    return res.status(execution.statusCode).send(execution.body);
   }
 );
 
@@ -827,3 +951,11 @@ module.exports.recordPlanUpgradePurchase = recordPlanUpgradePurchase;
 module.exports.derivePreviousPlan = derivePreviousPlan;
 module.exports.syncPlanFromSubscription = syncPlanFromSubscription;
 module.exports.applyPlanChange = applyPlanChange;
+module.exports.grantCreditsForPurchase = grantCreditsForPurchase;
+module.exports.revokeCreditsForRefund = revokeCreditsForRefund;
+module.exports.saveSubscriptionIds = saveSubscriptionIds;
+module.exports.sanitizeWebhookError = sanitizeWebhookError;
+module.exports.claimPaddleWebhookEvent = claimPaddleWebhookEvent;
+module.exports.completePaddleWebhookEvent = completePaddleWebhookEvent;
+module.exports.failPaddleWebhookEvent = failPaddleWebhookEvent;
+module.exports.executePaddleWebhook = executePaddleWebhook;

@@ -5,11 +5,17 @@
  */
 
 const crypto = require('crypto');
-const { classifyTransactionOrigin, isActiveSubscription, isTestAccount, recordPlanUpgradePurchase, syncPlanFromSubscription, applyPlanChange } = require('../../routes/paddle');
+const {
+  classifyTransactionOrigin,
+  isActiveSubscription,
+  isTestAccount,
+  recordPlanUpgradePurchase,
+  syncPlanFromSubscription,
+  applyPlanChange,
+  saveSubscriptionIds
+} = require('../../routes/paddle');
 
 // ── Copied from routes/paddle.js (pure functions, no side effects) ──
-
-const PLAN_CREDITS = { pro: 1000, enterprise: 4000 };
 
 function verifyPaddleSignature(secret, rawBody, signatureHeader) {
   if (!signatureHeader) return false;
@@ -66,100 +72,6 @@ function makeSupabaseMock({ insertError = null, selectData = null, selectError =
   };
 }
 
-// ── Logic under test (mirrors routes/paddle.js, takes supabase as arg) ──
-
-async function grantCreditsForPurchase(supabase, transactionId, userId, plan) {
-  const credits = PLAN_CREDITS[plan] || 0;
-
-  const { error: insertError } = await supabase
-    .from('purchases')
-    .insert({ transaction_id: transactionId, user_id: userId, plan, credits_granted: credits, status: 'completed' });
-
-  if (insertError) {
-    if (insertError.code === '23505') return;
-    throw new Error('Failed to insert purchase record: ' + insertError.message);
-  }
-
-  if (isTestAccount(userId)) return;
-
-  const { error: rpcError } = await supabase.rpc('grant_credits', {
-    p_user_id: userId, p_plan: plan, p_amount: credits
-  });
-
-  if (rpcError) throw new Error('grant_credits RPC failed: ' + rpcError.message);
-}
-
-async function derivePreviousPlan(supabase, { subscriptionId, beforeCreatedAt, beforeId }) {
-  if (!subscriptionId) return 'free';
-  const { data: prior, error } = await supabase
-    .from('purchases')
-    .select('plan, created_at, id')
-    .eq('subscription_id', subscriptionId)
-    .lt('created_at', beforeCreatedAt)
-    .order('created_at', { ascending: false })
-    .order('id', { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  if (error) return 'free';
-  return prior?.plan || 'free';
-}
-
-async function revokeCreditsForRefund(supabase, transactionId, adjustmentType) {
-  const { data: purchase, error: lookupError } = await supabase
-    .from('purchases')
-    .select('id, user_id, credits_granted, status, transaction_type, subscription_id, created_at')
-    .eq('transaction_id', transactionId)
-    .single();
-
-  if (lookupError || !purchase) return;
-  if (purchase.status === 'refunded') return;
-
-  if (isTestAccount(purchase.user_id)) return { action: 'test_account_skip' };
-
-  if (purchase.transaction_type === 'plan_upgrade') {
-    if (adjustmentType !== 'full') return { action: 'partial_skip' };
-
-    const previousPlan = await derivePreviousPlan(supabase, {
-      subscriptionId: purchase.subscription_id,
-      beforeCreatedAt: purchase.created_at,
-      beforeId: purchase.id
-    });
-    const previousAllotment = PLAN_CREDITS[previousPlan] || 0;
-
-    const { data: result, error: rpcError } = await supabase.rpc('revert_plan_change', {
-      p_user_id: purchase.user_id,
-      p_previous_plan: previousPlan,
-      p_previous_allotment: previousAllotment,
-      p_granted: purchase.credits_granted
-    });
-    if (rpcError) throw new Error('revert_plan_change RPC failed: ' + rpcError.message);
-
-    if (result?.plan_restored) {
-      const { error: updateError } = await supabase
-        .from('purchases')
-        .update({ status: 'refunded' })
-        .eq('id', purchase.id);
-      if (updateError) throw new Error('Failed to mark plan_upgrade purchase as refunded: ' + updateError.message);
-    }
-    return { action: 'plan_upgrade', previousPlan, previousAllotment, result };
-  }
-
-  const { error: updateError } = await supabase
-    .from('purchases')
-    .update({ status: 'refunded' })
-    .eq('id', purchase.id);
-
-  if (updateError) throw new Error('Failed to mark purchase as refunded: ' + updateError.message);
-
-  const { error: rpcError } = await supabase.rpc('revoke_credits', {
-    p_user_id: purchase.user_id, p_amount: purchase.credits_granted
-  });
-
-  if (rpcError) throw new Error('revoke_credits RPC failed: ' + rpcError.message);
-  return { action: 'revoke_credits' };
-}
-
-
 async function expireSubscription(supabase, userId) {
   if (isTestAccount(userId)) return;
 
@@ -169,22 +81,6 @@ async function expireSubscription(supabase, userId) {
     .eq('id', userId);
 
   if (error) throw new Error('Failed to expire subscription: ' + error.message);
-}
-
-async function saveSubscriptionIds(supabase, { userId, customerId, subscriptionId }) {
-  const updates = {};
-  if (customerId)     updates.paddle_customer_id     = customerId;
-  if (subscriptionId) updates.paddle_subscription_id = subscriptionId;
-  if (Object.keys(updates).length === 0) return;
-
-  const { error } = await supabase
-    .from('profiles')
-    .update(updates)
-    .eq('id', userId);
-
-  if (error) {
-    console.error('[paddle/webhook] Failed to save Paddle IDs for userId=' + userId + ':', error.message);
-  }
 }
 
 // ── Tests ──
@@ -217,234 +113,6 @@ describe('verifyPaddleSignature', () => {
   test('ts 또는 h1 필드가 없으면 false를 반환해야 한다', () => {
     expect(verifyPaddleSignature(SECRET, BODY, 'ts=1700000000')).toBe(false);
     expect(verifyPaddleSignature(SECRET, BODY, 'h1=abc123')).toBe(false);
-  });
-});
-
-describe('grantCreditsForPurchase', () => {
-  test('정상 구매 시 purchases 삽입 후 grant_credits RPC를 호출해야 한다', async () => {
-    const supabase = makeSupabaseMock();
-    await grantCreditsForPurchase(supabase, 'txn_001', 'user-uuid', 'pro');
-
-    expect(supabase.from).toHaveBeenCalledWith('purchases');
-    expect(supabase.rpc).toHaveBeenCalledWith('grant_credits', {
-      p_user_id: 'user-uuid',
-      p_plan: 'pro',
-      p_amount: 1000
-    });
-  });
-
-  test('enterprise 플랜은 4000 크레딧을 지급해야 한다', async () => {
-    const supabase = makeSupabaseMock();
-    await grantCreditsForPurchase(supabase, 'txn_002', 'user-uuid', 'enterprise');
-
-    expect(supabase.rpc).toHaveBeenCalledWith('grant_credits', expect.objectContaining({ p_amount: 4000 }));
-  });
-
-  test('중복 transaction_id(23505)이면 RPC 없이 조용히 종료해야 한다', async () => {
-    const supabase = makeSupabaseMock({ insertError: { code: '23505', message: 'duplicate key' } });
-    await expect(grantCreditsForPurchase(supabase, 'txn_dup', 'user-uuid', 'pro')).resolves.toBeUndefined();
-    expect(supabase.rpc).not.toHaveBeenCalled();
-  });
-
-  test('INSERT 실패(비-중복 에러)이면 예외를 던져야 한다', async () => {
-    const supabase = makeSupabaseMock({ insertError: { code: '42501', message: 'permission denied' } });
-    await expect(grantCreditsForPurchase(supabase, 'txn_003', 'user-uuid', 'pro'))
-      .rejects.toThrow('Failed to insert purchase record');
-  });
-
-  test('grant_credits RPC 실패 시 예외를 던져야 한다', async () => {
-    const supabase = makeSupabaseMock({ rpcError: { message: 'USER_NOT_FOUND' } });
-    await expect(grantCreditsForPurchase(supabase, 'txn_004', 'user-uuid', 'pro'))
-      .rejects.toThrow('grant_credits RPC failed');
-  });
-});
-
-describe('revokeCreditsForRefund', () => {
-  test('purchases 레코드가 없으면 조용히 종료해야 한다', async () => {
-    const supabase = makeSupabaseMock({ selectData: null, selectError: { message: 'not found' } });
-    await expect(revokeCreditsForRefund(supabase, 'txn_unknown')).resolves.toBeUndefined();
-    expect(supabase.rpc).not.toHaveBeenCalled();
-  });
-
-  test('이미 refunded 상태이면 중복 처리하지 않아야 한다', async () => {
-    const supabase = makeSupabaseMock({
-      selectData: { id: 1, user_id: 'user-uuid', credits_granted: 1000, status: 'refunded' }
-    });
-    await expect(revokeCreditsForRefund(supabase, 'txn_already')).resolves.toBeUndefined();
-    expect(supabase.rpc).not.toHaveBeenCalled();
-  });
-
-  test('정상 환불 시 status를 refunded로 업데이트하고 revoke_credits RPC를 호출해야 한다', async () => {
-    const supabase = makeSupabaseMock({
-      selectData: { id: 42, user_id: 'user-uuid', credits_granted: 1000, status: 'completed' }
-    });
-    await revokeCreditsForRefund(supabase, 'txn_refund');
-
-    expect(supabase.rpc).toHaveBeenCalledWith('revoke_credits', {
-      p_user_id: 'user-uuid',
-      p_amount: 1000
-    });
-  });
-
-  test('revoke_credits RPC 실패 시 예외를 던져야 한다', async () => {
-    const supabase = makeSupabaseMock({
-      selectData: { id: 5, user_id: 'user-uuid', credits_granted: 4000, status: 'completed' },
-      rpcError: { message: 'USER_NOT_FOUND' }
-    });
-    await expect(revokeCreditsForRefund(supabase, 'txn_rpc_fail'))
-      .rejects.toThrow('revoke_credits RPC failed');
-  });
-});
-
-// ── Chainable mock for plan_upgrade refund (purchase lookup + prior-row + rpc) ──
-function makeRefundMock({ purchase = null, priorRow = null, priorError = null, revertResult = null, revertError = null }) {
-  const updateEqFn = jest.fn().mockResolvedValue({ error: null });
-  const updateFn = jest.fn().mockReturnValue({ eq: updateEqFn });
-  const rpcFn = jest.fn().mockResolvedValue({ data: revertResult, error: revertError });
-  const singleFn = jest.fn().mockResolvedValue({ data: purchase, error: purchase ? null : { message: 'not found' } });
-  const maybeSingleFn = jest.fn().mockResolvedValue({ data: priorRow, error: priorError });
-
-  const fromFn = jest.fn().mockImplementation(() => ({
-    select: jest.fn().mockImplementation(() => {
-      const chain = {
-        eq: jest.fn(() => chain),
-        lt: jest.fn(() => chain),
-        order: jest.fn(() => chain),
-        limit: jest.fn(() => chain),
-        single: singleFn,
-        maybeSingle: maybeSingleFn
-      };
-      return chain;
-    }),
-    update: updateFn
-  }));
-
-  return { from: fromFn, rpc: rpcFn, _rpcFn: rpcFn, _updateFn: updateFn, _updateEqFn: updateEqFn, _maybeSingleFn: maybeSingleFn };
-}
-
-describe('derivePreviousPlan', () => {
-  test('subscriptionId가 없으면 쿼리 없이 free를 반환해야 한다', async () => {
-    const supabase = makeRefundMock({});
-    const plan = await derivePreviousPlan(supabase, { subscriptionId: null, beforeCreatedAt: '2026-01-01', beforeId: 5 });
-    expect(plan).toBe('free');
-    expect(supabase.from).not.toHaveBeenCalled();
-  });
-
-  test('직전 원장 행이 있으면 그 plan을 반환해야 한다 (Pro→Ent: 직전=pro)', async () => {
-    const supabase = makeRefundMock({ priorRow: { plan: 'pro', created_at: '2026-01-01', id: 1 } });
-    const plan = await derivePreviousPlan(supabase, { subscriptionId: 'sub_1', beforeCreatedAt: '2026-02-01', beforeId: 9 });
-    expect(plan).toBe('pro');
-  });
-
-  test('직전 행이 없으면 free를 반환해야 한다 (Free→Ent: 직전 없음)', async () => {
-    const supabase = makeRefundMock({ priorRow: null });
-    const plan = await derivePreviousPlan(supabase, { subscriptionId: 'sub_1', beforeCreatedAt: '2026-02-01', beforeId: 9 });
-    expect(plan).toBe('free');
-  });
-
-  test('쿼리 에러 시 free로 폴백해야 한다', async () => {
-    const supabase = makeRefundMock({ priorError: { message: 'db error' } });
-    const plan = await derivePreviousPlan(supabase, { subscriptionId: 'sub_1', beforeCreatedAt: '2026-02-01', beforeId: 9 });
-    expect(plan).toBe('free');
-  });
-});
-
-describe('revokeCreditsForRefund — plan_upgrade 자동 복원', () => {
-  const ENT_PURCHASE = {
-    id: 42, user_id: 'user-uuid', credits_granted: 4000, status: 'completed',
-    transaction_type: 'plan_upgrade', subscription_id: 'sub_1', created_at: '2026-02-01'
-  };
-
-  test('미사용 전액환불(Pro→Ent): previous_plan=pro, allotment=1000으로 revert_plan_change 호출 + refunded 마킹', async () => {
-    const supabase = makeRefundMock({
-      purchase: ENT_PURCHASE,
-      priorRow: { plan: 'pro', created_at: '2026-01-01', id: 1 },
-      revertResult: { success: true, plan_restored: true, reason: 'restored', new_balance: 1000 }
-    });
-    await revokeCreditsForRefund(supabase, 'txn_ent', 'full');
-
-    expect(supabase._rpcFn).toHaveBeenCalledWith('revert_plan_change', {
-      p_user_id: 'user-uuid',
-      p_previous_plan: 'pro',
-      p_previous_allotment: 1000,
-      p_granted: 4000
-    });
-    expect(supabase._updateFn).toHaveBeenCalledWith({ status: 'refunded' });
-  });
-
-  test('미사용 전액환불(Free→Ent): 직전행 없음 → previous_plan=free, allotment=0', async () => {
-    const supabase = makeRefundMock({
-      purchase: ENT_PURCHASE,
-      priorRow: null,
-      revertResult: { success: true, plan_restored: true, reason: 'restored', new_balance: 0 }
-    });
-    await revokeCreditsForRefund(supabase, 'txn_ent', 'full');
-
-    expect(supabase._rpcFn).toHaveBeenCalledWith('revert_plan_change', expect.objectContaining({
-      p_previous_plan: 'free',
-      p_previous_allotment: 0,
-      p_granted: 4000
-    }));
-  });
-
-  test('부분환불(type=partial)은 revert_plan_change 호출 안 하고 스킵해야 한다', async () => {
-    const supabase = makeRefundMock({ purchase: ENT_PURCHASE });
-    const res = await revokeCreditsForRefund(supabase, 'txn_ent', 'partial');
-
-    expect(res).toEqual({ action: 'partial_skip' });
-    expect(supabase._rpcFn).not.toHaveBeenCalled();
-    expect(supabase._updateFn).not.toHaveBeenCalled();
-  });
-
-  test('type 누락(undefined)도 partial로 간주해 스킵해야 한다', async () => {
-    const supabase = makeRefundMock({ purchase: ENT_PURCHASE });
-    const res = await revokeCreditsForRefund(supabase, 'txn_ent', undefined);
-
-    expect(res).toEqual({ action: 'partial_skip' });
-    expect(supabase._rpcFn).not.toHaveBeenCalled();
-  });
-
-  test('크레딧 사용됨(credits_used): plan 복원 안 되고 refunded 마킹도 안 함 (정책위반)', async () => {
-    const supabase = makeRefundMock({
-      purchase: ENT_PURCHASE,
-      priorRow: { plan: 'pro', created_at: '2026-01-01', id: 1 },
-      revertResult: { success: true, plan_restored: false, reason: 'credits_used', new_balance: 3999 }
-    });
-    await revokeCreditsForRefund(supabase, 'txn_ent', 'full');
-
-    expect(supabase._rpcFn).toHaveBeenCalledTimes(1);
-    expect(supabase._updateFn).not.toHaveBeenCalled();
-  });
-
-  test('이미 free 계정(account_free): plan 복원 안 되고 refunded 마킹도 안 함', async () => {
-    const supabase = makeRefundMock({
-      purchase: ENT_PURCHASE,
-      priorRow: { plan: 'pro', created_at: '2026-01-01', id: 1 },
-      revertResult: { success: true, plan_restored: false, reason: 'account_free', new_balance: 0 }
-    });
-    await revokeCreditsForRefund(supabase, 'txn_ent', 'full');
-
-    expect(supabase._updateFn).not.toHaveBeenCalled();
-  });
-
-  test('revert_plan_change RPC 실패 시 예외를 던져야 한다', async () => {
-    const supabase = makeRefundMock({
-      purchase: ENT_PURCHASE,
-      priorRow: { plan: 'pro', created_at: '2026-01-01', id: 1 },
-      revertError: { message: 'USER_NOT_FOUND' }
-    });
-    await expect(revokeCreditsForRefund(supabase, 'txn_ent', 'full'))
-      .rejects.toThrow('revert_plan_change RPC failed');
-  });
-
-  test('grant 행(transaction_type=null)은 기존 revoke_credits 경로 유지 (revert 미호출)', async () => {
-    const supabase = makeRefundMock({
-      purchase: { id: 7, user_id: 'user-uuid', credits_granted: 1000, status: 'completed', transaction_type: null, subscription_id: 'sub_1', created_at: '2026-02-01' }
-    });
-    await revokeCreditsForRefund(supabase, 'txn_grant', 'full');
-
-    expect(supabase._rpcFn).toHaveBeenCalledWith('revoke_credits', { p_user_id: 'user-uuid', p_amount: 1000 });
-    expect(supabase._rpcFn).not.toHaveBeenCalledWith('revert_plan_change', expect.anything());
   });
 });
 
@@ -525,11 +193,11 @@ describe('saveSubscriptionIds', () => {
     expect(supabase.from).not.toHaveBeenCalled();
   });
 
-  test('UPDATE 실패해도 예외를 던지지 않아야 한다', async () => {
+  test('UPDATE 실패 시 durable webhook 재시도를 위해 예외를 던져야 한다', async () => {
     const supabase = makeSupabaseMock({ updateError: { message: 'db error' } });
     await expect(
       saveSubscriptionIds(supabase, { userId: USER_ID, customerId: CUSTOMER_ID, subscriptionId: SUBSCRIPTION_ID })
-    ).resolves.toBeUndefined();
+    ).rejects.toThrow('Failed to save Paddle subscription IDs');
   });
 });
 
@@ -591,38 +259,6 @@ describe('recordPlanUpgradePurchase', () => {
   });
 });
 
-describe('revokeCreditsForRefund — plan_upgrade skip 가드', () => {
-  test('transaction_type=plan_upgrade이면 revoke_credits를 호출하지 않아야 한다(no-op)', async () => {
-    const supabase = makeSupabaseMock({
-      selectData: { id: 10, user_id: 'user-uuid', credits_granted: 4000, status: 'completed', transaction_type: 'plan_upgrade' }
-    });
-    await revokeCreditsForRefund(supabase, 'txn_upgrade_refund');
-
-    expect(supabase.rpc).not.toHaveBeenCalled();
-  });
-
-  test('plan_upgrade 스킵 시 status를 refunded로 바꾸지 않아야 한다', async () => {
-    const supabase = makeSupabaseMock({
-      selectData: { id: 10, user_id: 'user-uuid', credits_granted: 4000, status: 'completed', transaction_type: 'plan_upgrade' }
-    });
-    await revokeCreditsForRefund(supabase, 'txn_upgrade_refund');
-
-    expect(supabase._updateFn).not.toHaveBeenCalled();
-  });
-
-  test('transaction_type=null(신규구매) 환불은 기존 revoke_credits(plan→free) 경로를 그대로 타야 한다', async () => {
-    const supabase = makeSupabaseMock({
-      selectData: { id: 42, user_id: 'user-uuid', credits_granted: 1000, status: 'completed', transaction_type: null }
-    });
-    await revokeCreditsForRefund(supabase, 'txn_grant_refund');
-
-    expect(supabase.rpc).toHaveBeenCalledWith('revoke_credits', {
-      p_user_id: 'user-uuid',
-      p_amount: 1000
-    });
-  });
-});
-
 describe('isTestAccount (env 파싱)', () => {
   test('목록에 있는 user_id는 true', () => {
     expect(isTestAccount('u1', 'u1,u2')).toBe(true);
@@ -670,14 +306,6 @@ describe('테스트 계정 화이트리스트 — mutation 스킵', () => {
     else process.env.TEST_ACCOUNT_USER_IDS = ORIGINAL;
   });
 
-  test('grantCreditsForPurchase: 원장 INSERT는 하되 grant_credits RPC는 스킵', async () => {
-    const supabase = makeSupabaseMock();
-    await grantCreditsForPurchase(supabase, 'txn_wl', WL, 'pro');
-
-    expect(supabase.from).toHaveBeenCalledWith('purchases'); // 원장 기록 유지
-    expect(supabase.rpc).not.toHaveBeenCalled();              // 크레딧 mutation 스킵
-  });
-
   test('applyPlanChange(실제 함수): apply_plan_change RPC 스킵하고 null 반환', async () => {
     const supabase = makeSupabaseMock();
     const result = await applyPlanChange(supabase, WL, 'enterprise');
@@ -691,17 +319,6 @@ describe('테스트 계정 화이트리스트 — mutation 스킵', () => {
     await expireSubscription(supabase, WL);
 
     expect(supabase.from).not.toHaveBeenCalled();
-  });
-
-  test('revokeCreditsForRefund: 화이트리스트 계정이면 환불 mutation 스킵', async () => {
-    const supabase = makeSupabaseMock({
-      selectData: { id: 1, user_id: WL, credits_granted: 4000, status: 'completed', transaction_type: 'plan_upgrade' }
-    });
-    const res = await revokeCreditsForRefund(supabase, 'txn_wl_refund', 'full');
-
-    expect(res).toEqual({ action: 'test_account_skip' });
-    expect(supabase.rpc).not.toHaveBeenCalled();
-    expect(supabase._updateFn).not.toHaveBeenCalled();
   });
 
   test('화이트리스트가 아닌 계정은 정상 mutation (apply_plan_change 호출)', async () => {
