@@ -1,13 +1,25 @@
 require('dotenv').config();
 const express = require('express');
+const fs = require('fs');
 const path = require('path');
 const { createClient } = require('@supabase/supabase-js');
 const rateLimit = require('express-rate-limit');
 const logger = require('./lib/logger');
 const { getPublicProductCatalog } = require('./lib/product-catalog');
+const {
+  getAssetVersion,
+  renderVersionedHtml,
+  setStaticCacheHeaders
+} = require('./lib/static-assets');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+const indexHtmlTemplate = fs.readFileSync(path.join(__dirname, 'public', 'index.html'), 'utf8');
+
+function sendVersionedIndex(req, res) {
+  res.setHeader('Cache-Control', 'no-cache, must-revalidate');
+  res.type('html').send(renderVersionedHtml(indexHtmlTemplate, getAssetVersion()));
+}
 
 /* ── Trust Proxy (Railway/reverse proxy 환경) ── */
 app.set('trust proxy', 1);
@@ -96,7 +108,11 @@ app.use((req, res, next) => {
   next();
 });
 
-app.use(express.static('public'));
+app.get(['/', '/index.html'], sendVersionedIndex);
+app.use(express.static('public', {
+  index: false,
+  setHeaders: setStaticCacheHeaders
+}));
 
 const analyzeRouter = require('./routes/analyze');
 const paymentRouter = require('./routes/payment');
@@ -325,7 +341,7 @@ app.get('/storyboard/:id', (req, res) => {
 });
 
 app.get('*', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+  sendVersionedIndex(req, res);
 });
 
 app.use((err, req, res, next) => {

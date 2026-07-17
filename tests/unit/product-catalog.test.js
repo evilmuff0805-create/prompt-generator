@@ -146,4 +146,9 @@ describe('public sales-copy regression gate', () => {
     expect(browserApp).toContain('hydrateProductCatalog(productCatalog)');
     expect(browserApp).toContain('catalog?.paddle?.priceIds?.[plan]');
   });
+
+  test('landing code assets use the deployment version placeholder', () => {
+    expect(indexHtml).toContain('/js/changePlan-helpers.js?v=__ASSET_VERSION__');
+    expect(indexHtml).toContain('/app.js?v=__ASSET_VERSION__');
+  });
 });
