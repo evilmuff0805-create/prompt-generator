@@ -26,6 +26,46 @@ test.describe('Health & Page Load', () => {
     await expect(page.locator('#analyzeBtn')).toBeVisible();
   });
 
+  test('랜딩 히어로가 핵심 메시지와 생성 CTA를 노출해야 한다', async ({ page }) => {
+    await page.goto('/');
+
+    await expect(page.locator('.hero__title')).toContainText('See the image.');
+    await expect(page.locator('.hero__title')).toContainText('Direct the result.');
+    await expect(page.locator('.hero-demo')).toBeVisible();
+    await expect(page.locator('.btn--hero')).toHaveAttribute('href', '#upload-section');
+  });
+
+  test('모바일 내비게이션은 상태를 알리고 스크롤을 잠근 뒤 Escape로 닫혀야 한다', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto('/');
+
+    const hamburger = page.locator('#hamburger');
+    const navMenu = page.locator('#navMenu');
+
+    await expect(hamburger).toBeVisible();
+    await expect(hamburger).toHaveAttribute('aria-expanded', 'false');
+    await hamburger.click();
+    await expect(hamburger).toHaveAttribute('aria-expanded', 'true');
+    await expect(navMenu).toHaveClass(/open/);
+    await expect(page.locator('body')).toHaveClass(/nav-open/);
+    const menuBox = await navMenu.boundingBox();
+    expect(menuBox).not.toBeNull();
+    expect(menuBox.width).toBeGreaterThanOrEqual(389);
+    expect(menuBox.height).toBeGreaterThanOrEqual(843);
+
+    await page.keyboard.press('Escape');
+    await expect(hamburger).toHaveAttribute('aria-expanded', 'false');
+    await expect(page.locator('body')).not.toHaveClass(/nav-open/);
+  });
+
+  test('reduced motion 환경에서는 히어로 반복 애니메이션을 중지해야 한다', async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await page.goto('/');
+
+    await expect(page.locator('.scene__scan')).toHaveCSS('animation-name', 'none');
+    await expect(page.locator('.hero__aurora--mint')).toHaveCSS('animation-name', 'none');
+  });
+
   test('인증 없이 /api/analyze POST는 401을 반환해야 한다', async ({ request }) => {
     const res = await request.post('/api/analyze');
     expect(res.status()).toBe(401);
