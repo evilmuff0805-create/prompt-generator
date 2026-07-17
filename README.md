@@ -12,6 +12,18 @@ PromptGen is a Node.js/Express application that turns images and scenarios into 
 
 Never expose `SUPABASE_SERVICE_ROLE_KEY`, Paddle secrets, AI API keys, or alert webhook URLs to browser code.
 
+## Environment contract
+
+The environment is classified in `.env.example` and enforced by `lib/environment.js`:
+
+| Class | Variables | Startup behavior |
+| --- | --- | --- |
+| Required at startup | `OPENAI_API_KEY`, `OPENAI_TEXT_MODEL` | Missing values fail before the HTTP server binds. These values already made the loaded Storyboard/OpenAI path fail, so the validation only makes the existing requirement explicit. |
+| Required by feature | Supabase URL/keys, `GEMINI_API_KEY`, Paddle API/webhook/price IDs | Missing names are logged once as `environment.features_unavailable`; no secret values are logged. |
+| Optional/defaulted | Models, ports, worker, cleanup, pricing display, alert, and retention tuning | Code defaults are mirrored in `.env.example`. |
+
+Set `ENV_VALIDATION_STRICT_FEATURES=true` only after all feature-required variables are confirmed in the deployment environment. In that mode any unavailable product area also fails before the server binds. `SUPABASE_ANON_KEY` is the browser-compatible publishable/legacy anon key; `SUPABASE_SERVICE_ROLE_KEY` remains backend-only because it bypasses RLS.
+
 ## Validation
 
 - Full clean-clone gate: `npm test`

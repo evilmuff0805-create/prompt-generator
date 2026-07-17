@@ -1,5 +1,9 @@
 ## PromptGen AI - 세션 진행 로그
 
+> Historical session log. The current provider baseline (2026-07-17) uses
+> Gemini for Image to Prompt and OpenAI for Storyboard/moderation. Groq runtime
+> code and dependency were removed; Groq references below describe past state.
+
 ---
 
 ### 세션 1 (2026-04-30): 초기 분석 + 하네스 엔지니어링 적용
