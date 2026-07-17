@@ -6,6 +6,7 @@ const { createClient } = require('@supabase/supabase-js');
 const { analyzeImage } = require('../services/geminiService');
 const { recordServerEvent } = require('../lib/product-analytics');
 const authMiddleware = require('../middleware/auth');
+const { ANALYSIS_CREDIT_COST, isPaidPlan } = require('../lib/product-catalog');
 
 const router = express.Router();
 
@@ -124,9 +125,9 @@ router.post('/analyze', authMiddleware, upload.single('image'), async (req, res,
     }
 
     // Check limits
-    const isPaidPlan = ['pro', 'enterprise', 'paid'].includes(profile.plan);
+    const paidPlan = isPaidPlan(profile.plan);
 
-    if (!isPaidPlan && dailyUsed >= 1) {
+    if (!paidPlan && dailyUsed >= 1) {
       return res.status(403).json({
         success: false,
         error: '무료 플랜의 일일 생성 한도에 도달했습니다.',
@@ -134,7 +135,7 @@ router.post('/analyze', authMiddleware, upload.single('image'), async (req, res,
       });
     }
 
-    if (isPaidPlan && (profile.credits || 0) < 10) {
+    if (paidPlan && (profile.credits || 0) < ANALYSIS_CREDIT_COST) {
       return res.status(403).json({
         success: false,
         error: 'Not enough credits',
@@ -154,9 +155,9 @@ router.post('/analyze', authMiddleware, upload.single('image'), async (req, res,
     const result = await analyzeImage(base64Image, mimeType);
 
     // 원자적 크레딧 차감 (레이스 컨디션 방지)
-    if (isPaidPlan) {
+    if (paidPlan) {
       const { data: remaining, error: rpcError } = await adminClient
-        .rpc('deduct_credits', { p_user_id: req.user.id, p_amount: 10 });
+        .rpc('deduct_credits', { p_user_id: req.user.id, p_amount: ANALYSIS_CREDIT_COST });
       if (rpcError) {
         console.error('[analyze] deduct_credits RPC error:', rpcError.message);
         return res.status(500).json({ success: false, error: 'Failed to deduct credits' });
@@ -202,7 +203,7 @@ router.post('/analyze', authMiddleware, upload.single('image'), async (req, res,
       userId: req.user.id,
       properties: {
         plan: profile.plan || 'free',
-        creditsCharged: isPaidPlan ? 10 : 0
+        creditsCharged: paidPlan ? ANALYSIS_CREDIT_COST : 0
       }
     });
 

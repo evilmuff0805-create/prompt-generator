@@ -36,8 +36,8 @@
    * Uses LEAST(currentCredits, targetPlanLimit) — mirrors apply_plan_change RPC.
    * Returns { show, from, to }.
    */
-  function calcCreditWarning(currentCredits, targetPlan) {
-    const limit = PLAN_CREDIT_LIMIT[targetPlan];
+  function calcCreditWarning(currentCredits, targetPlan, catalogLimit) {
+    const limit = Number.isFinite(catalogLimit) ? catalogLimit : PLAN_CREDIT_LIMIT[targetPlan];
     if (limit === undefined) return { show: false, from: currentCredits, to: currentCredits };
     const to = Math.min(currentCredits, limit);
     return { show: to < currentCredits, from: currentCredits, to };

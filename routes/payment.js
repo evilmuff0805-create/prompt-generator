@@ -4,6 +4,7 @@ const express = require('express');
 const router = express.Router();
 const { createClient } = require('@supabase/supabase-js');
 const authMiddleware = require('../middleware/auth');
+const { getPaddlePriceId } = require('../lib/product-catalog');
 
 const PADDLE_API_BASE = process.env.PADDLE_API_BASE || 'https://api.paddle.com';
 
@@ -24,9 +25,7 @@ function extractPortalUrl(paddleResponse, subscriptionId) {
 // share a single source of truth (env). NEVER trust a client-supplied price ID
 // for a money-moving call — the client only sends the plan name.
 function planToPriceId(plan) {
-  if (plan === 'pro')        return process.env.PADDLE_PRO_PRICE_ID || null;
-  if (plan === 'enterprise') return process.env.PADDLE_ENTERPRISE_PRICE_ID || null;
-  return null;
+  return getPaddlePriceId(plan);
 }
 
 /* ── Build the Paddle subscription-update request body ── */

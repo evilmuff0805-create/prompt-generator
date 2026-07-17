@@ -7,11 +7,13 @@
   // Storyboard credit cost for display. Safe default matches the backend env
   // fallback; overwritten by /api/storyboard/config so env changes need no deploy.
   let storyboardCost = 120;
+  let productCatalog = null;
 
   async function loadConfig() {
     const cfg = await StoryboardAPI.getConfig();
     if (cfg && typeof cfg.storyboardCost === 'number') {
       storyboardCost = cfg.storyboardCost;
+      productCatalog = cfg.catalog || null;
       document.querySelectorAll('.sb-cost-value').forEach(el => {
         el.textContent = String(storyboardCost);
       });
@@ -20,7 +22,7 @@
   }
 
   async function init() {
-    loadConfig(); // fire-and-forget: display-only, must not block first render
+    await loadConfig();
 
     // Navbar scroll
     window.addEventListener('scroll', () => {
@@ -136,17 +138,17 @@
     const badgeEl = document.getElementById('sbPlanBadge');
     const usageEl = document.getElementById('sbUsageDisplay');
 
-    const planLabels = { free: 'Free', pro: 'Pro', enterprise: 'Enterprise', paid: 'Pro' };
     const planKey = (profile.plan || 'free').toLowerCase();
+    const catalogKey = planKey === 'paid' ? 'pro' : planKey;
+    const catalogPlan = productCatalog?.plans?.[catalogKey] || null;
     if (nameEl) nameEl.textContent = profile.user?.full_name || profile.user?.email || '';
     if (badgeEl) {
-      badgeEl.textContent = planLabels[planKey] || 'Free';
+      badgeEl.textContent = catalogPlan?.name || (planKey === 'paid' ? 'Pro' : planKey.replace(/^./, c => c.toUpperCase()));
       const badgeClass = planKey === 'enterprise' ? 'enterprise' : (planKey === 'free' ? 'free' : 'pro');
       badgeEl.className = `plan-badge plan-badge--${badgeClass}`;
     }
     if (usageEl) {
-      const totals = { enterprise: 4000, pro: 1000, paid: 1000 };
-      const total = totals[planKey] || 0;
+      const total = Number(catalogPlan?.credits) || 0;
       usageEl.textContent = total > 0
         ? `Credits: ${(profile.credits || 0).toLocaleString()} / ${total.toLocaleString()}`
         : `Today ${profile.daily_used ?? 0}/1 used`;

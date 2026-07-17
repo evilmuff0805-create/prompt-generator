@@ -13,6 +13,7 @@ const { moderateContent } = require('../lib/moderation');
 const jobStore = require('../lib/storyboard-job-store');
 const storyboardWorker = require('../lib/storyboard-worker');
 const { recordServerEvent } = require('../lib/product-analytics');
+const { getStoryboardCreditCost, getPublicProductCatalog } = require('../lib/product-catalog');
 
 // Multer: memory storage, 10MB limit
 function createStoryboardUpload(options = {}) {
@@ -65,7 +66,7 @@ function getAdminClient() {
 // the actual deduction (/generate) AND the UI display (/config), so changing
 // STORYBOARD_CREDIT_COST in the environment updates both together.
 function getStoryboardCost() {
-  return parseInt(process.env.STORYBOARD_CREDIT_COST || '120', 10);
+  return getStoryboardCreditCost();
 }
 
 function validateInput(body) {
@@ -123,7 +124,12 @@ function estimateRemaining(sb) {
 // GET /config — public UI config (no auth: the plan gate shows the cost to
 // logged-out users too). Cost comes from the same helper /generate deducts with.
 router.get('/config', (req, res) => {
-  res.json({ success: true, storyboardCost: getStoryboardCost() });
+  const catalog = getPublicProductCatalog();
+  res.json({
+    success: true,
+    storyboardCost: catalog.storyboardCreditCost,
+    catalog
+  });
 });
 
 // POST /generate
