@@ -201,6 +201,25 @@ describe('page integration and legal parity', () => {
     expect(html).toContain('Last Updated: July 18, 2026');
   });
 
+  test.each(LEGAL_FILES)('%s deploy-versions every local stylesheet and script', file => {
+    const html = fs.readFileSync(path.join(ROOT, 'public', file), 'utf8');
+    const localAssets = [
+      ...html.matchAll(/<(?:script|link)[^>]+(?:src|href)="(\/[^"#]+)"/g)
+    ].map(match => match[1]);
+    expect(localAssets.length).toBeGreaterThan(0);
+    expect(localAssets.filter(asset => !asset.includes('?v=__ASSET_VERSION__'))).toEqual([]);
+  });
+
+  test('the server renders legal pages before the static-file handler', () => {
+    const serverSource = fs.readFileSync(path.join(ROOT, 'server.js'), 'utf8');
+    const legalRoute = "app.get(['/terms.html', '/privacy.html', '/refund.html']";
+    expect(serverSource).toContain(legalRoute);
+    expect(serverSource.indexOf(legalRoute)).toBeLessThan(serverSource.indexOf("app.use(express.static('public'"));
+    for (const file of LEGAL_FILES) {
+      expect(serverSource).toContain(`['${file}', fs.readFileSync`);
+    }
+  });
+
   test('each translated legal page preserves commercial, retention and refund facts', () => {
     const previousWindow = global.window;
     global.window = {};

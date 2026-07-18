@@ -105,6 +105,9 @@ test.describe('Health & Page Load', () => {
   test('법적 페이지(refund)가 접근 가능해야 한다', async ({ page }) => {
     const res = await page.goto('/refund.html');
     expect(res.status()).toBe(200);
+    const html = await res.text();
+    expect(html).not.toContain('__ASSET_VERSION__');
+    expect(html).toMatch(/\/i18n\/legal-content\.js\?v=[a-zA-Z0-9._-]+/);
   });
 });
 
