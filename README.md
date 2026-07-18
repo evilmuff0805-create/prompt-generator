@@ -24,6 +24,8 @@ The environment is classified in `.env.example` and enforced by `lib/environment
 
 Set `ENV_VALIDATION_STRICT_FEATURES=true` only after all feature-required variables are confirmed in the deployment environment. In that mode any unavailable product area also fails before the server binds. `SUPABASE_ANON_KEY` is the browser-compatible publishable/legacy anon key; `SUPABASE_SERVICE_ROLE_KEY` remains backend-only because it bypasses RLS.
 
+Storyboard text generation targets `gpt-5.6-luna` with `OPENAI_TEXT_REASONING_EFFORT=medium` and a strict JSON schema. Image to Prompt and Storyboard grid generation keep their independent Gemini and `OPENAI_IMAGE_MODEL` routes. To roll back the Storyboard text model, restore the previous verified `OPENAI_TEXT_MODEL` value and redeploy; no code change or stored-data migration is required.
+
 ## Validation
 
 - Full clean-clone gate: `npm test`
