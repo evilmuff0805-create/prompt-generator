@@ -22,6 +22,7 @@
     'nav.action.logout': 'ログアウト',
     'nav.action.history': '履歴を見る',
     'nav.action.manageSubscription': 'サブスクリプション管理',
+    'nav.action.accountMenu': 'アカウントメニュー',
     'nav.action.open': 'ナビゲーションを開く',
     'nav.action.toggle': 'メニューを開閉',
     'common.action.close': '閉じる',

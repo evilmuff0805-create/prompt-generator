@@ -24,6 +24,7 @@
     'nav.action.logout': '로그아웃',
     'nav.action.history': '기록 보기',
     'nav.action.manageSubscription': '구독 관리',
+    'nav.action.accountMenu': '계정 메뉴',
     'nav.action.open': '내비게이션 열기',
     'nav.action.toggle': '메뉴 열기/닫기',
     'common.action.close': '닫기',
