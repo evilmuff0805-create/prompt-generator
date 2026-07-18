@@ -17,9 +17,24 @@ const APP_HTML = [
   'storyboard-result.html'
 ];
 const ALL_HTML = [...APP_HTML, 'terms.html', 'privacy.html', 'refund.html'];
+const LEGAL_FILES = ['terms.html', 'privacy.html', 'refund.html'];
+const OPERATOR_DETAILS = ['codemeet', 'yerim suk', '470-32-01835'];
+const LEGAL_UPDATED_DATE = Object.freeze({
+  ko: '2026년 7월 18일',
+  ja: '2026年7月18日',
+  'zh-CN': '2026年7月18日',
+  fr: '18 juillet 2026',
+  ru: '18 июля 2026 г.'
+});
 
 function catalog(locale) {
   return locale === 'en' ? english : require(`../../public/i18n/locales/${locale}`);
+}
+
+function operatorBlock(html) {
+  const blocks = html.match(/<section\s*class="operator-details">[\s\S]*?<\/section>/g) || [];
+  expect(blocks).toHaveLength(1);
+  return blocks[0];
 }
 
 function variables(message) {
@@ -176,6 +191,15 @@ describe('page integration and legal parity', () => {
     expect(i18nInitIndex).toBeLessThan(thirdPartyIndex);
   });
 
+  test.each(LEGAL_FILES)('%s publishes the exact service operator details', file => {
+    const html = fs.readFileSync(path.join(ROOT, 'public', file), 'utf8');
+    const disclosure = operatorBlock(html);
+    for (const detail of OPERATOR_DETAILS) {
+      expect(disclosure).toContain(detail);
+    }
+    expect(html).toContain('Last Updated: July 18, 2026');
+  });
+
   test('each translated legal page preserves commercial, retention and refund facts', () => {
     const previousWindow = global.window;
     global.window = {};
@@ -193,6 +217,11 @@ describe('page integration and legal parity', () => {
       for (const fact of ['1000', '4000', '14']) expect(refund).toContain(fact);
       expect(refund).toContain('https://www.paddle.com/legal/refund-policy');
       for (const html of [terms, privacy, refund]) {
+        const disclosure = operatorBlock(html);
+        for (const detail of OPERATOR_DETAILS) {
+          expect(disclosure).toContain(detail.replace(/[\s,]/g, ''));
+        }
+        expect(html).toContain(LEGAL_UPDATED_DATE[locale].replace(/[\s,]/g, ''));
         expect(html).not.toMatch(/<script|onerror=|onload=/i);
       }
     }

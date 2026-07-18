@@ -1,12 +1,66 @@
 (function () {
   'use strict';
 
+  const operatorDetails = Object.freeze({
+    businessName: 'codemeet',
+    representative: 'yerim suk',
+    registrationNumber: '470-32-01835'
+  });
+
+  const operatorLabels = Object.freeze({
+    ko: Object.freeze({
+      heading: '서비스 운영자 정보',
+      businessName: '사업자',
+      representative: '대표자',
+      registrationNumber: '사업자등록번호'
+    }),
+    ja: Object.freeze({
+      heading: 'サービス運営者情報',
+      businessName: '事業者',
+      representative: '代表者',
+      registrationNumber: '事業者登録番号'
+    }),
+    'zh-CN': Object.freeze({
+      heading: '服务运营方信息',
+      businessName: '经营者',
+      representative: '代表人',
+      registrationNumber: '企业登记号'
+    }),
+    fr: Object.freeze({
+      heading: 'Informations sur l’exploitant du service',
+      businessName: 'Nom commercial',
+      representative: 'Représentant',
+      registrationNumber: 'Numéro d’immatriculation de l’entreprise'
+    }),
+    ru: Object.freeze({
+      heading: 'Сведения об операторе сервиса',
+      businessName: 'Наименование компании',
+      representative: 'Представитель',
+      registrationNumber: 'Регистрационный номер компании'
+    })
+  });
+
+  function operatorDetailsHtml(locale) {
+    const labels = operatorLabels[locale];
+    return `
+      <section class="operator-details">
+        <h2>${labels.heading}</h2>
+        <p>
+          <strong>${labels.businessName}:</strong> ${operatorDetails.businessName}<br />
+          <strong>${labels.representative}:</strong> ${operatorDetails.representative}<br />
+          <strong>${labels.registrationNumber}:</strong> ${operatorDetails.registrationNumber}
+        </p>
+      </section>
+    `;
+  }
+
   function documentHtml(title, meta, notice, body) {
     return `
       <h1 class="page-title">${title}</h1>
       <p class="page-meta">${meta}</p>
       <p class="legal-translation-note">${notice}</p>
       ${body}
+      <!-- operator-details -->
       <hr class="divider" />
       <p style="font-size:0.8rem; color: var(--clr-text-muted);">© 2026 PromptGen. All rights reserved.</p>
     `;
@@ -20,7 +74,7 @@
         title: '이용약관 – PromptGen',
         html: documentHtml(
           '이용약관',
-          '시행일: 2026년 5월 1일 · 최종 업데이트: 2026년 7월 17일',
+          '시행일: 2026년 5월 1일 · 최종 업데이트: 2026년 7월 18일',
           koNotice,
           `
           <p><strong>PromptGen</strong>(이하 “당사”)에 오신 것을 환영합니다. <strong>promptgen-ai.com</strong>에 접속하거나 서비스를 사용하면 본 이용약관(이하 “약관”)에 동의하는 것으로 간주됩니다. 서비스를 사용하기 전에 주의 깊게 읽어 주세요.</p>
@@ -70,7 +124,7 @@
         title: '개인정보 처리방침 – PromptGen',
         html: documentHtml(
           '개인정보 처리방침',
-          '시행일: 2026년 5월 1일 · 최종 업데이트: 2026년 7월 17일',
+          '시행일: 2026년 5월 1일 · 최종 업데이트: 2026년 7월 18일',
           koNotice,
           `
           <p>PromptGen(이하 “당사”)은 사용자의 개인정보 보호를 중요하게 생각합니다. 본 개인정보 처리방침은 <strong>promptgen-ai.com</strong>을 사용할 때 당사가 데이터를 수집·이용·보호하는 방법을 설명합니다.</p>
@@ -134,7 +188,7 @@
         title: '환불 정책 – PromptGen',
         html: documentHtml(
           '환불 정책',
-          '시행일: 2026년 5월 1일 · 최종 업데이트: 2026년 7월 17일',
+          '시행일: 2026년 5월 1일 · 최종 업데이트: 2026년 7월 18일',
           koNotice,
           `
           <div class="highlight-box"><p>PromptGen 구독은 당사의 판매 책임자(Merchant of Record)인 <strong>Paddle</strong>이 판매합니다. 환불 가능 여부는 <a href="https://www.paddle.com/legal/refund-policy" rel="noopener noreferrer">Paddle 환불 정책</a>과 관련 소비자법에 따라 결정됩니다. 본 정책은 사용자 국가에서 보장되는 강행적 권리를 제한하지 않습니다.</p></div>
@@ -178,7 +232,7 @@
     ja: {
       terms: {
         title: '利用規約 – PromptGen',
-        html: documentHtml('利用規約', '施行日：2026年5月1日 · 最終更新：2026年7月17日',
+        html: documentHtml('利用規約', '施行日：2026年5月1日 · 最終更新：2026年7月18日',
           'この翻訳は便宜のために提供されています。翻訳文と英語原文が矛盾する場合、適用法で許される範囲において英語原文が優先されます。', `
           <p><strong>PromptGen</strong>（以下「当社」）へようこそ。<strong>promptgen-ai.com</strong>へアクセスまたは利用することで、本利用規約（以下「本規約」）に同意したものとみなされます。サービス利用前に注意してお読みください。</p>
           <hr class="divider" />
@@ -198,7 +252,7 @@
       },
       privacy: {
         title: 'プライバシーポリシー – PromptGen',
-        html: documentHtml('プライバシーポリシー', '施行日：2026年5月1日 · 最終更新：2026年7月17日',
+        html: documentHtml('プライバシーポリシー', '施行日：2026年5月1日 · 最終更新：2026年7月18日',
           'この翻訳は便宜のために提供されています。翻訳文と英語原文が矛盾する場合、適用法で許される範囲において英語原文が優先されます。', `
           <p>PromptGen（以下「当社」）は個人情報の保護に努めています。本ポリシーは、<strong>promptgen-ai.com</strong>利用時にデータを収集、使用、保護する方法を説明します。</p><hr class="divider" />
           <h2>1. 収集する情報</h2><p>次の種類の情報を収集します。</p><ul><li><strong>アカウント情報：</strong>Googleログイン時に、Google OAuthから氏名、メールアドレス、プロフィール画像を受け取ります。</li><li><strong>利用データ：</strong>分析回数、プラン種別、クレジット残高、製品ファネルのイベント名、正規化されたページパス、ランダムなタブセッション識別子、活動時刻。製品分析イベントには、完全なURL、クエリ文字列、生の参照元、プロンプト、シナリオ、画像、メールアドレス、アクセストークンを含めません。</li><li><strong>アップロード画像：</strong>画像→プロンプトまたはストーリーボードの参考としてアップロードした画像。画像→プロンプトの画像は分析後に削除されます。参考画像と生成グリッドは、処理、結果閲覧、定期削除のため非公開ストレージに一時保管される場合があります。</li><li><strong>生成プロンプト：</strong>画像から生成されたプロンプトは、参照用に履歴へ保存される場合があります。</li><li><strong>支払い情報：</strong>決済はすべてPaddleが処理し、当社はカード情報や支払い詳細を保存しません。</li><li><strong>ログデータ：</strong>セキュリティとデバッグのため、IPアドレス、リクエスト時刻、エラー情報を含むサーバーログ。</li></ul>
@@ -214,7 +268,7 @@
       },
       refund: {
         title: '返金ポリシー – PromptGen',
-        html: documentHtml('返金ポリシー', '施行日：2026年5月1日 · 最終更新：2026年7月17日',
+        html: documentHtml('返金ポリシー', '施行日：2026年5月1日 · 最終更新：2026年7月18日',
           'この翻訳は便宜のために提供されています。翻訳文と英語原文が矛盾する場合、適用法で許される範囲において英語原文が優先されます。', `
           <div class="highlight-box"><p>PromptGenのサブスクリプションはMerchant of Recordである<strong>Paddle</strong>が販売します。返金可否は<a href="https://www.paddle.com/legal/refund-policy" rel="noopener noreferrer">Paddleの返金ポリシー</a>と適用される消費者法に基づきます。本ポリシーは、お住まいの国で認められる強行的権利を制限しません。</p></div><hr class="divider" />
           <h2>1. サブスクリプション購入</h2><p>ProとEnterpriseは買い切りクレジットではなく月額サブスクリプションです。請求サイクルごとにProは1,000クレジット、Enterpriseは4,000クレジットを付与します。更新時にプラン割当数へリセットされ、未使用分は繰り越されません。</p>
@@ -229,7 +283,7 @@
     'zh-CN': {
       terms: {
         title: '服务条款 – PromptGen',
-        html: documentHtml('服务条款', '生效日期：2026年5月1日 · 最后更新：2026年7月17日',
+        html: documentHtml('服务条款', '生效日期：2026年5月1日 · 最后更新：2026年7月18日',
           '本译文仅为方便阅读而提供。如译文与英文原文存在冲突，在适用法律允许的范围内，以英文原文为准。', `
           <p>欢迎使用 <strong>PromptGen</strong>（以下简称“我们”）。访问或使用 <strong>promptgen-ai.com</strong> 即表示您同意受本服务条款（以下简称“条款”）约束。使用服务前请仔细阅读。</p><hr class="divider" />
           <h2>1. 接受条款</h2><p>创建账号或使用 PromptGen 的任何部分，即表示您确认已年满13周岁并同意本条款。如果您代表组织使用服务，您声明有权使该组织受本条款约束。</p>
@@ -246,7 +300,7 @@
       },
       privacy: {
         title: '隐私政策 – PromptGen',
-        html: documentHtml('隐私政策', '生效日期：2026年5月1日 · 最后更新：2026年7月17日',
+        html: documentHtml('隐私政策', '生效日期：2026年5月1日 · 最后更新：2026年7月18日',
           '本译文仅为方便阅读而提供。如译文与英文原文存在冲突，在适用法律允许的范围内，以英文原文为准。', `
           <p>PromptGen（以下简称“我们”）致力于保护您的个人信息。本政策说明您使用 <strong>promptgen-ai.com</strong> 时，我们如何收集、使用和保护数据。</p><hr class="divider" />
           <h2>1. 我们收集的信息</h2><p>我们收集以下类型的信息：</p><ul><li><strong>账号信息：</strong>通过 Google 登录时，我们会从 Google OAuth 获取您的姓名、电子邮箱和头像。</li><li><strong>使用数据：</strong>分析次数、方案类型、积分余额、产品漏斗事件名称、规范化页面路径、随机标签页会话标识符及活动时间。产品分析事件不包含完整 URL、查询字符串、原始来源网址、提示词、剧本、图片、电子邮箱或访问令牌。</li><li><strong>上传图片：</strong>用于图片转提示词或故事板参考的图片。图片转提示词的上传内容在分析后删除。故事板参考图和生成网格可能临时保存在私有存储中，用于处理、结果访问和定期清理。</li><li><strong>生成的提示词：</strong>根据图片生成的提示词可能保存到您的历史记录中。</li><li><strong>付款信息：</strong>付款交易完全由 Paddle 处理，我们不存储银行卡或付款详情。</li><li><strong>日志数据：</strong>为保障安全和调试而记录的服务器日志，包括 IP 地址、请求时间和错误信息。</li></ul>
@@ -262,7 +316,7 @@
       },
       refund: {
         title: '退款政策 – PromptGen',
-        html: documentHtml('退款政策', '生效日期：2026年5月1日 · 最后更新：2026年7月17日',
+        html: documentHtml('退款政策', '生效日期：2026年5月1日 · 最后更新：2026年7月18日',
           '本译文仅为方便阅读而提供。如译文与英文原文存在冲突，在适用法律允许的范围内，以英文原文为准。', `
           <div class="highlight-box"><p>PromptGen 订阅由我们的记录商户（Merchant of Record）<strong>Paddle</strong> 销售。退款资格根据 <a href="https://www.paddle.com/legal/refund-policy" rel="noopener noreferrer">Paddle 退款政策</a>和适用消费者法律确定。本政策不限制您所在国家提供的强制性权利。</p></div><hr class="divider" />
           <h2>1. 订阅购买</h2><p>Pro 和 Enterprise 是月度订阅，并非一次性积分包。Pro 每个计费周期提供1,000积分，Enterprise 提供4,000积分。续订时积分重置为方案额度，未使用积分不结转。</p>
@@ -277,7 +331,7 @@
     fr: {
       terms: {
         title: 'Conditions d’utilisation – PromptGen',
-        html: documentHtml('Conditions d’utilisation', 'Date d’entrée en vigueur : 1 mai 2026 · Dernière mise à jour : 17 juillet 2026',
+        html: documentHtml('Conditions d’utilisation', 'Date d’entrée en vigueur : 1 mai 2026 · Dernière mise à jour : 18 juillet 2026',
           'Cette traduction est fournie à titre pratique. En cas de divergence avec la version anglaise, celle-ci prévaut dans la mesure autorisée par la loi applicable.', `
           <p>Bienvenue sur <strong>PromptGen</strong> (« nous », « notre »). En accédant à <strong>promptgen-ai.com</strong> ou en l’utilisant, vous acceptez les présentes Conditions d’utilisation (« Conditions »). Veuillez les lire attentivement avant d’utiliser le service.</p><hr class="divider" />
           <h2>1. Acceptation des Conditions</h2><p>En créant un compte ou en utilisant PromptGen, vous confirmez avoir au moins 13 ans et accepter ces Conditions. Si vous agissez pour une organisation, vous déclarez être habilité à l’engager.</p>
@@ -294,7 +348,7 @@
       },
       privacy: {
         title: 'Politique de confidentialité – PromptGen',
-        html: documentHtml('Politique de confidentialité', 'Date d’entrée en vigueur : 1 mai 2026 · Dernière mise à jour : 17 juillet 2026',
+        html: documentHtml('Politique de confidentialité', 'Date d’entrée en vigueur : 1 mai 2026 · Dernière mise à jour : 18 juillet 2026',
           'Cette traduction est fournie à titre pratique. En cas de divergence avec la version anglaise, celle-ci prévaut dans la mesure autorisée par la loi applicable.', `
           <p>PromptGen (« nous », « notre ») s’engage à protéger vos informations personnelles. Cette politique explique comment nous collectons, utilisons et protégeons vos données sur <strong>promptgen-ai.com</strong>.</p><hr class="divider" />
           <h2>1. Informations collectées</h2><p>Nous collectons :</p><ul><li><strong>Informations de compte :</strong> nom, adresse e-mail et photo reçus de Google OAuth lors de la connexion.</li><li><strong>Données d’utilisation :</strong> nombre d’analyses, offre, solde de crédits, noms d’événements du parcours produit, chemins de pages normalisés, identifiant aléatoire de session d’onglet et horodatages. Les événements d’analyse n’incluent ni URL complète, paramètres, référent brut, prompts, scénarios, images, adresses e-mail ou jetons d’accès.</li><li><strong>Images importées :</strong> images utilisées pour Image vers prompt ou comme références. Les premières sont supprimées après analyse. Les références et grilles peuvent être conservées temporairement dans un stockage privé pour le traitement, l’accès aux résultats et le nettoyage planifié.</li><li><strong>Prompts générés :</strong> ils peuvent être enregistrés dans votre historique.</li><li><strong>Informations de paiement :</strong> les transactions sont entièrement traitées par Paddle ; nous ne stockons pas vos données de carte.</li><li><strong>Journaux :</strong> adresses IP, horodatages et erreurs à des fins de sécurité et de débogage.</li></ul>
@@ -310,7 +364,7 @@
       },
       refund: {
         title: 'Politique de remboursement – PromptGen',
-        html: documentHtml('Politique de remboursement', 'Date d’entrée en vigueur : 1 mai 2026 · Dernière mise à jour : 17 juillet 2026',
+        html: documentHtml('Politique de remboursement', 'Date d’entrée en vigueur : 1 mai 2026 · Dernière mise à jour : 18 juillet 2026',
           'Cette traduction est fournie à titre pratique. En cas de divergence avec la version anglaise, celle-ci prévaut dans la mesure autorisée par la loi applicable.', `
           <div class="highlight-box"><p>Les abonnements PromptGen sont vendus par <strong>Paddle</strong>, notre Merchant of Record. L’éligibilité dépend de la <a href="https://www.paddle.com/legal/refund-policy" rel="noopener noreferrer">politique de remboursement de Paddle</a> et du droit de la consommation applicable. Rien ici ne limite les droits obligatoires de votre pays.</p></div><hr class="divider" />
           <h2>1. Achats d’abonnements</h2><p>Pro et Enterprise sont des abonnements mensuels, pas des lots ponctuels. Pro fournit 1 000 crédits et Enterprise 4 000 par cycle. Au renouvellement, les crédits reviennent au quota et les crédits inutilisés ne sont pas reportés.</p>
@@ -325,7 +379,7 @@
     ru: {
       terms: {
         title: 'Условия использования – PromptGen',
-        html: documentHtml('Условия использования', 'Дата вступления в силу: 1 мая 2026 г. · Последнее обновление: 17 июля 2026 г.',
+        html: documentHtml('Условия использования', 'Дата вступления в силу: 1 мая 2026 г. · Последнее обновление: 18 июля 2026 г.',
           'Перевод предоставлен для удобства. При расхождениях с английской версией она имеет преимущественную силу в пределах, допускаемых применимым законодательством.', `
           <p>Добро пожаловать в <strong>PromptGen</strong> («мы», «наш»). Получая доступ к <strong>promptgen-ai.com</strong> или используя его, вы соглашаетесь с настоящими Условиями использования («Условия»). Внимательно прочитайте их до начала работы.</p><hr class="divider" />
           <h2>1. Принятие Условий</h2><p>Создавая аккаунт или используя PromptGen, вы подтверждаете, что вам не менее 13 лет, и принимаете Условия. Если вы действуете от имени организации, то подтверждаете право связать её этими Условиями.</p>
@@ -342,7 +396,7 @@
       },
       privacy: {
         title: 'Политика конфиденциальности – PromptGen',
-        html: documentHtml('Политика конфиденциальности', 'Дата вступления в силу: 1 мая 2026 г. · Последнее обновление: 17 июля 2026 г.',
+        html: documentHtml('Политика конфиденциальности', 'Дата вступления в силу: 1 мая 2026 г. · Последнее обновление: 18 июля 2026 г.',
           'Перевод предоставлен для удобства. При расхождениях с английской версией она имеет преимущественную силу в пределах, допускаемых применимым законодательством.', `
           <p>PromptGen («мы», «наш») стремится защищать ваши персональные данные. Здесь описано, как мы собираем, используем и защищаем информацию при работе с <strong>promptgen-ai.com</strong>.</p><hr class="divider" />
           <h2>1. Какие данные мы собираем</h2><ul><li><strong>Данные аккаунта:</strong> имя, адрес электронной почты и фото из Google OAuth при входе.</li><li><strong>Данные использования:</strong> число анализов, тариф, баланс, названия событий продуктовой воронки, нормализованные пути страниц, случайный идентификатор сессии вкладки и время действий. События не содержат полных URL, параметров запроса, исходных рефереров, промптов, сценариев, изображений, адресов почты или токенов доступа.</li><li><strong>Загруженные изображения:</strong> изображения для анализа или референсы. Первые удаляются после анализа. Референсы и сетки могут временно храниться в закрытом хранилище для обработки, доступа к результатам и плановой очистки.</li><li><strong>Созданные промпты:</strong> могут сохраняться в истории.</li><li><strong>Платёжные данные:</strong> платежи полностью обрабатывает Paddle; мы не храним реквизиты карт.</li><li><strong>Журналы:</strong> IP-адреса, время запросов и ошибки для безопасности и отладки.</li></ul>
@@ -358,7 +412,7 @@
       },
       refund: {
         title: 'Политика возврата – PromptGen',
-        html: documentHtml('Политика возврата', 'Дата вступления в силу: 1 мая 2026 г. · Последнее обновление: 17 июля 2026 г.',
+        html: documentHtml('Политика возврата', 'Дата вступления в силу: 1 мая 2026 г. · Последнее обновление: 18 июля 2026 г.',
           'Перевод предоставлен для удобства. При расхождениях с английской версией она имеет преимущественную силу в пределах, допускаемых применимым законодательством.', `
           <div class="highlight-box"><p>Подписки PromptGen продаёт <strong>Paddle</strong>, наш Merchant of Record. Право на возврат определяется <a href="https://www.paddle.com/legal/refund-policy" rel="noopener noreferrer">Политикой возврата Paddle</a> и применимым законодательством о защите потребителей. Ничто здесь не ограничивает обязательные права в вашей стране.</p></div><hr class="divider" />
           <h2>1. Покупка подписки</h2><p>Pro и Enterprise — ежемесячные подписки, а не разовые пакеты. Pro даёт 1 000 кредитов, Enterprise — 4 000 за цикл. При продлении баланс сбрасывается до квоты, остаток не переносится.</p>
@@ -371,6 +425,12 @@
       }
     }
   };
+
+  for (const [locale, pages] of Object.entries(documents)) {
+    for (const page of Object.values(pages)) {
+      page.html = page.html.replace('<!-- operator-details -->', operatorDetailsHtml(locale));
+    }
+  }
 
   window.PromptGenLegalDocuments = documents;
 })();
