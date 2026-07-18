@@ -107,4 +107,11 @@ describe('buildSystemPrompt — duration budget 규칙', () => {
     expect(p).toContain('"durationSeconds": 3.5');
     expect(p).toContain('~3.5 seconds');
   });
+
+  test('엄격 스키마와 같은 characters 배열 형식을 안내한다', () => {
+    const p = buildSystemPrompt({ style: 'Cinematic', cutCount: 4 });
+    expect(p).toContain('"characters": [');
+    expect(p).toContain('{ "role": "protagonist", "name": "Alex" }');
+    expect(p).not.toContain('"characters": { "protagonist"');
+  });
 });

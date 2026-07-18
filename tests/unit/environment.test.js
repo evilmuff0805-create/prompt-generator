@@ -75,6 +75,7 @@ describe('environment contract', () => {
     expect(new Set(REQUIRED_AT_STARTUP).size).toBe(REQUIRED_AT_STARTUP.length);
     expect(isConfigured(' value ')).toBe(true);
     expect(isConfigured(' ')).toBe(false);
+    expect(OPTIONAL_DEFAULTS.OPENAI_TEXT_REASONING_EFFORT).toBe('medium');
     expect(OPTIONAL_DEFAULTS.GEMINI_MODEL).toBe('gemini-3.1-flash-lite');
     expect(OPTIONAL_DEFAULTS).not.toHaveProperty('SUPABASE_SERVICE_ROLE_KEY');
   });
@@ -94,5 +95,7 @@ describe('environment contract', () => {
     ];
 
     expect(expected.filter((name) => !documented.has(name))).toEqual([]);
+    expect(example).toContain('OPENAI_TEXT_MODEL=gpt-5.6-luna');
+    expect(example).toContain('OPENAI_TEXT_REASONING_EFFORT=medium');
   });
 });
