@@ -22,6 +22,7 @@
     'nav.action.logout': '退出登录',
     'nav.action.history': '查看历史',
     'nav.action.manageSubscription': '管理订阅',
+    'nav.action.accountMenu': '账户菜单',
     'nav.action.open': '打开导航',
     'nav.action.toggle': '展开或收起菜单',
     'common.action.close': '关闭',

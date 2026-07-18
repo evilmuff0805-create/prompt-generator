@@ -90,15 +90,22 @@
           <a href="#" class="nav-link" id="loginNavBtn" data-i18n="nav.action.login">Login</a>
           <!-- shown when logged in -->
           <div id="userProfile" class="user-profile">
-            <span id="userAvatar" class="user-avatar">🤖</span>
-            <div class="user-info">
-              <span id="userName" class="user-name"></span>
-              <span id="planBadge" class="plan-badge plan-badge--free" data-i18n="common.plan.free">Free</span>
+            <button id="accountMenuTrigger" class="account-menu__trigger" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="accountMenu" aria-label="Account menu" data-i18n-attr="aria-label:nav.action.accountMenu">
+              <span id="userAvatar" class="user-avatar" aria-hidden="true">🤖</span>
+              <span class="user-info">
+                <span id="userName" class="user-name"></span>
+                <span id="planBadge" class="plan-badge plan-badge--free" data-i18n="common.plan.free">Free</span>
+              </span>
+              <span class="account-menu__chevron" aria-hidden="true">⌄</span>
+            </button>
+            <div id="accountMenu" class="account-menu" role="menu" aria-labelledby="accountMenuTrigger" hidden>
+              <div class="account-menu__usage">
+                <span id="usageDisplay" class="usage-display"></span>
+              </div>
+              <button id="historyBtn" class="account-menu__item" type="button" role="menuitem" data-account-icon="📜" data-i18n="nav.action.history">View history</button>
+              <button id="manageSubBtn" class="account-menu__item" type="button" role="menuitem" data-account-icon="⚙" title="Manage subscription" style="display:none" data-i18n="nav.action.manageSubscription" data-i18n-attr="title:nav.action.manageSubscription">Manage subscription</button>
+              <button id="logoutBtn" class="account-menu__item account-menu__item--danger" type="button" role="menuitem" data-account-icon="↗" data-i18n="nav.action.logout">Logout</button>
             </div>
-            <span id="usageDisplay" class="usage-display"></span>
-            <button id="historyBtn" class="btn btn--ghost btn--history" title="View history" data-i18n-attr="title:nav.action.history">📜</button>
-            <button id="manageSubBtn" class="btn btn--ghost" title="Manage subscription" style="display:none" data-i18n="nav.action.manageSubscription" data-i18n-attr="title:nav.action.manageSubscription">Manage subscription</button>
-            <button id="logoutBtn" class="btn btn--ghost btn--logout" data-i18n="nav.action.logout">Logout</button>
           </div>
         </li>
       </ul>

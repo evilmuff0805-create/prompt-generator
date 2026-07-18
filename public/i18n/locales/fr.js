@@ -22,6 +22,7 @@
     'nav.action.logout': 'Déconnexion',
     'nav.action.history': 'Voir l’historique',
     'nav.action.manageSubscription': 'Gérer l’abonnement',
+    'nav.action.accountMenu': 'Menu du compte',
     'nav.action.open': 'Ouvrir la navigation',
     'nav.action.toggle': 'Ouvrir ou fermer le menu',
     'common.action.close': 'Fermer',

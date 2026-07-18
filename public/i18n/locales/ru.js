@@ -22,6 +22,7 @@
     'nav.action.logout': 'Выйти',
     'nav.action.history': 'Открыть историю',
     'nav.action.manageSubscription': 'Управление подпиской',
+    'nav.action.accountMenu': 'Меню аккаунта',
     'nav.action.open': 'Открыть навигацию',
     'nav.action.toggle': 'Открыть или закрыть меню',
     'common.action.close': 'Закрыть',

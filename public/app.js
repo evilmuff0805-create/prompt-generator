@@ -621,6 +621,7 @@ hamburger.addEventListener('click', e => {
 });
 
 navMenu.querySelectorAll('a, button').forEach(link => {
+  if (link.id === 'accountMenuTrigger') return;
   link.addEventListener('click', () => {
     setNavigationOpen(false);
   });
@@ -814,6 +815,43 @@ const planBadgeEl    = document.getElementById('planBadge');
 const usageDisplayEl = document.getElementById('usageDisplay');
 const manageSubBtn   = document.getElementById('manageSubBtn');
 const logoutBtn      = document.getElementById('logoutBtn');
+const accountMenuTrigger = document.getElementById('accountMenuTrigger');
+const accountMenu        = document.getElementById('accountMenu');
+
+function setAccountMenuOpen(isOpen, { restoreFocus = false } = {}) {
+  if (!accountMenuTrigger || !accountMenu) return;
+  accountMenu.hidden = !isOpen;
+  accountMenuTrigger.setAttribute('aria-expanded', String(isOpen));
+  accountMenuTrigger.classList.toggle('open', isOpen);
+  if (restoreFocus) accountMenuTrigger.focus();
+}
+
+if (accountMenuTrigger && accountMenu) {
+  accountMenuTrigger.addEventListener('click', event => {
+    event.stopPropagation();
+    setAccountMenuOpen(accountMenu.hidden);
+  });
+
+  accountMenu.addEventListener('click', event => {
+    event.stopPropagation();
+  });
+
+  accountMenu.querySelectorAll('[role="menuitem"]').forEach(item => {
+    item.addEventListener('click', () => setAccountMenuOpen(false));
+  });
+
+  document.addEventListener('click', event => {
+    if (!accountMenu.hidden && !userProfileEl.contains(event.target)) {
+      setAccountMenuOpen(false);
+    }
+  });
+
+  document.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && !accountMenu.hidden) {
+      setAccountMenuOpen(false, { restoreFocus: true });
+    }
+  });
+}
 
 async function refreshUserProfile(session) {
   if (!session) return;
@@ -860,6 +898,7 @@ function updateNavUI(session) {
     loginNavBtn.style.display = 'none';
     userProfileEl.style.display = 'flex';
   } else {
+    setAccountMenuOpen(false);
     loginNavBtn.style.display = '';
     userProfileEl.style.display = 'none';
   }

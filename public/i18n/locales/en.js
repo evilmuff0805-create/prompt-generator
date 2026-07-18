@@ -27,6 +27,7 @@
     'nav.action.logout': 'Logout',
     'nav.action.history': 'View history',
     'nav.action.manageSubscription': 'Manage subscription',
+    'nav.action.accountMenu': 'Account menu',
     'nav.action.open': 'Open navigation',
     'nav.action.toggle': 'Toggle menu',
 
