@@ -32,7 +32,14 @@ test.describe('Health & Page Load', () => {
     await expect(page.locator('.hero__title')).toContainText('See the image.');
     await expect(page.locator('.hero__title')).toContainText('Direct the result.');
     await expect(page.locator('.hero-demo')).toBeVisible();
-    await expect(page.locator('.btn--hero')).toHaveAttribute('href', '#upload-section');
+
+    const primaryCta = page.locator('.btn--hero');
+    await expect(primaryCta).toContainText('Create a storyboard');
+    await expect(primaryCta).toHaveAttribute('href', '/storyboard');
+
+    const secondaryCta = page.locator('.hero__text-link');
+    await expect(secondaryCta).toContainText('Try Image to Prompt');
+    await expect(secondaryCta).toHaveAttribute('href', '#upload-section');
   });
 
   test('모바일 내비게이션은 상태를 알리고 스크롤을 잠근 뒤 Escape로 닫혀야 한다', async ({ page }) => {
