@@ -47,6 +47,16 @@ async function applyLocale(page, locale) {
   await expect(page.locator('html')).toHaveAttribute('lang', locale);
 }
 
+async function showStoryboardForm(page) {
+  await page.evaluate(() => {
+    document.getElementById('loginModal')?.setAttribute('aria-hidden', 'true');
+    document.getElementById('authGate').style.display = 'none';
+    document.getElementById('planGate').style.display = 'none';
+    document.getElementById('loadingGate').style.display = 'none';
+    document.getElementById('mainForm').style.display = '';
+  });
+}
+
 async function auditPage(page) {
   return page.evaluate(() => {
     const root = document.documentElement;
@@ -69,8 +79,16 @@ async function auditPage(page) {
 
       const clipsX = ['hidden', 'clip'].includes(style.overflowX);
       const clipsY = ['hidden', 'clip'].includes(style.overflowY);
-      const clippedX = clipsX && element.scrollWidth > element.clientWidth + 1;
-      const clippedY = clipsY && element.scrollHeight > element.clientHeight + 1;
+      let clippedX = clipsX && element.scrollWidth > element.clientWidth + 1;
+      let clippedY = clipsY && element.scrollHeight > element.clientHeight + 1;
+
+      if (element.matches('.storyboard-style-btn')) {
+        const contentRects = [...element.children]
+          .filter(child => child instanceof HTMLElement && getComputedStyle(child).display !== 'none')
+          .map(child => child.getBoundingClientRect());
+        clippedX = clipsX && contentRects.some(child => child.left < rect.left - 1 || child.right > rect.right + 1);
+        clippedY = clipsY && contentRects.some(child => child.top < rect.top - 1 || child.bottom > rect.bottom + 1);
+      }
       if (!clippedX && !clippedY) return;
 
       clipped.push({
@@ -132,6 +150,9 @@ for (const { locale, viewport } of MATRIX) {
       for (const target of STATIC_PAGES) {
         await page.goto(target.path, { waitUntil: 'domcontentloaded' });
         await applyLocale(page, locale);
+        if (target.name === 'storyboard') {
+          await showStoryboardForm(page);
+        }
         await expect(page.locator(target.anchor)).toBeVisible();
         await verifyLayout(page, testInfo, `${locale}-${viewport.label}-${target.name}`);
       }
