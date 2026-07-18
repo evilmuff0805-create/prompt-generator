@@ -203,6 +203,8 @@
     'storyboard.field.shots': 'Number of Shots',
     'storyboard.shots.four': '4 Shots',
     'storyboard.shots.nine': '9 Shots',
+    'storyboard.shots.fourMeta': '2×2 grid · ~14s total',
+    'storyboard.shots.nineMeta': '3×3 grid · ~13.5s total',
     'storyboard.field.references': 'Reference Images',
     'storyboard.field.referencesHint': 'Optional · max 4 · 24h expiry',
     'storyboard.references.add': '＋ Add Reference Image',

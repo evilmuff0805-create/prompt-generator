@@ -188,6 +188,8 @@
     'storyboard.field.shots': 'Nombre de plans',
     'storyboard.shots.four': '4 plans',
     'storyboard.shots.nine': '9 plans',
+    'storyboard.shots.fourMeta': 'Grille 2×2 · ~14 s au total',
+    'storyboard.shots.nineMeta': 'Grille 3×3 · ~13,5 s au total',
     'storyboard.field.references': 'Images de référence',
     'storyboard.field.referencesHint': 'Facultatif · 4 max. · expire après 24 h',
     'storyboard.references.add': '＋ Ajouter une image de référence',

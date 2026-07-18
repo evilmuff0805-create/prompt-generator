@@ -27,10 +27,21 @@ const {
 const app = express();
 const PORT = process.env.PORT || 3000;
 const indexHtmlTemplate = fs.readFileSync(path.join(__dirname, 'public', 'index.html'), 'utf8');
+const versionedHtmlTemplates = new Map([
+  ['index.html', indexHtmlTemplate],
+  ['storyboard.html', fs.readFileSync(path.join(__dirname, 'public', 'storyboard.html'), 'utf8')],
+  ['storyboard-history.html', fs.readFileSync(path.join(__dirname, 'public', 'storyboard-history.html'), 'utf8')],
+  ['storyboard-result.html', fs.readFileSync(path.join(__dirname, 'public', 'storyboard-result.html'), 'utf8')]
+]);
+
+function sendVersionedPage(res, fileName) {
+  const template = versionedHtmlTemplates.get(fileName);
+  res.setHeader('Cache-Control', 'no-cache, must-revalidate');
+  res.type('html').send(renderVersionedHtml(template, getAssetVersion()));
+}
 
 function sendVersionedIndex(req, res) {
-  res.setHeader('Cache-Control', 'no-cache, must-revalidate');
-  res.type('html').send(renderVersionedHtml(indexHtmlTemplate, getAssetVersion()));
+  sendVersionedPage(res, 'index.html');
 }
 
 /* ── Trust Proxy (Railway/reverse proxy 환경) ── */
@@ -341,15 +352,15 @@ app.get('/frame', (req, res) => {
 });
 
 app.get('/storyboard', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'storyboard.html'));
+  sendVersionedPage(res, 'storyboard.html');
 });
 
 app.get('/storyboard/history', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'storyboard-history.html'));
+  sendVersionedPage(res, 'storyboard-history.html');
 });
 
 app.get('/storyboard/:id', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'storyboard-result.html'));
+  sendVersionedPage(res, 'storyboard-result.html');
 });
 
 app.get('*', (req, res) => {

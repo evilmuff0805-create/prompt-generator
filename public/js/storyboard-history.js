@@ -7,6 +7,12 @@
   let currentTotal = 0;
   const uiText = (key, values) => window.PromptGenI18n?.t(key, values) || key;
   const genreLabel = (genre) => uiText(`storyboard.genre.${String(genre).toLowerCase().replace(/[^a-z]/g, '')}`);
+  const styleKey = (style) => ({
+    'Pixar 3D': 'pixar',
+    Cinematic: 'cinematic',
+    Documentary: 'documentary',
+    Animation: 'animation'
+  }[style] || 'cinematic');
 
   async function init() {
     window.addEventListener('scroll', () => {
@@ -59,6 +65,7 @@
     items.forEach(sb => {
       const card = document.createElement('div');
       card.className = 'storyboard-history-card';
+      card.setAttribute('role', 'listitem');
       const date = window.PromptGenI18n?.formatDate(new Date(sb.created_at), { month: 'short', day: 'numeric', year: 'numeric' })
         || new Date(sb.created_at).toLocaleDateString();
       const statusClass = `storyboard-status--${sb.status}`;
@@ -70,7 +77,7 @@
           }
           <div class="storyboard-history-info">
             <div class="storyboard-history-meta">
-              <span class="storyboard-meta-badge">${escapeHtml(sb.style || '')}</span>
+              <span class="storyboard-meta-badge">${escapeHtml(uiText(`storyboard.style.${styleKey(sb.style)}`))}</span>
               <span class="storyboard-meta-badge">${escapeHtml(uiText('storyboard.shots.count', { count: sb.cut_count || 9 }))}</span>
               <span class="storyboard-status-badge ${statusClass}">${escapeHtml(uiText(`storyboard.status.${sb.status}`))}</span>
             </div>
@@ -78,7 +85,7 @@
             <div class="storyboard-history-date">${date}</div>
           </div>
         </a>
-        <button class="storyboard-delete-btn" data-id="${escapeHtml(sb.id)}" title="${escapeHtml(uiText('storyboardHistory.delete'))}">🗑️</button>
+        <button type="button" class="storyboard-delete-btn" data-id="${escapeHtml(sb.id)}" title="${escapeHtml(uiText('storyboardHistory.delete'))}" aria-label="${escapeHtml(uiText('storyboardHistory.delete'))}">🗑️</button>
       `;
 
       card.querySelector('.storyboard-delete-btn').addEventListener('click', async (e) => {

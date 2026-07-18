@@ -152,6 +152,7 @@
 
     // Copy All Prompts button (above shot list)
     const copyAllBtn = document.createElement('button');
+    copyAllBtn.type = 'button';
     copyAllBtn.className = 'btn btn--secondary storyboard-copy-all-btn';
     copyAllBtn.setAttribute('data-i18n', 'storyboardResult.copyAll');
     copyAllBtn.textContent = uiText('storyboardResult.copyAll');
@@ -181,6 +182,7 @@
     currentShots.forEach((shot, i) => {
       const item = document.createElement('div');
       item.className = 'storyboard-shot-item';
+      item.setAttribute('role', 'listitem');
       item.innerHTML = `
         <div class="storyboard-shot-header">
           <span class="storyboard-shot-num" data-i18n="storyboardResult.shotNumber" data-i18n-vars="number:${shot.shotNumber || i + 1}">${escapeHtml(uiText('storyboardResult.shotNumber', { number: shot.shotNumber || i + 1 }))}</span>
@@ -190,7 +192,7 @@
         <p class="storyboard-shot-desc">${escapeHtml(shot.description || '')}</p>
         <div class="storyboard-shot-prompt-wrap">
           <pre class="storyboard-shot-prompt" id="prompt-${i}">${escapeHtml(shot.videoPrompt || '')}</pre>
-          <button class="storyboard-copy-btn" data-target="prompt-${i}" title="${escapeHtml(uiText('gallery.action.copy'))}" data-i18n="common.action.copy" data-i18n-attr="title:gallery.action.copy">${escapeHtml(uiText('common.action.copy'))}</button>
+          <button type="button" class="storyboard-copy-btn" data-target="prompt-${i}" title="${escapeHtml(uiText('gallery.action.copy'))}" data-i18n="common.action.copy" data-i18n-attr="title:gallery.action.copy">${escapeHtml(uiText('common.action.copy'))}</button>
         </div>
       `;
       shotList.appendChild(item);

@@ -25,10 +25,11 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/style.css" />
+  <link rel="stylesheet" href="/style.css?v=__ASSET_VERSION__" />
+  <link rel="stylesheet" href="/storyboard.css?v=__ASSET_VERSION__" />
   <link rel="icon" href="/favicon.png" type="image/png">
 </head>
-<body>
+<body class="storyboard-shell">
 
   <nav id="navbar" class="navbar">
     <div class="navbar__inner">
@@ -64,25 +65,25 @@
         <a href="/storyboard/history" class="storyboard-history-link" data-i18n="storyboard.history.view">📜 View History</a>
       </div>
 
-      <div id="authGate" class="storyboard-auth-gate" style="display:none">
+      <div id="authGate" class="storyboard-auth-gate" style="display:none" role="region" aria-labelledby="authGateTitle">
         <div class="storyboard-card storyboard-card--center">
           <div class="storyboard-icon">🔒</div>
-          <h2 data-i18n="storyboard.auth.title">Sign In Required</h2>
+          <h2 id="authGateTitle" data-i18n="storyboard.auth.title">Sign In Required</h2>
           <p data-i18n="storyboard.auth.description">You need a Pro or higher plan to use Storyboard Generator.</p>
           <button id="loginBtn" class="btn btn--primary" data-i18n="storyboard.auth.action">Sign In with Google</button>
         </div>
       </div>
 
-      <div id="planGate" class="storyboard-plan-gate" style="display:none">
+      <div id="planGate" class="storyboard-plan-gate" style="display:none" role="region" aria-labelledby="planGateTitle">
         <div class="storyboard-card storyboard-card--center">
           <div class="storyboard-icon">🚀</div>
-          <h2 data-i18n="storyboard.plan.title">Pro Plan Required</h2>
+          <h2 id="planGateTitle" data-i18n="storyboard.plan.title">Pro Plan Required</h2>
           <p><span data-i18n="storyboard.plan.description" data-i18n-vars="credits:120">Storyboard Generator requires a Pro or Enterprise plan (120 credits per storyboard).</span></p>
           <a href="/#pricing" class="btn btn--primary" data-i18n="common.action.upgradePro">Upgrade to Pro →</a>
         </div>
       </div>
 
-      <div id="loadingGate" class="storyboard-auth-gate" style="display:none">
+      <div id="loadingGate" class="storyboard-auth-gate" style="display:none" role="status" aria-live="polite">
         <div class="storyboard-card storyboard-card--center">
           <div class="spinner"></div>
           <p data-i18n="storyboard.state.loadingWorkspace">Loading your workspace…</p>
@@ -90,58 +91,58 @@
       </div>
 
       <div id="mainForm" style="display:none">
-        <div id="errorBanner" class="storyboard-error-banner" style="display:none"></div>
+        <div id="errorBanner" class="storyboard-error-banner" style="display:none" role="alert" aria-live="assertive"></div>
 
         <form id="storyboardForm" class="storyboard-form">
 
           <!-- Scenario -->
           <div class="storyboard-field">
-            <label class="storyboard-label" for="scenario">
+            <label class="storyboard-label" id="scenarioLabel" for="scenario">
               <span data-i18n="storyboard.field.scenario">Scenario</span> <span class="storyboard-label-hint" data-i18n="storyboard.field.scenarioHint">50–2000 characters</span>
             </label>
             <textarea id="scenario" name="scenario" class="storyboard-textarea"
               placeholder="A young woman discovers an ancient letter in her grandmother's attic that reveals a family secret spanning three generations..."
               data-i18n-attr="placeholder:storyboard.field.scenarioPlaceholder"
               rows="5" minlength="50" maxlength="2000" required></textarea>
-            <div class="storyboard-char-count"><span id="charCount">0</span>/2000</div>
+            <div class="storyboard-char-count" aria-live="polite"><span id="charCount">0</span>/2000</div>
           </div>
 
           <!-- Genres -->
           <div class="storyboard-field">
-            <label class="storyboard-label"><span data-i18n="storyboard.field.genres">Genres</span> <span class="storyboard-label-hint" data-i18n="storyboard.field.genresHint">Select 1–3</span></label>
-            <div class="storyboard-genre-grid" id="genreGrid">
-              <button type="button" class="storyboard-genre-btn" data-genre="Romance" data-i18n="storyboard.genre.romance">Romance</button>
-              <button type="button" class="storyboard-genre-btn" data-genre="Drama" data-i18n="storyboard.genre.drama">Drama</button>
-              <button type="button" class="storyboard-genre-btn" data-genre="Thriller" data-i18n="storyboard.genre.thriller">Thriller</button>
-              <button type="button" class="storyboard-genre-btn" data-genre="Comedy" data-i18n="storyboard.genre.comedy">Comedy</button>
-              <button type="button" class="storyboard-genre-btn" data-genre="Action" data-i18n="storyboard.genre.action">Action</button>
-              <button type="button" class="storyboard-genre-btn" data-genre="Horror" data-i18n="storyboard.genre.horror">Horror</button>
-              <button type="button" class="storyboard-genre-btn" data-genre="Sci-Fi" data-i18n="storyboard.genre.scifi">Sci-Fi</button>
-              <button type="button" class="storyboard-genre-btn" data-genre="Fantasy" data-i18n="storyboard.genre.fantasy">Fantasy</button>
-              <button type="button" class="storyboard-genre-btn" data-genre="Mystery" data-i18n="storyboard.genre.mystery">Mystery</button>
+            <label class="storyboard-label" id="genresLabel"><span data-i18n="storyboard.field.genres">Genres</span> <span class="storyboard-label-hint" data-i18n="storyboard.field.genresHint">Select 1–3</span></label>
+            <div class="storyboard-genre-grid" id="genreGrid" role="group" aria-labelledby="genresLabel">
+              <button type="button" class="storyboard-genre-btn" data-genre="Romance" aria-pressed="false" data-i18n="storyboard.genre.romance">Romance</button>
+              <button type="button" class="storyboard-genre-btn" data-genre="Drama" aria-pressed="false" data-i18n="storyboard.genre.drama">Drama</button>
+              <button type="button" class="storyboard-genre-btn" data-genre="Thriller" aria-pressed="false" data-i18n="storyboard.genre.thriller">Thriller</button>
+              <button type="button" class="storyboard-genre-btn" data-genre="Comedy" aria-pressed="false" data-i18n="storyboard.genre.comedy">Comedy</button>
+              <button type="button" class="storyboard-genre-btn" data-genre="Action" aria-pressed="false" data-i18n="storyboard.genre.action">Action</button>
+              <button type="button" class="storyboard-genre-btn" data-genre="Horror" aria-pressed="false" data-i18n="storyboard.genre.horror">Horror</button>
+              <button type="button" class="storyboard-genre-btn" data-genre="Sci-Fi" aria-pressed="false" data-i18n="storyboard.genre.scifi">Sci-Fi</button>
+              <button type="button" class="storyboard-genre-btn" data-genre="Fantasy" aria-pressed="false" data-i18n="storyboard.genre.fantasy">Fantasy</button>
+              <button type="button" class="storyboard-genre-btn" data-genre="Mystery" aria-pressed="false" data-i18n="storyboard.genre.mystery">Mystery</button>
             </div>
           </div>
 
           <!-- Style -->
           <div class="storyboard-field">
-            <label class="storyboard-label" data-i18n="storyboard.field.visualStyle">Visual Style</label>
-            <div class="storyboard-style-grid" id="styleGrid">
-              <button type="button" class="storyboard-style-btn storyboard-style-btn--active" data-style="Pixar 3D">
+            <label class="storyboard-label" id="visualStyleLabel" data-i18n="storyboard.field.visualStyle">Visual Style</label>
+            <div class="storyboard-style-grid" id="styleGrid" role="group" aria-labelledby="visualStyleLabel">
+              <button type="button" class="storyboard-style-btn storyboard-style-btn--active" data-style="Pixar 3D" aria-pressed="true">
                 <span class="storyboard-style-icon">🎨</span>
                 <span class="storyboard-style-name" data-i18n="storyboard.style.pixar">Pixar 3D</span>
                 <span class="storyboard-style-desc" data-i18n="storyboard.style.pixarDescription">Vibrant CGI animation</span>
               </button>
-              <button type="button" class="storyboard-style-btn" data-style="Cinematic">
+              <button type="button" class="storyboard-style-btn" data-style="Cinematic" aria-pressed="false">
                 <span class="storyboard-style-icon">🎬</span>
                 <span class="storyboard-style-name" data-i18n="storyboard.style.cinematic">Cinematic</span>
                 <span class="storyboard-style-desc" data-i18n="storyboard.style.cinematicDescription">Film-grade photography</span>
               </button>
-              <button type="button" class="storyboard-style-btn" data-style="Documentary">
+              <button type="button" class="storyboard-style-btn" data-style="Documentary" aria-pressed="false">
                 <span class="storyboard-style-icon">📹</span>
                 <span class="storyboard-style-name" data-i18n="storyboard.style.documentary">Documentary</span>
                 <span class="storyboard-style-desc" data-i18n="storyboard.style.documentaryDescription">Raw, naturalistic footage</span>
               </button>
-              <button type="button" class="storyboard-style-btn" data-style="Animation">
+              <button type="button" class="storyboard-style-btn" data-style="Animation" aria-pressed="false">
                 <span class="storyboard-style-icon">✏️</span>
                 <span class="storyboard-style-name" data-i18n="storyboard.style.animation">Animation</span>
                 <span class="storyboard-style-desc" data-i18n="storyboard.style.animationDescription">2D graphic style</span>
@@ -151,13 +152,13 @@
 
           <!-- Cut Count -->
           <div class="storyboard-field">
-            <label class="storyboard-label" data-i18n="storyboard.field.shots">Number of Shots</label>
-            <div class="storyboard-cuts-row">
-              <button type="button" class="storyboard-cut-btn" data-cuts="4">
-                <span data-i18n="storyboard.shots.four">4 Shots</span> <span class="storyboard-cut-sub">2×2 · ~12s</span>
+            <label class="storyboard-label" id="shotsLabel" data-i18n="storyboard.field.shots">Number of Shots</label>
+            <div class="storyboard-cuts-row" role="group" aria-labelledby="shotsLabel">
+              <button type="button" class="storyboard-cut-btn" data-cuts="4" aria-pressed="false">
+                <span data-i18n="storyboard.shots.four">4 Shots</span> <span class="storyboard-cut-sub" data-i18n="storyboard.shots.fourMeta">2×2 grid · ~14s total</span>
               </button>
-              <button type="button" class="storyboard-cut-btn storyboard-cut-btn--active" data-cuts="9">
-                <span data-i18n="storyboard.shots.nine">9 Shots</span> <span class="storyboard-cut-sub">3×3 · ~27s</span>
+              <button type="button" class="storyboard-cut-btn storyboard-cut-btn--active" data-cuts="9" aria-pressed="true">
+                <span data-i18n="storyboard.shots.nine">9 Shots</span> <span class="storyboard-cut-sub" data-i18n="storyboard.shots.nineMeta">3×3 grid · ~13.5s total</span>
               </button>
             </div>
           </div>
@@ -174,7 +175,7 @@
               </button>
               <p class="storyboard-upload-hint" data-i18n="storyboard.references.formats">JPEG, PNG, WebP · Max 10MB · Resized to 1024×1024</p>
             </div>
-            <div class="storyboard-ref-list" id="refList"></div>
+            <ul class="storyboard-ref-list" id="refList" aria-live="polite"></ul>
           </div>
 
           <!-- Submit -->
@@ -210,21 +211,21 @@
     </div>
   </div>
 
-  <script src="/i18n/runtime.js"></script>
-  <script src="/i18n/config.js"></script>
-  <script src="/i18n/locales/en.js"></script>
-  <script src="/i18n/locales/ko.js"></script>
-  <script src="/i18n/locales/ja.js"></script>
-  <script src="/i18n/locales/zh-CN.js"></script>
-  <script src="/i18n/locales/fr.js"></script>
-  <script src="/i18n/locales/ru.js"></script>
-  <script src="/i18n/init.js"></script>
+  <script src="/i18n/runtime.js?v=__ASSET_VERSION__"></script>
+  <script src="/i18n/config.js?v=__ASSET_VERSION__"></script>
+  <script src="/i18n/locales/en.js?v=__ASSET_VERSION__"></script>
+  <script src="/i18n/locales/ko.js?v=__ASSET_VERSION__"></script>
+  <script src="/i18n/locales/ja.js?v=__ASSET_VERSION__"></script>
+  <script src="/i18n/locales/zh-CN.js?v=__ASSET_VERSION__"></script>
+  <script src="/i18n/locales/fr.js?v=__ASSET_VERSION__"></script>
+  <script src="/i18n/locales/ru.js?v=__ASSET_VERSION__"></script>
+  <script src="/i18n/init.js?v=__ASSET_VERSION__"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.49.4/dist/umd/supabase.js" integrity="sha256-/anWf4DM5AdPeNY3O7E26Ew0yyNbipHF5ChAaNpt3EI=" crossorigin="anonymous"></script>
-  <script src="/analytics.js"></script>
-  <script src="/navbar-shared.js"></script>
-  <script src="/js/storyboard-api.js?v=2"></script>
-  <script src="/js/storyboard-upload.js?v=2"></script>
-  <script src="/js/storyboard-form.js?v=2"></script>
-  <script src="/js/storyboard.js?v=2"></script>
+  <script src="/analytics.js?v=__ASSET_VERSION__"></script>
+  <script src="/navbar-shared.js?v=__ASSET_VERSION__"></script>
+  <script src="/js/storyboard-api.js?v=__ASSET_VERSION__"></script>
+  <script src="/js/storyboard-upload.js?v=__ASSET_VERSION__"></script>
+  <script src="/js/storyboard-form.js?v=__ASSET_VERSION__"></script>
+  <script src="/js/storyboard.js?v=__ASSET_VERSION__"></script>
 </body>
 </html>

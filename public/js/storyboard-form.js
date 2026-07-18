@@ -27,9 +27,11 @@
       if (selectedGenres.includes(genre)) {
         selectedGenres = selectedGenres.filter(g => g !== genre);
         btn.classList.remove('storyboard-genre-btn--active');
+        btn.setAttribute('aria-pressed', 'false');
       } else if (selectedGenres.length < 3) {
         selectedGenres.push(genre);
         btn.classList.add('storyboard-genre-btn--active');
+        btn.setAttribute('aria-pressed', 'true');
       }
       validateForm();
     });
@@ -38,16 +40,24 @@
     document.getElementById('styleGrid').addEventListener('click', (e) => {
       const btn = e.target.closest('.storyboard-style-btn');
       if (!btn) return;
-      document.querySelectorAll('.storyboard-style-btn').forEach(b => b.classList.remove('storyboard-style-btn--active'));
+      document.querySelectorAll('.storyboard-style-btn').forEach(b => {
+        b.classList.remove('storyboard-style-btn--active');
+        b.setAttribute('aria-pressed', 'false');
+      });
       btn.classList.add('storyboard-style-btn--active');
+      btn.setAttribute('aria-pressed', 'true');
       selectedStyle = btn.dataset.style;
     });
 
     // Cut count selection
     document.querySelectorAll('.storyboard-cut-btn').forEach(btn => {
       btn.addEventListener('click', () => {
-        document.querySelectorAll('.storyboard-cut-btn').forEach(b => b.classList.remove('storyboard-cut-btn--active'));
+        document.querySelectorAll('.storyboard-cut-btn').forEach(b => {
+          b.classList.remove('storyboard-cut-btn--active');
+          b.setAttribute('aria-pressed', 'false');
+        });
         btn.classList.add('storyboard-cut-btn--active');
+        btn.setAttribute('aria-pressed', 'true');
         selectedCuts = parseInt(btn.dataset.cuts, 10);
       });
     });
