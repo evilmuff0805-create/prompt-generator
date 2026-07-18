@@ -29,6 +29,9 @@ const PORT = process.env.PORT || 3000;
 const indexHtmlTemplate = fs.readFileSync(path.join(__dirname, 'public', 'index.html'), 'utf8');
 const versionedHtmlTemplates = new Map([
   ['index.html', indexHtmlTemplate],
+  ['terms.html', fs.readFileSync(path.join(__dirname, 'public', 'terms.html'), 'utf8')],
+  ['privacy.html', fs.readFileSync(path.join(__dirname, 'public', 'privacy.html'), 'utf8')],
+  ['refund.html', fs.readFileSync(path.join(__dirname, 'public', 'refund.html'), 'utf8')],
   ['storyboard.html', fs.readFileSync(path.join(__dirname, 'public', 'storyboard.html'), 'utf8')],
   ['storyboard-history.html', fs.readFileSync(path.join(__dirname, 'public', 'storyboard-history.html'), 'utf8')],
   ['storyboard-result.html', fs.readFileSync(path.join(__dirname, 'public', 'storyboard-result.html'), 'utf8')]
@@ -132,6 +135,9 @@ app.use((req, res, next) => {
 });
 
 app.get(['/', '/index.html'], sendVersionedIndex);
+app.get(['/terms.html', '/privacy.html', '/refund.html'], (req, res) => {
+  sendVersionedPage(res, req.path.slice(1));
+});
 app.use(express.static('public', {
   index: false,
   setHeaders: setStaticCacheHeaders
