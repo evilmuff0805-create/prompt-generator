@@ -1,6 +1,7 @@
 'use strict';
 
 (function () {
+  const uiText = (key, values) => window.PromptGenI18n?.t(key, values) || key;
   let currentUser = null;
   let _rendering = false;
   let _pendingRender = false;
@@ -8,15 +9,17 @@
   // fallback; overwritten by /api/storyboard/config so env changes need no deploy.
   let storyboardCost = 120;
   let productCatalog = null;
+  let lastProfile = null;
 
   async function loadConfig() {
     const cfg = await StoryboardAPI.getConfig();
     if (cfg && typeof cfg.storyboardCost === 'number') {
       storyboardCost = cfg.storyboardCost;
       productCatalog = cfg.catalog || null;
-      document.querySelectorAll('.sb-cost-value').forEach(el => {
-        el.textContent = String(storyboardCost);
+      document.querySelectorAll('[data-i18n-vars*="credits:"]').forEach(el => {
+        el.setAttribute('data-i18n-vars', `credits:${storyboardCost}`);
       });
+      window.PromptGenI18n?.apply(document);
     }
     // On failure the static "120" defaults stay — no blanks, no NaN.
   }
@@ -101,7 +104,7 @@
       } catch {
         hideAll();
         if (errorBanner) {
-          errorBanner.textContent = '프로필을 불러오지 못했습니다. 페이지를 새로고침해 주세요.';
+          errorBanner.textContent = uiText('account.error.profile');
           errorBanner.style.display = '';
         }
         return;
@@ -141,17 +144,21 @@
     const planKey = (profile.plan || 'free').toLowerCase();
     const catalogKey = planKey === 'paid' ? 'pro' : planKey;
     const catalogPlan = productCatalog?.plans?.[catalogKey] || null;
+    lastProfile = profile;
     if (nameEl) nameEl.textContent = profile.user?.full_name || profile.user?.email || '';
     if (badgeEl) {
-      badgeEl.textContent = catalogPlan?.name || (planKey === 'paid' ? 'Pro' : planKey.replace(/^./, c => c.toUpperCase()));
+      badgeEl.textContent = uiText(`pricing.plan.${catalogKey}.name`);
       const badgeClass = planKey === 'enterprise' ? 'enterprise' : (planKey === 'free' ? 'free' : 'pro');
       badgeEl.className = `plan-badge plan-badge--${badgeClass}`;
     }
     if (usageEl) {
       const total = Number(catalogPlan?.credits) || 0;
       usageEl.textContent = total > 0
-        ? `Credits: ${(profile.credits || 0).toLocaleString()} / ${total.toLocaleString()}`
-        : `Today ${profile.daily_used ?? 0}/1 used`;
+        ? uiText('account.credits.remainingOfTotal', {
+            remaining: window.PromptGenI18n?.formatNumber(profile.credits || 0) || profile.credits || 0,
+            total: window.PromptGenI18n?.formatNumber(total) || total
+          })
+        : uiText('account.dailyUsage', { used: profile.daily_used ?? 0, total: 1 });
     }
     chip.style.display = 'inline-flex';
   }
@@ -171,15 +178,15 @@
 
     if (!result.success) {
       const messages = {
-        PLAN_NOT_ALLOWED: 'Your plan does not allow Storyboard generation.',
-        INSUFFICIENT_CREDITS: `Not enough credits. Storyboard requires ${storyboardCost} credits.`,
-        RATE_LIMITED: 'Please wait 60 seconds between requests.',
-        TOO_MANY_CONCURRENT_JOBS: 'You already have the maximum number of jobs running.',
-        MODERATION_REJECTED: 'Your scenario was flagged by our safety system. Please revise it.',
-        INVALID_INPUT: result.errors?.join(', ') || result.message || 'Invalid input.',
-        REFERENCE_EXPIRED_SOON: 'One or more reference images are about to expire. Please re-upload them.'
+        PLAN_NOT_ALLOWED: uiText('storyboard.error.plan'),
+        INSUFFICIENT_CREDITS: uiText('storyboard.error.credits', { credits: storyboardCost }),
+        RATE_LIMITED: uiText('storyboard.error.rateLimit'),
+        TOO_MANY_CONCURRENT_JOBS: uiText('storyboard.error.concurrent'),
+        MODERATION_REJECTED: uiText('storyboard.error.moderation'),
+        INVALID_INPUT: uiText('storyboard.error.invalidInput'),
+        REFERENCE_EXPIRED_SOON: uiText('storyboard.error.referencesExpiring')
       };
-      const msg = messages[result.code] || result.message || 'Generation failed. Please try again.';
+      const msg = messages[result.code] || uiText('storyboard.error.generation');
       errorBanner.textContent = msg;
       errorBanner.style.display = 'block';
       return;
@@ -190,4 +197,7 @@
   }
 
   document.addEventListener('DOMContentLoaded', init);
+  document.addEventListener('promptgen:localechange', () => {
+    if (lastProfile) renderUserChip(lastProfile);
+  });
 })();

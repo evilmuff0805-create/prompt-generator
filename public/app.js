@@ -5,6 +5,10 @@ const sbClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
   auth: { storage: window.sessionStorage, persistSession: true, autoRefreshToken: true }
 });
 
+function uiText(key, values) {
+  return window.PromptGenI18n?.t(key, values) || key;
+}
+
 /* ── Product catalog + Paddle Init ── */
 let productCatalog = null;
 let productCatalogPromise = null;
@@ -37,7 +41,10 @@ function getCatalogPlan(plan) {
 }
 
 function getPlanLabel(plan) {
-  return getCatalogPlan(plan)?.name || (plan === 'paid' ? 'Pro' : String(plan || 'free').replace(/^./, c => c.toUpperCase()));
+  const key = plan === 'paid' ? 'pro' : String(plan || 'free');
+  const localized = window.PromptGenI18n?.t(`pricing.plan.${key}.name`);
+  if (localized && !localized.startsWith('[')) return localized;
+  return getCatalogPlan(plan)?.name || (plan === 'paid' ? 'Pro' : key.replace(/^./, c => c.toUpperCase()));
 }
 
 function getPlanTotalCredits(plan) {
@@ -53,7 +60,10 @@ function getAnalysisCreditCost() {
 function formatUsd(value) {
   const amount = Number(value);
   if (!Number.isFinite(amount)) return null;
-  return `$${amount.toFixed(2).replace(/\.00$/, '')}`;
+  return window.PromptGenI18n?.formatCurrency(amount, 'USD', {
+    minimumFractionDigits: amount % 1 === 0 ? 0 : 2,
+    maximumFractionDigits: 2
+  }) || `$${amount.toFixed(2).replace(/\.00$/, '')}`;
 }
 
 function setCatalogText(card, field, value) {
@@ -65,13 +75,21 @@ function hydrateProductCatalog(catalog) {
   for (const card of document.querySelectorAll('[data-catalog-plan]')) {
     const plan = catalog?.plans?.[card.dataset.catalogPlan];
     if (!plan) continue;
-    setCatalogText(card, 'name', plan.name);
-    setCatalogText(card, 'description', plan.description);
+    setCatalogText(card, 'name', uiText(`pricing.plan.${card.dataset.catalogPlan}.name`));
+    setCatalogText(card, 'description', uiText(`pricing.plan.${card.dataset.catalogPlan}.description`));
     setCatalogText(card, 'price', formatUsd(plan.monthlyPriceUsd));
     if (plan.credits > 0) {
-      setCatalogText(card, 'credits', `✓ ${plan.credits.toLocaleString('en-US')} credits reset each billing month`);
-      setCatalogText(card, 'storyboards', `✓ Up to ${plan.storyboards.toLocaleString('en-US')} storyboards (${catalog.storyboardCreditCost.toLocaleString('en-US')} credits each)`);
-      setCatalogText(card, 'analyses', `✓ Up to ${plan.imageAnalyses.toLocaleString('en-US')} image analyses (${catalog.analysisCreditCost.toLocaleString('en-US')} credits each)`);
+      setCatalogText(card, 'credits', uiText('pricing.feature.creditsMonthly', {
+        credits: window.PromptGenI18n?.formatNumber(plan.credits) || plan.credits
+      }));
+      setCatalogText(card, 'storyboards', uiText('pricing.feature.storyboards', {
+        count: window.PromptGenI18n?.formatNumber(plan.storyboards) || plan.storyboards,
+        credits: window.PromptGenI18n?.formatNumber(catalog.storyboardCreditCost) || catalog.storyboardCreditCost
+      }));
+      setCatalogText(card, 'analyses', uiText('pricing.feature.analyses', {
+        count: window.PromptGenI18n?.formatNumber(plan.imageAnalyses) || plan.imageAnalyses,
+        credits: window.PromptGenI18n?.formatNumber(catalog.analysisCreditCost) || catalog.analysisCreditCost
+      }));
     }
   }
 
@@ -133,21 +151,23 @@ function updateAnalyzeButtonState() {
   const analysisCreditCost = getAnalysisCreditCost();
   if (!state.file) {
     analyzeBtn.disabled = true;
-    analyzeBtn.textContent = isPaid ? `✨ Analyze (${analysisCreditCost} Credits)` : '✨ Analyze Image';
+    analyzeBtn.textContent = isPaid
+      ? uiText('generator.action.analyzeCredits', { credits: analysisCreditCost })
+      : uiText('generator.action.analyze');
     if (creditsErrorEl) creditsErrorEl.style.display = 'none';
     return;
   }
   if (isPaid && currentUserCredits < analysisCreditCost) {
     analyzeBtn.disabled = true;
-    analyzeBtn.textContent = `✨ Analyze (${analysisCreditCost} Credits)`;
-    if (creditsErrorEl) { creditsErrorEl.textContent = 'Not enough credits. Upgrade your plan.'; creditsErrorEl.style.display = ''; }
+    analyzeBtn.textContent = uiText('generator.action.analyzeCredits', { credits: analysisCreditCost });
+    if (creditsErrorEl) { creditsErrorEl.textContent = uiText('generator.error.insufficientCredits'); creditsErrorEl.style.display = ''; }
   } else if (isPaid) {
     analyzeBtn.disabled = false;
-    analyzeBtn.textContent = `✨ Analyze (${analysisCreditCost} Credits)`;
+    analyzeBtn.textContent = uiText('generator.action.analyzeCredits', { credits: analysisCreditCost });
     if (creditsErrorEl) creditsErrorEl.style.display = 'none';
   } else {
     analyzeBtn.disabled = false;
-    analyzeBtn.textContent = '✨ Analyze Image';
+    analyzeBtn.textContent = uiText('generator.action.analyze');
     if (creditsErrorEl) creditsErrorEl.style.display = 'none';
   }
 }
@@ -191,11 +211,11 @@ function handleFileSelect(file) {
   if (state.analyzing) return;
   const ALLOWED = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
   if (!ALLOWED.includes(file.type)) {
-    showError('Please upload a JPEG, PNG, WebP, or GIF image.');
+    showError(uiText('generator.error.fileType'));
     return;
   }
   if (file.size > 20 * 1024 * 1024) {
-    showError('File size must be 20 MB or less.');
+    showError(uiText('generator.error.fileSize'));
     return;
   }
   hideError();
@@ -261,11 +281,11 @@ analyzeBtn.addEventListener('click', async () => {
         openUpgradeModal(data.code);
         return;
       }
-      throw new Error(data.error || 'Access denied');
+      throw new Error(uiText('generator.error.accessDenied'));
     }
 
     const data = await res.json();
-    if (!data.success) throw new Error(data.error || 'Analysis failed');
+    if (!data.success) throw new Error(uiText('generator.error.analysisFailed'));
 
     state.result = data;
     state.bracketValues = {};
@@ -377,7 +397,7 @@ function createChip(bracketData, originalWithBrackets) {
   if (bracketData.suggestions && bracketData.suggestions.length > 0) {
     const sugLabel = document.createElement('p');
     sugLabel.className = 'suggestions-label';
-    sugLabel.textContent = 'Suggestions';
+    sugLabel.textContent = uiText('generator.suggestions');
     popover.appendChild(sugLabel);
 
     const row = document.createElement('div');
@@ -435,14 +455,14 @@ analysisToggle.addEventListener('click', () => {
 
 function renderAnalysis(analysis) {
   const labels = {
-    composition: 'Composition',
-    lighting:    'Lighting',
-    mood:        'Mood',
-    style:       'Style',
-    technique:   'Technique',
-    layers:      'Layers',
-    aspectRatio: 'Aspect Ratio',
-    spatialRelationship: 'Spatial'
+    composition: uiText('generator.analysis.composition'),
+    lighting:    uiText('generator.analysis.lighting'),
+    mood:        uiText('generator.analysis.mood'),
+    style:       uiText('generator.analysis.style'),
+    technique:   uiText('generator.analysis.technique'),
+    layers:      uiText('generator.analysis.layers'),
+    aspectRatio: uiText('generator.analysis.aspectRatio'),
+    spatialRelationship: uiText('generator.analysis.spatial')
   };
 
   const wideKeys = new Set(['layers', 'technique', 'spatialRelationship']);
@@ -456,7 +476,7 @@ function renderAnalysis(analysis) {
     dd.className = 'wide';
     dd.style.color = 'var(--text-muted, #888)';
     dd.style.fontStyle = 'italic';
-    dd.textContent = 'No analysis available';
+    dd.textContent = uiText('generator.analysis.empty');
     analysisGrid.appendChild(dd);
   } else {
     populated.forEach(([key, label]) => {
@@ -494,7 +514,7 @@ downloadBtn.addEventListener('click', () => {
   URL.revokeObjectURL(url);
 
   const original = downloadBtn.textContent;
-  downloadBtn.textContent = '✓ Downloaded!';
+  downloadBtn.textContent = uiText('common.state.downloaded');
   setTimeout(() => { downloadBtn.textContent = original; }, 2000);
 });
 
@@ -519,7 +539,7 @@ copyBtn.addEventListener('click', async () => {
   }
 
   const original = copyBtn.textContent;
-  copyBtn.textContent = '✓ Copied!';
+  copyBtn.textContent = uiText('common.state.copied');
   setTimeout(() => { copyBtn.textContent = original; }, 2000);
 });
 
@@ -539,7 +559,7 @@ function setLoading(on) {
   state.analyzing = on;
   if (on) {
     analyzeBtn.disabled = true;
-    analyzeBtn.textContent = '✨ Analyzing... Please wait';
+    analyzeBtn.textContent = uiText('generator.state.analyzingWait');
     analyzeBtn.style.opacity = '0.6';
     analyzeBtn.style.cursor = 'not-allowed';
   } else {
@@ -726,13 +746,12 @@ authRequiredGoogleBtn.addEventListener('click', () => {
 (function () {
   if (!isInAppBrowser()) return;
 
-  const WARNING_MSG = 'Please open this page in Chrome or Safari. Google login is not supported in in-app browsers.';
-
   function injectWarning(modal) {
     if (!modal || modal.querySelector('.inapp-warning')) return;
     const notice = document.createElement('p');
     notice.className = 'inapp-warning';
-    notice.textContent = WARNING_MSG;
+    notice.setAttribute('data-i18n', 'auth.inAppBrowserWarning');
+    notice.textContent = uiText('auth.inAppBrowserWarning');
     const btn = modal.querySelector('.btn--google');
     if (btn) {
       btn.parentNode.insertBefore(notice, btn);
@@ -756,11 +775,11 @@ const upgradeBtn   = document.getElementById('upgradeBtn');
 
 function openUpgradeModal(code) {
   if (code === 'NO_CREDITS') {
-    upgradeTitle.textContent = 'Insufficient Credits';
-    upgradeDesc.textContent = 'All credits have been used up. Add more credits or upgrade your plan.';
+    upgradeTitle.textContent = uiText('auth.credits.title');
+    upgradeDesc.textContent = uiText('auth.credits.description');
   } else {
-    upgradeTitle.textContent = 'Daily Limit Reached';
-    upgradeDesc.textContent = 'The free plan allows 1 generation per day. Try again tomorrow or upgrade to Pro.';
+    upgradeTitle.textContent = uiText('auth.limit.title');
+    upgradeDesc.textContent = uiText('auth.limit.description');
   }
   upgradeModal.classList.add('open');
   upgradeModal.setAttribute('aria-hidden', 'false');
@@ -816,11 +835,16 @@ async function refreshUserProfile(session) {
       if (['pro', 'enterprise', 'paid'].includes(planKey)) {
         const total = getPlanTotalCredits(planKey);
         usageDisplayEl.textContent = total == null
-          ? `Credits: ${currentUserCredits.toLocaleString()}`
-          : `Credits: ${currentUserCredits.toLocaleString()} / ${total.toLocaleString()}`;
+          ? uiText('account.credits.remaining', {
+              remaining: window.PromptGenI18n?.formatNumber(currentUserCredits) || currentUserCredits
+            })
+          : uiText('account.credits.remainingOfTotal', {
+              remaining: window.PromptGenI18n?.formatNumber(currentUserCredits) || currentUserCredits,
+              total: window.PromptGenI18n?.formatNumber(total) || total
+            });
         if (manageSubBtn) manageSubBtn.style.display = '';
       } else {
-        usageDisplayEl.textContent = `Today ${data.daily_used}/1 used`;
+        usageDisplayEl.textContent = uiText('account.dailyUsage', { used: data.daily_used, total: 1 });
         if (manageSubBtn) manageSubBtn.style.display = 'none';
       }
       updateAnalyzeButtonState();
@@ -898,7 +922,7 @@ async function loadHistory() {
   const { data: { session } } = await sbClient.auth.getSession();
   if (!session) return;
 
-  historyList.innerHTML = '<li class="history-loading">Loading…</li>';
+  historyList.innerHTML = `<li class="history-loading">${uiText('common.state.loading')}</li>`;
 
   try {
     const res = await fetch('/api/user/history?limit=10', {
@@ -907,7 +931,7 @@ async function loadHistory() {
     const data = await res.json();
 
     if (!data.success || !data.history.length) {
-      historyList.innerHTML = '<li class="history-empty">No prompts yet. Analyze an image to get started!</li>';
+      historyList.innerHTML = `<li class="history-empty">${uiText('generator.history.empty')}</li>`;
       return;
     }
 
@@ -953,13 +977,13 @@ async function loadHistory() {
         if ((await res.json()).success) {
           btn.closest('.history-item').remove();
           if (!historyList.querySelector('.history-item')) {
-            historyList.innerHTML = '<li class="history-empty">No prompts yet.</li>';
+            historyList.innerHTML = `<li class="history-empty">${uiText('generator.history.none')}</li>`;
           }
         }
       });
     });
   } catch (e) {
-    historyList.innerHTML = '<li class="history-empty">Failed to load history.</li>';
+    historyList.innerHTML = `<li class="history-empty">${uiText('generator.history.failed')}</li>`;
   }
 }
 
@@ -979,7 +1003,7 @@ if (manageSubBtn) {
 
     const original = manageSubBtn.textContent;
     manageSubBtn.disabled = true;
-    manageSubBtn.textContent = 'Opening…';
+    manageSubBtn.textContent = uiText('common.state.opening');
     try {
       const res = await fetch('/api/payment/cancel', {
         method: 'POST',
@@ -989,10 +1013,11 @@ if (manageSubBtn) {
       if (data.success && data.url) {
         window.open(data.url, '_blank', 'noopener');
       } else {
-        alert(data.error || 'Could not open subscription management. Please try again.');
+        console.error('[subscription] Failed to open management portal:', data.error || 'unknown error');
+        alert(uiText('subscription.error.openManagement'));
       }
     } catch (e) {
-      alert('Could not open subscription management. Please try again.');
+      alert(uiText('subscription.error.openManagement'));
     } finally {
       manageSubBtn.disabled = false;
       manageSubBtn.textContent = original;
@@ -1015,13 +1040,13 @@ async function handleCheckout(plan) {
     catalog = await ensurePaddleInitialized();
   } catch (error) {
     console.error('[checkout] Catalog/Paddle initialization failed:', error.message);
-    alert('Checkout is temporarily unavailable. Please try again later.');
+    alert(uiText('checkout.error.unavailable'));
     return;
   }
   const priceId = catalog?.paddle?.priceIds?.[plan];
   if (!priceId) {
     console.error('[checkout] Missing server-provided Paddle price ID for plan=' + plan);
-    alert('Checkout is temporarily unavailable. Please try again later.');
+    alert(uiText('checkout.error.unavailable'));
     return;
   }
 
@@ -1056,12 +1081,10 @@ async function handlePlanButtonClick(targetPlan) {
 /* ── Pricing button states based on current plan ── */
 // Tiers: free(0) < pro/paid(1) < enterprise(2)
 const PLAN_TIER = { free: 0, paid: 1, pro: 1, enterprise: 2 };
-const SWITCH_TOOLTIP = 'Plan switching is coming soon. Contact support to change your plan.';
-
 const PRICING_BUTTONS = [
-  { el: document.getElementById('freePlanBtn'),       plan: 'free',       defaultLabel: 'Get Started' },
-  { el: document.getElementById('proPlanBtn'),        plan: 'pro',        defaultLabel: 'Get Started' },
-  { el: document.getElementById('enterprisePlanBtn'), plan: 'enterprise', defaultLabel: 'Get Started' }
+  { el: document.getElementById('freePlanBtn'),       plan: 'free' },
+  { el: document.getElementById('proPlanBtn'),        plan: 'pro' },
+  { el: document.getElementById('enterprisePlanBtn'), plan: 'enterprise' }
 ];
 
 loadProductCatalog()
@@ -1073,7 +1096,7 @@ loadProductCatalog()
 
 function resetPricingButton(btn) {
   if (!btn.el) return;
-  btn.el.textContent = btn.defaultLabel;
+  btn.el.textContent = uiText('common.action.getStarted');
   btn.el.disabled = false;
   btn.el.classList.remove('btn--current');
   btn.el.removeAttribute('title');
@@ -1094,19 +1117,19 @@ function updatePricingButtons() {
 
     if (btnTier === curTier) {
       // Current plan
-      btn.el.textContent = '✓ Current Plan';
+      btn.el.textContent = uiText('pricing.action.currentPlan');
       btn.el.disabled = true;
       btn.el.classList.add('btn--current');
       btn.el.removeAttribute('title');
     } else if (btnTier > curTier) {
       btn.el.classList.remove('btn--current');
-      btn.el.textContent = `Upgrade to ${getPlanLabel(btn.plan)}`;
+      btn.el.textContent = uiText('pricing.action.upgradeTo', { plan: getPlanLabel(btn.plan) });
       btn.el.disabled = false;
       btn.el.removeAttribute('title');
     } else {
       // Downgrade
       btn.el.classList.remove('btn--current');
-      btn.el.textContent = `Downgrade to ${getPlanLabel(btn.plan)}`;
+      btn.el.textContent = uiText('pricing.action.downgradeTo', { plan: getPlanLabel(btn.plan) });
       btn.el.disabled = false;
       btn.el.removeAttribute('title');
     }
@@ -1167,8 +1190,8 @@ function openChangePlanModal(targetPlan) {
 
   changePlanIcon.textContent  = isUpgrade ? '⬆️' : '⬇️';
   changePlanTitle.textContent = isUpgrade
-    ? `Upgrade to ${getPlanLabel(targetPlan)}`
-    : `Downgrade to ${getPlanLabel(targetPlan)}`;
+    ? uiText('pricing.action.upgradeTo', { plan: getPlanLabel(targetPlan) })
+    : uiText('pricing.action.downgradeTo', { plan: getPlanLabel(targetPlan) });
   changePlanCreditWarn.style.display = 'none';
   changePlanPriceInfo.textContent    = '';
   cpShowState(cpStateLoading);
@@ -1202,43 +1225,46 @@ async function _cpLoadPreview(targetPlan, isUpgrade) {
     });
     const json = ChangePlanHelpers.parseApiJson(
       await res.text(),
-      'Could not load plan details. Please try again later.'
+      uiText('plan.change.error.loadDetails')
     );
 
-    if (!res.ok || !json.success) throw new Error(json.error || 'Could not load plan details.');
+    if (!res.ok || !json.success) throw new Error(uiText('plan.change.error.loadDetails'));
 
     _cpRenderReady(ChangePlanHelpers.parsePlanPreview(json.data), targetPlan, isUpgrade);
   } catch (err) {
-    changePlanTitle.textContent = 'Could not load plan details';
-    changePlanErrorMsg.textContent = err.message || 'Please try again.';
+    changePlanTitle.textContent = uiText('plan.change.error.title');
+    changePlanErrorMsg.textContent = err.message || uiText('common.error.tryAgain');
     cpShowState(cpStateError);
   }
 }
 
 function _cpRenderReady(preview, targetPlan, isUpgrade) {
   if (!preview) {
-    changePlanErrorMsg.textContent = 'Preview unavailable. Please try again.';
+    changePlanErrorMsg.textContent = uiText('plan.change.error.previewUnavailable');
     cpShowState(cpStateError);
     return;
   }
 
   const { immediateAmount, recurringAmount, currency, immediateApplicable } = preview;
-  const fmt = (n) => currency === 'USD' ? `$${n.toFixed(2)}` : `${n.toFixed(2)} ${currency}`;
+  const fmt = (n) => window.PromptGenI18n?.formatCurrency(n, currency) || `${n.toFixed(2)} ${currency}`;
 
   const lines = [];
   if (immediateApplicable) {
-    lines.push(`Due now (prorated): ${fmt(immediateAmount)}`);
+    lines.push(uiText('plan.change.dueNow', { amount: fmt(immediateAmount) }));
   } else {
-    lines.push('Applies from your next billing date.');
+    lines.push(uiText('plan.change.nextBillingDate'));
   }
-  if (recurringAmount !== null) lines.push(`Then: ${fmt(recurringAmount)} / month`);
+  if (recurringAmount !== null) lines.push(uiText('plan.change.thenMonthly', { amount: fmt(recurringAmount) }));
   changePlanPriceInfo.textContent = lines.join('\n');
 
   if (!isUpgrade) {
     const warn = ChangePlanHelpers.calcCreditWarning(currentUserCredits, targetPlan, getPlanTotalCredits(targetPlan));
     if (warn.show) {
       changePlanCreditText.textContent =
-        `⚠ Credits will change: ${warn.from.toLocaleString()} → ${warn.to.toLocaleString()}`;
+        uiText('plan.change.creditWarning', {
+          from: window.PromptGenI18n?.formatNumber(warn.from) || warn.from,
+          to: window.PromptGenI18n?.formatNumber(warn.to) || warn.to
+        });
       changePlanCreditWarn.style.display = '';
     }
   }
@@ -1253,8 +1279,8 @@ changePlanConfirmBtn?.addEventListener('click', async () => {
   if (!['pro', 'enterprise', 'paid'].includes(currentUserPlan)) { closeChangePlanModal(); return; }
 
   changePlanIcon.textContent  = '⏳';
-  changePlanTitle.textContent = 'Applying change…';
-  changePlanUpdatingMsg.textContent = 'Applying your plan change…';
+  changePlanTitle.textContent = uiText('plan.change.applyingShort');
+  changePlanUpdatingMsg.textContent = uiText('plan.change.applying');
   if (cpUpdatingSpinner) cpUpdatingSpinner.style.display = 'flex';
   if (changePlanRefreshBtn) changePlanRefreshBtn.style.display = 'none';
   cpShowState(cpStateUpdating);
@@ -1273,14 +1299,14 @@ changePlanConfirmBtn?.addEventListener('click', async () => {
     });
     const json = ChangePlanHelpers.parseApiJson(
       await res.text(),
-      'Could not change your plan. Please try again later.'
+      uiText('plan.change.error.changeFailed')
     );
 
-    if (!res.ok || !json.success) throw new Error(json.error || 'Could not change your plan. Please try again later.');
+    if (!res.ok || !json.success) throw new Error(uiText('plan.change.error.changeFailed'));
 
     // PATCH accepted — webhook is async, poll until plan is reflected
-    changePlanTitle.textContent = 'Updating…';
-    changePlanUpdatingMsg.textContent = 'Applying your plan change…';
+    changePlanTitle.textContent = uiText('plan.change.updating');
+    changePlanUpdatingMsg.textContent = uiText('plan.change.applying');
 
     _cpPollCancel = ChangePlanHelpers.createPlanPoller(
       async () => { await refreshUserProfile(session); return currentUserPlan; },
@@ -1294,17 +1320,16 @@ changePlanConfirmBtn?.addEventListener('click', async () => {
           // webhook is just slow to reflect locally — reassure, do NOT force reload.
           _cpPollCancel = null;
           changePlanIcon.textContent = '✅';
-          changePlanTitle.textContent = 'Plan change confirmed';
+          changePlanTitle.textContent = uiText('plan.change.confirmed');
           if (cpUpdatingSpinner) cpUpdatingSpinner.style.display = 'none';
-          changePlanUpdatingMsg.textContent =
-            '변경이 완료됐어요. 반영까지 1~2분 걸릴 수 있습니다. 아래 버튼으로 최신 상태를 불러올 수 있어요.';
+          changePlanUpdatingMsg.textContent = uiText('plan.change.confirmedPending');
           if (changePlanRefreshBtn) changePlanRefreshBtn.style.display = '';
         }
       }
     );
   } catch (err) {
-    changePlanTitle.textContent = 'Something went wrong';
-    changePlanErrorMsg.textContent = err.message || 'Could not change your plan. Please try again later.';
+    changePlanTitle.textContent = uiText('common.error.title');
+    changePlanErrorMsg.textContent = err.message || uiText('plan.change.error.changeFailed');
     cpShowState(cpStateError);
   }
 });
@@ -1328,3 +1353,12 @@ const revealObserver = new IntersectionObserver((entries) => {
 }, { threshold: 0.08, rootMargin: '0px 0px -60px 0px' });
 
 document.querySelectorAll('.section-reveal').forEach(el => revealObserver.observe(el));
+
+document.addEventListener('promptgen:localechange', async () => {
+  if (productCatalog) hydrateProductCatalog(productCatalog);
+  updateAnalyzeButtonState();
+  updatePricingButtons();
+  if (state.result) renderAnalysis(state.result.analysis || {});
+  const { data: { session } } = await sbClient.auth.getSession();
+  if (session) await refreshUserProfile(session);
+});

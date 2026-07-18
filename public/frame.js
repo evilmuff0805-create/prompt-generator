@@ -8,6 +8,8 @@ const sbClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
 (function () {
   'use strict';
 
+  const uiText = (key, values) => window.PromptGenI18n?.t(key, values) || key;
+
   /* ── DOM refs ── */
   const dropZone        = document.getElementById('frameDropZone');
   const fileInput       = document.getElementById('frameFileInput');
@@ -125,8 +127,12 @@ const sbClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
       resultImg.src = url;
       resultImg.onload = function () { URL.revokeObjectURL(url); };
     }
-    const sizeMB = (blob.size / 1024 / 1024).toFixed(1);
-    if (resultMeta) resultMeta.textContent = width + ' × ' + height + 'px · PNG · ' + sizeMB + ' MB';
+    const sizeMB = blob.size / 1024 / 1024;
+    if (resultMeta) resultMeta.textContent = uiText('frame.result.meta', {
+      width: window.PromptGenI18n?.formatNumber(width) || width,
+      height: window.PromptGenI18n?.formatNumber(height) || height,
+      size: window.PromptGenI18n?.formatNumber(sizeMB, { minimumFractionDigits: 1, maximumFractionDigits: 1 }) || sizeMB.toFixed(1)
+    });
     if (resultCard) resultCard.style.display = 'block';
     currentBlob = blob;
     currentFilename = filename;
@@ -155,17 +161,17 @@ const sbClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
         // Guard: if duration is invalid, reject with a clear error
         if (!video.duration || isNaN(video.duration) || video.duration <= 0) {
           URL.revokeObjectURL(blobUrl);
-          reject(new Error('Could not read video duration. This format may not be supported by your browser. Try MP4 or WebM.'));
+          reject(new Error(uiText('frame.error.duration')));
           return;
         }
 
-        setLoading(true, 'Seeking to last frame…');
+        setLoading(true, uiText('frame.state.seeking'));
         video.currentTime = Math.max(0, video.duration - 0.1);
       });
 
       video.addEventListener('seeked', function onSeeked() {
         video.removeEventListener('seeked', onSeeked);
-        setLoading(true, 'Capturing frame…');
+        setLoading(true, uiText('frame.state.capturing'));
 
         const w = video.videoWidth;
         const h = video.videoHeight;
@@ -173,11 +179,11 @@ const sbClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
         canvas.height = h;
         canvas.getContext('2d').drawImage(video, 0, 0, w, h);
 
-        setLoading(true, 'Generating PNG…');
+        setLoading(true, uiText('frame.state.generatingPng'));
         canvas.toBlob(function (blob) {
           URL.revokeObjectURL(blobUrl);
           if (!blob) {
-            reject(new Error('Failed to generate PNG from video frame.'));
+            reject(new Error(uiText('frame.error.generatePng')));
             return;
           }
           resolve({ blob: blob, width: w, height: h });
@@ -187,7 +193,7 @@ const sbClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
       video.addEventListener('error', function onErr() {
         video.removeEventListener('error', onErr);
         URL.revokeObjectURL(blobUrl);
-        reject(new Error('Could not load video. The format may not be supported by your browser.'));
+        reject(new Error(uiText('frame.error.loadVideo')));
       });
     });
   }
@@ -195,7 +201,7 @@ const sbClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
   /* ── Process file ── */
   async function processFile(file) {
     if (!file || !file.type.startsWith('video/')) {
-      showError('Please upload a video file (MP4, WebM, MOV).');
+      showError(uiText('frame.error.fileType'));
       return;
     }
 
@@ -204,7 +210,7 @@ const sbClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
     if (!session) { showAuthGate(); return; }
 
     reset();
-    setLoading(true, 'Loading video…');
+    setLoading(true, uiText('frame.state.loadingVideo'));
 
     const baseName = file.name.replace(/\.[^.]+$/, '');
 
@@ -214,7 +220,7 @@ const sbClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
       showResult(blob, baseName + '_endframe', width, height);
     } catch (err) {
       setLoading(false);
-      showError(err.message || 'Failed to extract frame.');
+      showError(err.message || uiText('frame.error.extract'));
     }
   }
 
@@ -232,7 +238,7 @@ const sbClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
       URL.revokeObjectURL(url);
 
       const orig = downloadBtn.textContent;
-      downloadBtn.textContent = '✓ Downloaded!';
+      downloadBtn.textContent = uiText('common.state.downloaded');
       setTimeout(function () { downloadBtn.textContent = orig; }, 2000);
     });
   }

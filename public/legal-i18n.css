@@ -1,0 +1,69 @@
+.topbar .locale-switcher {
+  position: relative;
+  display: flex;
+  align-items: center;
+  margin-left: auto;
+}
+
+.topbar .locale-switcher::after {
+  position: absolute;
+  right: 0.65rem;
+  color: #8888a0;
+  content: '⌄';
+  font-size: 0.7rem;
+  pointer-events: none;
+}
+
+.topbar .locale-switcher__select {
+  width: clamp(104px, 14vw, 138px);
+  min-height: 38px;
+  padding: 0.4rem 1.75rem 0.4rem 0.65rem;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 0.7rem;
+  appearance: none;
+  color: #f0f0f5;
+  background: linear-gradient(145deg, rgba(255, 255, 255, 0.09), rgba(255, 255, 255, 0.025)), #14141a;
+  font: inherit;
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.topbar .locale-switcher__select option {
+  color: #111218;
+  background: #fff;
+}
+
+.topbar__back {
+  margin-left: 0 !important;
+}
+
+.legal-translation-note {
+  margin: 0 0 2rem;
+  padding: 0.85rem 1rem;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-left: 3px solid #00ffcc;
+  border-radius: 0.5rem;
+  background: #14141a;
+  color: #aaaabc;
+  font-size: 0.84rem;
+}
+
+.sr-only {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  padding: 0 !important;
+  margin: -1px !important;
+  overflow: hidden !important;
+  clip: rect(0, 0, 0, 0) !important;
+  white-space: nowrap !important;
+  border: 0 !important;
+}
+
+@media (max-width: 520px) {
+  .topbar { padding-right: 0.8rem !important; padding-left: 0.8rem !important; gap: 0.55rem !important; }
+  .topbar__logo { font-size: 1rem !important; }
+  .topbar .locale-switcher__select { width: 96px; font-size: 0.68rem; }
+  .topbar__back { font-size: 0.75rem !important; }
+}

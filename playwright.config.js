@@ -20,7 +20,7 @@ module.exports = defineConfig({
   use: {
     baseURL,
     screenshot: 'only-on-failure',
-    video: 'retain-on-failure',
+    video: process.platform === 'win32' ? 'off' : 'retain-on-failure',
   },
   webServer: process.env.PLAYWRIGHT_TEST_BASE_URL
     ? undefined
@@ -55,7 +55,10 @@ module.exports = defineConfig({
   projects: [
     {
       name: 'chromium',
-      use: { ...devices['Desktop Chrome'] },
+      use: {
+        ...devices['Desktop Chrome'],
+        ...(process.platform === 'win32' ? { channel: 'chrome' } : {}),
+      },
     },
   ],
   outputDir: 'test-results',

@@ -7,6 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/legal-i18n.css" />
   <style>
     :root {
       --clr-mint:      #00FFCC;
@@ -54,14 +55,14 @@
     .highlight-box p { margin-bottom: 0; }
   </style>
 </head>
-<body>
+<body data-legal-page="refund">
 
   <div class="topbar">
     <span class="topbar__logo">PromptGen</span>
-    <a href="/" class="topbar__back">← Back to Home</a>
+    <a href="/" class="topbar__back" data-i18n="common.action.backHome">← Back to Home</a>
   </div>
 
-  <div class="container">
+  <div class="container" id="legalDocument">
     <h1 class="page-title">Refund Policy</h1>
     <p class="page-meta">Effective Date: May 1, 2026 &nbsp;·&nbsp; Last Updated: July 17, 2026</p>
 
@@ -116,6 +117,18 @@
     <hr class="divider" />
     <p style="font-size:0.8rem; color: var(--clr-text-muted);">© 2026 PromptGen. All rights reserved.</p>
   </div>
+
+  <script src="/i18n/runtime.js"></script>
+  <script src="/i18n/config.js"></script>
+  <script src="/i18n/locales/en.js"></script>
+  <script src="/i18n/locales/ko.js"></script>
+  <script src="/i18n/locales/ja.js"></script>
+  <script src="/i18n/locales/zh-CN.js"></script>
+  <script src="/i18n/locales/fr.js"></script>
+  <script src="/i18n/locales/ru.js"></script>
+  <script src="/i18n/init.js"></script>
+  <script src="/i18n/legal-content.js"></script>
+  <script src="/i18n/legal-page.js"></script>
 
 </body>
 </html>
