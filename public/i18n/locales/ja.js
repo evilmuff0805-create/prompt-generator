@@ -188,6 +188,8 @@
     'storyboard.field.shots': 'ショット数',
     'storyboard.shots.four': '4ショット',
     'storyboard.shots.nine': '9ショット',
+    'storyboard.shots.fourMeta': '2×2グリッド · 合計約14秒',
+    'storyboard.shots.nineMeta': '3×3グリッド · 合計約13.5秒',
     'storyboard.field.references': '参考画像',
     'storyboard.field.referencesHint': '任意 · 最大4枚 · 24時間で期限切れ',
     'storyboard.references.add': '＋ 参考画像を追加',

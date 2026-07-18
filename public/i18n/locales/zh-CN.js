@@ -188,6 +188,8 @@
     'storyboard.field.shots': '镜头数量',
     'storyboard.shots.four': '4 个镜头',
     'storyboard.shots.nine': '9 个镜头',
+    'storyboard.shots.fourMeta': '2×2 网格 · 总计约 14 秒',
+    'storyboard.shots.nineMeta': '3×3 网格 · 总计约 13.5 秒',
     'storyboard.field.references': '参考图片',
     'storyboard.field.referencesHint': '可选 · 最多 4 张 · 24 小时后过期',
     'storyboard.references.add': '＋ 添加参考图片',

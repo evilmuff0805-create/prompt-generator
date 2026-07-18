@@ -9,10 +9,11 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/style.css" />
+  <link rel="stylesheet" href="/style.css?v=__ASSET_VERSION__" />
+  <link rel="stylesheet" href="/storyboard.css?v=__ASSET_VERSION__" />
   <link rel="icon" href="/favicon.png" type="image/png">
 </head>
-<body>
+<body class="storyboard-shell">
 
   <nav id="navbar" class="navbar">
     <div class="navbar__inner">
@@ -35,7 +36,7 @@
         <a href="/storyboard" class="btn btn--primary storyboard-new-btn" data-i18n="common.action.newStoryboard">+ New Storyboard</a>
       </div>
 
-      <div id="historyLoading" class="storyboard-loading-state">
+      <div id="historyLoading" class="storyboard-loading-state" role="status" aria-live="polite">
         <div class="storyboard-spinner"></div>
         <p data-i18n="common.state.loading">Loading…</p>
       </div>
@@ -47,7 +48,7 @@
         <a href="/storyboard" class="btn btn--primary" style="margin-top:1rem" data-i18n="common.action.createStoryboard">Create Storyboard</a>
       </div>
 
-      <div id="historyGrid" class="storyboard-history-grid" style="display:none"></div>
+      <div id="historyGrid" class="storyboard-history-grid" style="display:none" role="list"></div>
 
       <div id="historyPagination" class="storyboard-pagination" style="display:none">
         <button id="prevPage" class="btn btn--outline" disabled data-i18n="storyboardHistory.previous">← Previous</button>
@@ -58,19 +59,19 @@
     </div>
   </main>
 
-  <script src="/i18n/runtime.js"></script>
-  <script src="/i18n/config.js"></script>
-  <script src="/i18n/locales/en.js"></script>
-  <script src="/i18n/locales/ko.js"></script>
-  <script src="/i18n/locales/ja.js"></script>
-  <script src="/i18n/locales/zh-CN.js"></script>
-  <script src="/i18n/locales/fr.js"></script>
-  <script src="/i18n/locales/ru.js"></script>
-  <script src="/i18n/init.js"></script>
+  <script src="/i18n/runtime.js?v=__ASSET_VERSION__"></script>
+  <script src="/i18n/config.js?v=__ASSET_VERSION__"></script>
+  <script src="/i18n/locales/en.js?v=__ASSET_VERSION__"></script>
+  <script src="/i18n/locales/ko.js?v=__ASSET_VERSION__"></script>
+  <script src="/i18n/locales/ja.js?v=__ASSET_VERSION__"></script>
+  <script src="/i18n/locales/zh-CN.js?v=__ASSET_VERSION__"></script>
+  <script src="/i18n/locales/fr.js?v=__ASSET_VERSION__"></script>
+  <script src="/i18n/locales/ru.js?v=__ASSET_VERSION__"></script>
+  <script src="/i18n/init.js?v=__ASSET_VERSION__"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.49.4/dist/umd/supabase.js" integrity="sha256-/anWf4DM5AdPeNY3O7E26Ew0yyNbipHF5ChAaNpt3EI=" crossorigin="anonymous"></script>
-  <script src="/analytics.js"></script>
-  <script src="/navbar-shared.js"></script>
-  <script src="/js/storyboard-api.js"></script>
-  <script src="/js/storyboard-history.js"></script>
+  <script src="/analytics.js?v=__ASSET_VERSION__"></script>
+  <script src="/navbar-shared.js?v=__ASSET_VERSION__"></script>
+  <script src="/js/storyboard-api.js?v=__ASSET_VERSION__"></script>
+  <script src="/js/storyboard-history.js?v=__ASSET_VERSION__"></script>
 </body>
 </html>

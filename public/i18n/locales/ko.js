@@ -190,6 +190,8 @@
     'storyboard.field.shots': '컷 수',
     'storyboard.shots.four': '4컷',
     'storyboard.shots.nine': '9컷',
+    'storyboard.shots.fourMeta': '2×2 그리드 · 총 약 14초',
+    'storyboard.shots.nineMeta': '3×3 그리드 · 총 약 13.5초',
     'storyboard.field.references': '레퍼런스 이미지',
     'storyboard.field.referencesHint': '선택 사항 · 최대 4장 · 24시간 후 만료',
     'storyboard.references.add': '＋ 레퍼런스 이미지 추가',

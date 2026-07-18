@@ -188,6 +188,8 @@
     'storyboard.field.shots': 'Количество кадров',
     'storyboard.shots.four': '4 кадра',
     'storyboard.shots.nine': '9 кадров',
+    'storyboard.shots.fourMeta': 'Сетка 2×2 · всего ~14 с',
+    'storyboard.shots.nineMeta': 'Сетка 3×3 · всего ~13,5 с',
     'storyboard.field.references': 'Референсные изображения',
     'storyboard.field.referencesHint': 'Необязательно · до 4 · срок 24 часа',
     'storyboard.references.add': '＋ Добавить референс',
