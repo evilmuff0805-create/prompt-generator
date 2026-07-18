@@ -4,7 +4,8 @@
   const operatorDetails = Object.freeze({
     businessName: 'codemeet',
     representative: 'yerim suk',
-    registrationNumber: '470-32-01835'
+    registrationNumber: '470-32-01835',
+    customerInquiries: 'codemeet@naver.com'
   });
 
   const operatorLabels = Object.freeze({
@@ -12,31 +13,36 @@
       heading: '서비스 운영자 정보',
       businessName: '사업자',
       representative: '대표자',
-      registrationNumber: '사업자등록번호'
+      registrationNumber: '사업자등록번호',
+      customerInquiries: '고객문의'
     }),
     ja: Object.freeze({
       heading: 'サービス運営者情報',
       businessName: '事業者',
       representative: '代表者',
-      registrationNumber: '事業者登録番号'
+      registrationNumber: '事業者登録番号',
+      customerInquiries: 'お問い合わせ'
     }),
     'zh-CN': Object.freeze({
       heading: '服务运营方信息',
       businessName: '经营者',
       representative: '代表人',
-      registrationNumber: '企业登记号'
+      registrationNumber: '企业登记号',
+      customerInquiries: '客户咨询'
     }),
     fr: Object.freeze({
       heading: 'Informations sur l’exploitant du service',
       businessName: 'Nom commercial',
       representative: 'Représentant',
-      registrationNumber: 'Numéro d’immatriculation de l’entreprise'
+      registrationNumber: 'Numéro d’immatriculation de l’entreprise',
+      customerInquiries: 'Service client'
     }),
     ru: Object.freeze({
       heading: 'Сведения об операторе сервиса',
       businessName: 'Наименование компании',
       representative: 'Представитель',
-      registrationNumber: 'Регистрационный номер компании'
+      registrationNumber: 'Регистрационный номер компании',
+      customerInquiries: 'Поддержка клиентов'
     })
   });
 
@@ -48,7 +54,8 @@
         <p>
           <strong>${labels.businessName}:</strong> ${operatorDetails.businessName}<br />
           <strong>${labels.representative}:</strong> ${operatorDetails.representative}<br />
-          <strong>${labels.registrationNumber}:</strong> ${operatorDetails.registrationNumber}
+          <strong>${labels.registrationNumber}:</strong> ${operatorDetails.registrationNumber}<br />
+          <strong>${labels.customerInquiries}:</strong> <a href="mailto:${operatorDetails.customerInquiries}">${operatorDetails.customerInquiries}</a>
         </p>
       </section>
     `;

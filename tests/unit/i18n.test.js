@@ -18,7 +18,7 @@ const APP_HTML = [
 ];
 const ALL_HTML = [...APP_HTML, 'terms.html', 'privacy.html', 'refund.html'];
 const LEGAL_FILES = ['terms.html', 'privacy.html', 'refund.html'];
-const OPERATOR_DETAILS = ['codemeet', 'yerim suk', '470-32-01835'];
+const OPERATOR_DETAILS = ['codemeet', 'yerim suk', '470-32-01835', 'codemeet@naver.com'];
 const LEGAL_UPDATED_DATE = Object.freeze({
   ko: '2026년 7월 18일',
   ja: '2026年7月18日',
@@ -197,6 +197,7 @@ describe('page integration and legal parity', () => {
     for (const detail of OPERATOR_DETAILS) {
       expect(disclosure).toContain(detail);
     }
+    expect(disclosure).toContain('href="mailto:codemeet@naver.com"');
     expect(html).toContain('Last Updated: July 18, 2026');
   });
 
@@ -221,6 +222,7 @@ describe('page integration and legal parity', () => {
         for (const detail of OPERATOR_DETAILS) {
           expect(disclosure).toContain(detail.replace(/[\s,]/g, ''));
         }
+        expect(disclosure).toContain('href="mailto:codemeet@naver.com"');
         expect(html).toContain(LEGAL_UPDATED_DATE[locale].replace(/[\s,]/g, ''));
         expect(html).not.toMatch(/<script|onerror=|onload=/i);
       }
