@@ -55,4 +55,11 @@ test('long Russian navigation remains within a 390px viewport', async ({ page })
   await page.locator('[data-locale-select]').selectOption('ru');
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
   expect(overflow).toBeLessThanOrEqual(2);
+
+  const hamburger = page.locator('#hamburger');
+  const hamburgerBox = await hamburger.boundingBox();
+  expect(hamburgerBox).not.toBeNull();
+  expect(hamburgerBox.x).toBeGreaterThanOrEqual(0);
+  expect(hamburgerBox.x + hamburgerBox.width).toBeLessThanOrEqual(390);
+  await hamburger.click({ trial: true });
 });
