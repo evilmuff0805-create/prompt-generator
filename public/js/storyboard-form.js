@@ -1,6 +1,7 @@
 'use strict';
 
 (function () {
+  const uiText = (key, values) => window.PromptGenI18n?.t(key, values) || key;
   let selectedGenres = [];
   let selectedStyle = 'Pixar 3D';
   let selectedCuts = 9;
@@ -64,7 +65,7 @@
       if (!validateForm()) return;
 
       generateBtn.disabled = true;
-      generateBtn.textContent = '⏳ Generating…';
+      generateBtn.textContent = uiText('storyboard.state.generating');
       document.getElementById('errorBanner').style.display = 'none';
 
       try {
@@ -77,7 +78,7 @@
         });
       } finally {
         generateBtn.disabled = false;
-        generateBtn.textContent = '✨ Generate Storyboard';
+        generateBtn.textContent = uiText('storyboard.action.generate');
       }
     });
 

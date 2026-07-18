@@ -14,6 +14,9 @@
   if (!filtersEl || !gridEl) return;
 
   let activeCategory = 'all';
+  let currentModalItem = null;
+  const uiText = (key, values) => window.PromptGenI18n?.t(key, values) || key;
+  const categoryLabel = (category) => uiText(`gallery.category.${category.id}`);
 
   /* ── Render Filter Tabs ── */
   function renderFilters() {
@@ -22,7 +25,7 @@
         class="gallery-filter-btn${cat.id === activeCategory ? ' active' : ''}"
         data-category="${cat.id}"
         type="button"
-      >${cat.label}</button>
+      >${escapeHtml(categoryLabel(cat))}</button>
     `).join('');
 
     filtersEl.querySelectorAll('.gallery-filter-btn').forEach(btn => {
@@ -41,16 +44,16 @@
       : GALLERY_DATA.filter(item => item.category === activeCategory);
 
     if (items.length === 0) {
-      gridEl.innerHTML = '<p class="gallery-empty">No items found.</p>';
+      gridEl.innerHTML = `<p class="gallery-empty">${escapeHtml(uiText('gallery.empty'))}</p>`;
       return;
     }
 
     gridEl.innerHTML = items.map(item => {
       const catObj = GALLERY_CATEGORIES.find(c => c.id === item.category);
-      const catLabel = catObj ? catObj.label : item.category;
+      const catLabel = catObj ? categoryLabel(catObj) : item.category;
       const shortPrompt = (item.prompt || '').slice(0, 120) + '…';
       return `
-      <div class="gallery-card" data-id="${item.id}" tabindex="0" role="button" aria-label="View prompt: ${escapeAttr(item.title)}">
+      <div class="gallery-card" data-id="${item.id}" tabindex="0" role="button" aria-label="${escapeAttr(uiText('gallery.card.viewPrompt', { title: item.title }))}">
         <div class="gallery-card__thumb">
           <img
             src="${escapeAttr(item.image)}"
@@ -61,13 +64,13 @@
           />
           <div class="gallery-card__overlay">
             <p class="gallery-card__preview">${escapeHtml(shortPrompt)}</p>
-            <span class="gallery-card__cta">Click to view full prompt →</span>
+            <span class="gallery-card__cta">${escapeHtml(uiText('gallery.card.viewFull'))}</span>
           </div>
           <span class="gallery-card__badge">${escapeHtml(catLabel)}</span>
         </div>
         <div class="gallery-card__footer">
           <span class="gallery-card__title">${escapeHtml(item.title)}</span>
-          <button class="gallery-card__copy-mini" data-id="${item.id}" title="Copy prompt" aria-label="Copy prompt">
+          <button class="gallery-card__copy-mini" data-id="${item.id}" title="${escapeAttr(uiText('gallery.action.copy'))}" aria-label="${escapeAttr(uiText('gallery.action.copy'))}">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
           </button>
         </div>
@@ -103,7 +106,8 @@
   /* ── Modal ── */
   function openModal(item) {
     const catObj = GALLERY_CATEGORIES.find(c => c.id === item.category);
-    modalCat.textContent    = catObj ? catObj.label : item.category;
+    currentModalItem = item;
+    modalCat.textContent    = catObj ? categoryLabel(catObj) : item.category;
     modalTitle.textContent  = item.title;
     modalPrompt.textContent = item.prompt;
     modalCopyBtn.dataset.prompt = item.prompt;
@@ -117,6 +121,7 @@
     modal.classList.remove('open');
     modal.setAttribute('aria-hidden', 'true');
     document.body.style.overflow = '';
+    currentModalItem = null;
   }
 
   if (modalClose) modalClose.addEventListener('click', closeModal);
@@ -139,7 +144,7 @@
     navigator.clipboard.writeText(text).then(() => {
       const orig = triggerEl.innerHTML;
       triggerEl.innerHTML = triggerEl === modalCopyBtn
-        ? '✓ Copied!'
+        ? uiText('common.state.copied')
         : `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>`;
       triggerEl.classList.add('copied');
       setTimeout(() => {
@@ -171,4 +176,9 @@
   /* ── Init ── */
   renderFilters();
   renderCards();
+  document.addEventListener('promptgen:localechange', () => {
+    renderFilters();
+    renderCards();
+    if (currentModalItem) openModal(currentModalItem);
+  });
 })();

@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>AI Storyboard Generator for Seedance 2.0 — PromptGen</title>
-  <meta name="description" content="Turn a scenario into a cinematic storyboard grid with multiple camera angles, plus ready-to-paste Seedance 2.0 video prompts for every shot. Your 15-second AI video, planned shot by shot." />
+  <title data-i18n="meta.storyboard.title">AI Storyboard Generator for Seedance 2.0 — PromptGen</title>
+  <meta name="description" content="Turn a scenario into a cinematic storyboard grid with multiple camera angles, plus ready-to-paste Seedance 2.0 video prompts for every shot. Your 15-second AI video, planned shot by shot." data-i18n-attr="content:meta.storyboard.description" />
   <meta name="keywords" content="AI storyboard generator, Seedance 2.0 prompts, storyboard grid, AI video storyboard, shot list generator, camera angles, cinematic prompts, PromptGen" />
   <meta name="author" content="PromptGen" />
   <link rel="canonical" href="https://promptgen-ai.com/storyboard" />
@@ -34,12 +34,12 @@
     <div class="navbar__inner">
       <a href="/" class="navbar__logo"><img src="/favicon.png" width="32" height="32" style="margin-right:8px;vertical-align:middle">PromptGen</a>
       <div class="tool-tabs" id="toolTabs">
-        <a href="/" class="tool-tab">🎨 <span class="tab-label">Image to Prompt</span></a>
-        <a href="/frame" class="tool-tab">🖼️ <span class="tab-label">Endframe Extractor</span></a>
-        <a href="/storyboard" class="tool-tab">🎬 <span class="tab-label">Storyboard</span></a>
+        <a href="/" class="tool-tab">🎨 <span class="tab-label" data-i18n="nav.tool.imageToPrompt">Image to Prompt</span></a>
+        <a href="/frame" class="tool-tab">🖼️ <span class="tab-label" data-i18n="nav.tool.endframe">Endframe Extractor</span></a>
+        <a href="/storyboard" class="tool-tab">🎬 <span class="tab-label" data-i18n="nav.tool.storyboard">Storyboard</span></a>
       </div>
       <ul class="navbar__menu" id="navMenu"></ul>
-      <button class="navbar__hamburger" id="hamburger" aria-label="Toggle menu">
+      <button class="navbar__hamburger" id="hamburger" aria-label="Toggle menu" data-i18n-attr="aria-label:nav.action.toggle">
         <span></span><span></span><span></span>
       </button>
     </div>
@@ -49,43 +49,43 @@
     <div class="container">
 
       <div class="storyboard-header">
-        <div class="section-label">AI Storyboard</div>
-        <h1 class="storyboard-title">Storyboard Generator</h1>
-        <p class="storyboard-subtitle">Create cinematic storyboard grids with Seedance 2.0-ready prompts</p>
+        <div class="section-label" data-i18n="storyboard.label">AI Storyboard</div>
+        <h1 class="storyboard-title" data-i18n="storyboard.title">Storyboard Generator</h1>
+        <p class="storyboard-subtitle" data-i18n="storyboard.subtitle">Create cinematic storyboard grids with Seedance 2.0-ready prompts</p>
         <!-- Same component structure/classes as the main page navbar userProfile -->
         <div class="storyboard-user-chip" id="creditsDisplay" style="display:none">
           <span class="user-avatar" id="sbUserAvatar">🤖</span>
           <div class="user-info">
             <span class="user-name" id="sbUserName"></span>
-            <span class="plan-badge plan-badge--free" id="sbPlanBadge">Free</span>
+            <span class="plan-badge plan-badge--free" id="sbPlanBadge" data-i18n="common.plan.free">Free</span>
           </div>
           <span class="usage-display" id="sbUsageDisplay"></span>
         </div>
-        <a href="/storyboard/history" class="storyboard-history-link">📜 View History</a>
+        <a href="/storyboard/history" class="storyboard-history-link" data-i18n="storyboard.history.view">📜 View History</a>
       </div>
 
       <div id="authGate" class="storyboard-auth-gate" style="display:none">
         <div class="storyboard-card storyboard-card--center">
           <div class="storyboard-icon">🔒</div>
-          <h2>Sign In Required</h2>
-          <p>You need a Pro or higher plan to use Storyboard Generator.</p>
-          <button id="loginBtn" class="btn btn--primary">Sign In with Google</button>
+          <h2 data-i18n="storyboard.auth.title">Sign In Required</h2>
+          <p data-i18n="storyboard.auth.description">You need a Pro or higher plan to use Storyboard Generator.</p>
+          <button id="loginBtn" class="btn btn--primary" data-i18n="storyboard.auth.action">Sign In with Google</button>
         </div>
       </div>
 
       <div id="planGate" class="storyboard-plan-gate" style="display:none">
         <div class="storyboard-card storyboard-card--center">
           <div class="storyboard-icon">🚀</div>
-          <h2>Pro Plan Required</h2>
-          <p>Storyboard Generator requires a Pro or Enterprise plan (<span class="sb-cost-value">120</span> credits per storyboard).</p>
-          <a href="/#pricing" class="btn btn--primary">Upgrade to Pro →</a>
+          <h2 data-i18n="storyboard.plan.title">Pro Plan Required</h2>
+          <p><span data-i18n="storyboard.plan.description" data-i18n-vars="credits:120">Storyboard Generator requires a Pro or Enterprise plan (120 credits per storyboard).</span></p>
+          <a href="/#pricing" class="btn btn--primary" data-i18n="common.action.upgradePro">Upgrade to Pro →</a>
         </div>
       </div>
 
       <div id="loadingGate" class="storyboard-auth-gate" style="display:none">
         <div class="storyboard-card storyboard-card--center">
           <div class="spinner"></div>
-          <p>Loading your workspace…</p>
+          <p data-i18n="storyboard.state.loadingWorkspace">Loading your workspace…</p>
         </div>
       </div>
 
@@ -97,66 +97,67 @@
           <!-- Scenario -->
           <div class="storyboard-field">
             <label class="storyboard-label" for="scenario">
-              Scenario <span class="storyboard-label-hint">50–2000 characters</span>
+              <span data-i18n="storyboard.field.scenario">Scenario</span> <span class="storyboard-label-hint" data-i18n="storyboard.field.scenarioHint">50–2000 characters</span>
             </label>
             <textarea id="scenario" name="scenario" class="storyboard-textarea"
               placeholder="A young woman discovers an ancient letter in her grandmother's attic that reveals a family secret spanning three generations..."
+              data-i18n-attr="placeholder:storyboard.field.scenarioPlaceholder"
               rows="5" minlength="50" maxlength="2000" required></textarea>
             <div class="storyboard-char-count"><span id="charCount">0</span>/2000</div>
           </div>
 
           <!-- Genres -->
           <div class="storyboard-field">
-            <label class="storyboard-label">Genres <span class="storyboard-label-hint">Select 1–3</span></label>
+            <label class="storyboard-label"><span data-i18n="storyboard.field.genres">Genres</span> <span class="storyboard-label-hint" data-i18n="storyboard.field.genresHint">Select 1–3</span></label>
             <div class="storyboard-genre-grid" id="genreGrid">
-              <button type="button" class="storyboard-genre-btn" data-genre="Romance">Romance</button>
-              <button type="button" class="storyboard-genre-btn" data-genre="Drama">Drama</button>
-              <button type="button" class="storyboard-genre-btn" data-genre="Thriller">Thriller</button>
-              <button type="button" class="storyboard-genre-btn" data-genre="Comedy">Comedy</button>
-              <button type="button" class="storyboard-genre-btn" data-genre="Action">Action</button>
-              <button type="button" class="storyboard-genre-btn" data-genre="Horror">Horror</button>
-              <button type="button" class="storyboard-genre-btn" data-genre="Sci-Fi">Sci-Fi</button>
-              <button type="button" class="storyboard-genre-btn" data-genre="Fantasy">Fantasy</button>
-              <button type="button" class="storyboard-genre-btn" data-genre="Mystery">Mystery</button>
+              <button type="button" class="storyboard-genre-btn" data-genre="Romance" data-i18n="storyboard.genre.romance">Romance</button>
+              <button type="button" class="storyboard-genre-btn" data-genre="Drama" data-i18n="storyboard.genre.drama">Drama</button>
+              <button type="button" class="storyboard-genre-btn" data-genre="Thriller" data-i18n="storyboard.genre.thriller">Thriller</button>
+              <button type="button" class="storyboard-genre-btn" data-genre="Comedy" data-i18n="storyboard.genre.comedy">Comedy</button>
+              <button type="button" class="storyboard-genre-btn" data-genre="Action" data-i18n="storyboard.genre.action">Action</button>
+              <button type="button" class="storyboard-genre-btn" data-genre="Horror" data-i18n="storyboard.genre.horror">Horror</button>
+              <button type="button" class="storyboard-genre-btn" data-genre="Sci-Fi" data-i18n="storyboard.genre.scifi">Sci-Fi</button>
+              <button type="button" class="storyboard-genre-btn" data-genre="Fantasy" data-i18n="storyboard.genre.fantasy">Fantasy</button>
+              <button type="button" class="storyboard-genre-btn" data-genre="Mystery" data-i18n="storyboard.genre.mystery">Mystery</button>
             </div>
           </div>
 
           <!-- Style -->
           <div class="storyboard-field">
-            <label class="storyboard-label">Visual Style</label>
+            <label class="storyboard-label" data-i18n="storyboard.field.visualStyle">Visual Style</label>
             <div class="storyboard-style-grid" id="styleGrid">
               <button type="button" class="storyboard-style-btn storyboard-style-btn--active" data-style="Pixar 3D">
                 <span class="storyboard-style-icon">🎨</span>
-                <span class="storyboard-style-name">Pixar 3D</span>
-                <span class="storyboard-style-desc">Vibrant CGI animation</span>
+                <span class="storyboard-style-name" data-i18n="storyboard.style.pixar">Pixar 3D</span>
+                <span class="storyboard-style-desc" data-i18n="storyboard.style.pixarDescription">Vibrant CGI animation</span>
               </button>
               <button type="button" class="storyboard-style-btn" data-style="Cinematic">
                 <span class="storyboard-style-icon">🎬</span>
-                <span class="storyboard-style-name">Cinematic</span>
-                <span class="storyboard-style-desc">Film-grade photography</span>
+                <span class="storyboard-style-name" data-i18n="storyboard.style.cinematic">Cinematic</span>
+                <span class="storyboard-style-desc" data-i18n="storyboard.style.cinematicDescription">Film-grade photography</span>
               </button>
               <button type="button" class="storyboard-style-btn" data-style="Documentary">
                 <span class="storyboard-style-icon">📹</span>
-                <span class="storyboard-style-name">Documentary</span>
-                <span class="storyboard-style-desc">Raw, naturalistic footage</span>
+                <span class="storyboard-style-name" data-i18n="storyboard.style.documentary">Documentary</span>
+                <span class="storyboard-style-desc" data-i18n="storyboard.style.documentaryDescription">Raw, naturalistic footage</span>
               </button>
               <button type="button" class="storyboard-style-btn" data-style="Animation">
                 <span class="storyboard-style-icon">✏️</span>
-                <span class="storyboard-style-name">Animation</span>
-                <span class="storyboard-style-desc">2D graphic style</span>
+                <span class="storyboard-style-name" data-i18n="storyboard.style.animation">Animation</span>
+                <span class="storyboard-style-desc" data-i18n="storyboard.style.animationDescription">2D graphic style</span>
               </button>
             </div>
           </div>
 
           <!-- Cut Count -->
           <div class="storyboard-field">
-            <label class="storyboard-label">Number of Shots</label>
+            <label class="storyboard-label" data-i18n="storyboard.field.shots">Number of Shots</label>
             <div class="storyboard-cuts-row">
               <button type="button" class="storyboard-cut-btn" data-cuts="4">
-                4 Shots <span class="storyboard-cut-sub">2×2 · ~12s</span>
+                <span data-i18n="storyboard.shots.four">4 Shots</span> <span class="storyboard-cut-sub">2×2 · ~12s</span>
               </button>
               <button type="button" class="storyboard-cut-btn storyboard-cut-btn--active" data-cuts="9">
-                9 Shots <span class="storyboard-cut-sub">3×3 · ~27s</span>
+                <span data-i18n="storyboard.shots.nine">9 Shots</span> <span class="storyboard-cut-sub">3×3 · ~27s</span>
               </button>
             </div>
           </div>
@@ -164,22 +165,22 @@
           <!-- Reference Images -->
           <div class="storyboard-field">
             <label class="storyboard-label">
-              Reference Images <span class="storyboard-label-hint">Optional · max 4 · 24h expiry</span>
+              <span data-i18n="storyboard.field.references">Reference Images</span> <span class="storyboard-label-hint" data-i18n="storyboard.field.referencesHint">Optional · max 4 · 24h expiry</span>
             </label>
             <div class="storyboard-upload-area" id="refUploadArea">
               <input type="file" id="refFileInput" accept="image/jpeg,image/png,image/webp" hidden multiple />
-              <button type="button" class="storyboard-upload-btn" id="refUploadBtn">
+              <button type="button" class="storyboard-upload-btn" id="refUploadBtn" data-i18n="storyboard.references.add">
                 ＋ Add Reference Image
               </button>
-              <p class="storyboard-upload-hint">JPEG, PNG, WebP · Max 10MB · Resized to 1024×1024</p>
+              <p class="storyboard-upload-hint" data-i18n="storyboard.references.formats">JPEG, PNG, WebP · Max 10MB · Resized to 1024×1024</p>
             </div>
             <div class="storyboard-ref-list" id="refList"></div>
           </div>
 
           <!-- Submit -->
           <div class="storyboard-submit-row">
-            <div class="storyboard-cost-badge"><span class="sb-cost-value">120</span> credits</div>
-            <button type="submit" id="generateBtn" class="btn btn--primary storyboard-generate-btn" disabled>
+            <div class="storyboard-cost-badge" data-i18n="storyboard.cost.credits" data-i18n-vars="credits:120">120 credits</div>
+            <button type="submit" id="generateBtn" class="btn btn--primary storyboard-generate-btn" disabled data-i18n="storyboard.action.generate">
               ✨ Generate Storyboard
             </button>
           </div>
@@ -193,10 +194,10 @@
   <!-- Login Modal -->
   <div id="loginModal" class="modal-overlay" aria-hidden="true">
     <div class="modal" role="dialog" aria-modal="true">
-      <button class="modal__close" id="modalClose" aria-label="Close">✕</button>
+      <button class="modal__close" id="modalClose" aria-label="Close" data-i18n-attr="aria-label:common.action.close">✕</button>
       <div class="modal__logo">PromptGen</div>
-      <h2 class="modal__title">Sign In</h2>
-      <p class="modal__sub">Sign in with your Google account</p>
+      <h2 class="modal__title" data-i18n="auth.signIn.title">Sign In</h2>
+      <p class="modal__sub" data-i18n="auth.signIn.subtitle">Sign in with your Google account</p>
       <button id="googleLoginBtn" class="btn btn--google">
         <svg width="18" height="18" viewBox="0 0 18 18" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
           <path fill="#4285F4" d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.717v2.258h2.908C16.658 14.013 17.64 11.705 17.64 9.2z"/>
@@ -204,11 +205,20 @@
           <path fill="#FBBC05" d="M3.964 10.707A5.41 5.41 0 0 1 3.682 9c0-.593.102-1.17.282-1.707V4.961H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.039l3.007-2.332z"/>
           <path fill="#EA4335" d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.961L3.964 7.293C4.672 5.163 6.656 3.58 9 3.58z"/>
         </svg>
-        Sign in with Google
+        <span data-i18n="common.action.signInGoogle">Sign in with Google</span>
       </button>
     </div>
   </div>
 
+  <script src="/i18n/runtime.js"></script>
+  <script src="/i18n/config.js"></script>
+  <script src="/i18n/locales/en.js"></script>
+  <script src="/i18n/locales/ko.js"></script>
+  <script src="/i18n/locales/ja.js"></script>
+  <script src="/i18n/locales/zh-CN.js"></script>
+  <script src="/i18n/locales/fr.js"></script>
+  <script src="/i18n/locales/ru.js"></script>
+  <script src="/i18n/init.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.49.4/dist/umd/supabase.js" integrity="sha256-/anWf4DM5AdPeNY3O7E26Ew0yyNbipHF5ChAaNpt3EI=" crossorigin="anonymous"></script>
   <script src="/analytics.js"></script>
   <script src="/navbar-shared.js"></script>

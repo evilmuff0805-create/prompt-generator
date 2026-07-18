@@ -3,6 +3,7 @@
 (function () {
   const MAX_REFS = 4;
   const refImages = []; // { id, previewUrl, expiresAt, name }
+  const uiText = (key, values) => window.PromptGenI18n?.t(key, values) || key;
 
   function initUpload({ onRefsChange }) {
     const uploadBtn = document.getElementById('refUploadBtn');
@@ -17,7 +18,7 @@
 
       for (const file of files) {
         if (refImages.length >= MAX_REFS) {
-          showUploadError('Maximum 4 reference images allowed.');
+          showUploadError(uiText('storyboard.references.error.max'));
           break;
         }
 
@@ -36,11 +37,11 @@
             onRefsChange(refImages.map(r => r.id));
           } else {
             itemEl.remove();
-            showUploadError(result.message || 'Upload failed. Please try again.');
+            showUploadError(uiText('storyboard.references.error.upload'));
           }
         } catch (err) {
           itemEl.remove();
-          showUploadError('Upload failed. Please check your connection.');
+          showUploadError(uiText('storyboard.references.error.connection'));
         }
 
         updateUploadBtn();
@@ -50,7 +51,7 @@
     function addPendingItem(name) {
       const li = document.createElement('li');
       li.className = 'storyboard-ref-item storyboard-ref-item--loading';
-      li.innerHTML = `<span class="storyboard-ref-name">${escapeHtml(name)}</span><span class="storyboard-ref-uploading">Uploading…</span>`;
+      li.innerHTML = `<span class="storyboard-ref-name">${escapeHtml(name)}</span><span class="storyboard-ref-uploading">${escapeHtml(uiText('storyboard.references.uploading'))}</span>`;
       refList.appendChild(li);
       return li;
     }
@@ -59,9 +60,9 @@
       li.className = 'storyboard-ref-item';
       li.dataset.refId = refId;
       li.innerHTML = `
-        <img class="storyboard-ref-thumb" src="${escapeHtml(previewUrl)}" alt="Reference" />
-        <span class="storyboard-ref-name">Reference ${refImages.length}</span>
-        <button type="button" class="storyboard-ref-remove" data-ref-id="${escapeHtml(refId)}" aria-label="Remove">✕</button>
+        <img class="storyboard-ref-thumb" src="${escapeHtml(previewUrl)}" alt="${escapeHtml(uiText('storyboard.references.alt'))}" />
+        <span class="storyboard-ref-name">${escapeHtml(uiText('storyboard.references.item', { number: refImages.length }))}</span>
+        <button type="button" class="storyboard-ref-remove" data-ref-id="${escapeHtml(refId)}" aria-label="${escapeHtml(uiText('storyboard.references.remove'))}">✕</button>
       `;
       li.querySelector('.storyboard-ref-remove').addEventListener('click', () => {
         const idx = refImages.findIndex(r => r.id === refId);
@@ -74,7 +75,9 @@
 
     function updateUploadBtn() {
       uploadBtn.disabled = refImages.length >= MAX_REFS;
-      uploadBtn.textContent = refImages.length >= MAX_REFS ? '✓ Max references added' : '＋ Add Reference Image';
+      uploadBtn.textContent = refImages.length >= MAX_REFS
+        ? uiText('storyboard.references.maxAdded')
+        : uiText('storyboard.references.add');
     }
 
     function showUploadError(msg) {

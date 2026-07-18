@@ -4,8 +4,8 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="google-site-verification" content="Z6nCS6I3XAtsEIFVArrZ0zbJ6Tj_QuFPCvkOrYKpIjE" />
-  <title>PromptGen — AI Prompt Generator</title>
-  <meta name="description" content="Upload any image and instantly generate detailed, bracket-segmented AI prompts optimized for Midjourney, GPT Image 2, and Nano Banana Pro. Free tier available." />
+  <title data-i18n="meta.index.title">PromptGen — AI Prompt Generator</title>
+  <meta name="description" content="Upload any image and instantly generate detailed, bracket-segmented AI prompts optimized for Midjourney, GPT Image 2, and Nano Banana Pro. Free tier available." data-i18n-attr="content:meta.index.description" />
   <meta name="keywords" content="AI prompt generator, image to prompt, Midjourney prompt, GPT Image 2, Nano Banana Pro, AI art prompt, prompt engineering" />
   <meta name="author" content="PromptGen" />
   <link rel="canonical" href="https://promptgen-ai.com/" />
@@ -66,43 +66,43 @@
   <!-- Navigation -->
   <nav id="navbar" class="navbar">
     <div class="navbar__inner">
-      <a href="#home" class="navbar__logo" aria-label="PromptGen home">
+      <a href="#home" class="navbar__logo" aria-label="PromptGen home" data-i18n-attr="aria-label:nav.logo.home">
         <span class="navbar__logo-mark"><img src="/favicon.png" width="32" height="32" alt="" /></span>
         <span>PromptGen</span>
       </a>
       <!-- Tool Tabs -->
       <div class="tool-tabs" id="toolTabs">
-        <a href="/" class="tool-tab">🎨 <span class="tab-label">Image to Prompt</span></a>
-        <a href="/frame" class="tool-tab">🖼️ <span class="tab-label">Endframe Extractor</span></a>
-        <a href="/storyboard" class="tool-tab">🎬 <span class="tab-label">Storyboard</span></a>
+        <a href="/" class="tool-tab">🎨 <span class="tab-label" data-i18n="nav.tool.imageToPrompt">Image to Prompt</span></a>
+        <a href="/frame" class="tool-tab">🖼️ <span class="tab-label" data-i18n="nav.tool.endframe">Endframe Extractor</span></a>
+        <a href="/storyboard" class="tool-tab">🎬 <span class="tab-label" data-i18n="nav.tool.storyboard">Storyboard</span></a>
       </div>
       <ul class="navbar__menu" id="navMenu">
         <li class="navbar__menu-intro" aria-hidden="true">
-          <span>Explore PromptGen</span>
-          <strong>Visual ideas, translated into direction.</strong>
+          <span data-i18n="nav.menu.intro.eyebrow">Explore PromptGen</span>
+          <strong data-i18n="nav.menu.intro.title">Visual ideas, translated into direction.</strong>
         </li>
-        <li><a href="#home" class="nav-link">Home</a></li>
-        <li><a href="#how-it-works" class="nav-link">How it Works</a></li>
-        <li><a href="#gallery" class="nav-link">Gallery</a></li>
-        <li><a href="#pricing" class="nav-link">Pricing</a></li>
+        <li><a href="#home" class="nav-link" data-i18n="nav.link.home">Home</a></li>
+        <li><a href="#how-it-works" class="nav-link" data-i18n="nav.link.howItWorks">How it Works</a></li>
+        <li><a href="#gallery" class="nav-link" data-i18n="nav.link.gallery">Gallery</a></li>
+        <li><a href="#pricing" class="nav-link" data-i18n="nav.link.pricing">Pricing</a></li>
         <li id="authNavItem">
           <!-- shown when logged out -->
-          <a href="#" class="nav-link" id="loginNavBtn">Login</a>
+          <a href="#" class="nav-link" id="loginNavBtn" data-i18n="nav.action.login">Login</a>
           <!-- shown when logged in -->
           <div id="userProfile" class="user-profile">
             <span id="userAvatar" class="user-avatar">🤖</span>
             <div class="user-info">
               <span id="userName" class="user-name"></span>
-              <span id="planBadge" class="plan-badge plan-badge--free">Free</span>
+              <span id="planBadge" class="plan-badge plan-badge--free" data-i18n="common.plan.free">Free</span>
             </div>
             <span id="usageDisplay" class="usage-display"></span>
-            <button id="historyBtn" class="btn btn--ghost btn--history" title="View history">📜</button>
-            <button id="manageSubBtn" class="btn btn--ghost" title="Manage subscription" style="display:none">Manage subscription</button>
-            <button id="logoutBtn" class="btn btn--ghost btn--logout">Logout</button>
+            <button id="historyBtn" class="btn btn--ghost btn--history" title="View history" data-i18n-attr="title:nav.action.history">📜</button>
+            <button id="manageSubBtn" class="btn btn--ghost" title="Manage subscription" style="display:none" data-i18n="nav.action.manageSubscription" data-i18n-attr="title:nav.action.manageSubscription">Manage subscription</button>
+            <button id="logoutBtn" class="btn btn--ghost btn--logout" data-i18n="nav.action.logout">Logout</button>
           </div>
         </li>
       </ul>
-      <button class="navbar__hamburger" id="hamburger" type="button" aria-label="Open navigation" aria-controls="navMenu" aria-expanded="false">
+      <button class="navbar__hamburger" id="hamburger" type="button" aria-label="Open navigation" aria-controls="navMenu" aria-expanded="false" data-i18n-attr="aria-label:nav.action.open">
         <span></span><span></span><span></span>
       </button>
     </div>
@@ -120,20 +120,20 @@
 
     <div class="hero__shell">
       <div class="hero__content">
-        <div class="hero__badge"><span class="hero__badge-dot"></span>AI-powered visual direction</div>
-        <h1 class="hero__title">See the image.<br /><span class="hero__title-highlight">Direct the result.</span></h1>
-        <p class="hero__sub">Turn any reference image into a precise, editable prompt for Midjourney, GPT Image 2, and Nano Banana Pro.</p>
+        <div class="hero__badge"><span class="hero__badge-dot"></span><span data-i18n="hero.badge">AI-powered visual direction</span></div>
+        <h1 class="hero__title"><span data-i18n="hero.title.first">See the image.</span><br /><span class="hero__title-highlight" data-i18n="hero.title.second">Direct the result.</span></h1>
+        <p class="hero__sub" data-i18n="hero.subtitle">Turn any reference image into a precise, editable prompt for Midjourney, GPT Image 2, and Nano Banana Pro.</p>
         <div class="hero__actions">
           <a href="/storyboard" class="btn btn--hero">
-            Create a storyboard
+            <span data-i18n="hero.action.storyboard">Create a storyboard</span>
             <span aria-hidden="true">↗</span>
           </a>
-          <a href="#upload-section" class="hero__text-link">Try Image to Prompt <span aria-hidden="true">↓</span></a>
+          <a href="#upload-section" class="hero__text-link"><span data-i18n="hero.action.imageToPrompt">Try Image to Prompt</span> <span aria-hidden="true">↓</span></a>
         </div>
         <div class="hero__proof" aria-label="Product benefits">
-          <span><i aria-hidden="true">✓</i> 1 free Image to Prompt daily</span>
-          <span><i aria-hidden="true">✓</i> Editable prompt segments</span>
-          <span><i aria-hidden="true">✓</i> No card required</span>
+          <span><i aria-hidden="true">✓</i> <span data-i18n="hero.proof.free">1 free Image to Prompt daily</span></span>
+          <span><i aria-hidden="true">✓</i> <span data-i18n="hero.proof.editable">Editable prompt segments</span></span>
+          <span><i aria-hidden="true">✓</i> <span data-i18n="hero.proof.noCard">No card required</span></span>
         </div>
       </div>
 
@@ -141,13 +141,13 @@
         <div class="hero-demo liquid-glass">
           <div class="hero-demo__topbar">
             <div class="hero-demo__dots"><span></span><span></span><span></span></div>
-            <span class="hero-demo__mode">IMAGE <i>→</i> PROMPT</span>
-            <span class="hero-demo__status"><i></i> READY</span>
+            <span class="hero-demo__mode"><span data-i18n="hero.demo.image">IMAGE</span> <i>→</i> <span data-i18n="hero.demo.prompt">PROMPT</span></span>
+            <span class="hero-demo__status"><i></i> <span data-i18n="hero.demo.ready">READY</span></span>
           </div>
 
           <div class="hero-demo__workspace">
             <div class="hero-demo__source">
-              <div class="hero-demo__source-label">REFERENCE / 01</div>
+              <div class="hero-demo__source-label" data-i18n="hero.demo.reference">REFERENCE / 01</div>
               <div class="hero-demo__scene">
                 <span class="scene__sun"></span>
                 <span class="scene__mountain scene__mountain--back"></span>
@@ -155,12 +155,12 @@
                 <span class="scene__subject"></span>
                 <span class="scene__scan"></span>
               </div>
-              <div class="hero-demo__meta"><span>4:5</span><span>PORTRAIT</span><span>ANALYZED</span></div>
+              <div class="hero-demo__meta"><span>4:5</span><span data-i18n="hero.demo.portrait">PORTRAIT</span><span data-i18n="hero.demo.analyzed">ANALYZED</span></div>
             </div>
 
             <div class="hero-demo__prompt">
               <div class="hero-demo__prompt-head">
-                <span>DIRECTOR PROMPT</span>
+                <span data-i18n="hero.demo.directorPrompt">DIRECTOR PROMPT</span>
                 <span class="hero-demo__model">NANO BANANA PRO</span>
               </div>
               <div class="hero-demo__prompt-copy">
@@ -170,70 +170,70 @@
                 <span class="prompt-token">[setting: sculptural desert ridge]</span>
               </div>
               <div class="hero-demo__lines"><span></span><span></span><span></span></div>
-              <div class="hero-demo__prompt-foot"><span>12 SEGMENTS</span><span>98% DETAIL</span></div>
+              <div class="hero-demo__prompt-foot"><span data-i18n="hero.demo.segments">12 SEGMENTS</span><span data-i18n="hero.demo.detailPercent">98% DETAIL</span></div>
             </div>
           </div>
 
           <div class="hero-demo__footer">
-            <span>Visual language, made editable.</span>
-            <span class="hero-demo__generate">GENERATE <i>↗</i></span>
+            <span data-i18n="hero.demo.footer">Visual language, made editable.</span>
+            <span class="hero-demo__generate"><span data-i18n="hero.demo.generate">GENERATE</span> <i>↗</i></span>
           </div>
         </div>
 
         <div class="hero-float hero-float--analysis liquid-glass">
-          <span>COMPOSITION</span>
-          <strong>Layered depth</strong>
+          <span data-i18n="hero.demo.composition">COMPOSITION</span>
+          <strong data-i18n="hero.demo.layeredDepth">Layered depth</strong>
         </div>
         <div class="hero-float hero-float--accuracy liquid-glass">
           <span class="hero-float__ring">98</span>
-          <span><small>DETAIL</small><strong>Prompt ready</strong></span>
+          <span><small data-i18n="hero.demo.detail">DETAIL</small><strong data-i18n="hero.demo.promptReady">Prompt ready</strong></span>
         </div>
       </div>
     </div>
 
     <div class="hero__rail" aria-hidden="true">
-      <span>ANALYZE</span><i></i><span>EDIT</span><i></i><span>CREATE</span>
+      <span data-i18n="hero.rail.analyze">ANALYZE</span><i></i><span data-i18n="hero.rail.edit">EDIT</span><i></i><span data-i18n="hero.rail.create">CREATE</span>
     </div>
   </section>
 
   <!-- Tools Showcase -->
   <section id="tools" class="tools-section section-reveal">
     <div class="container">
-      <div class="section-label">The Pipeline</div>
-      <h2 class="section-title">From a Single Image to a Seedance-Ready Storyboard</h2>
-      <p class="tools-subtitle">Three tools for prompt development and video pre-production. Final video generation happens in Seedance.</p>
+      <div class="section-label" data-i18n="tools.label">The Pipeline</div>
+      <h2 class="section-title" data-i18n="tools.title">From a Single Image to a Seedance-Ready Storyboard</h2>
+      <p class="tools-subtitle" data-i18n="tools.subtitle">Three tools for prompt development and video pre-production. Final video generation happens in Seedance.</p>
       <div class="tools-grid">
 
         <a href="/" class="tool-card">
           <div class="tool-card__media">
             <!-- TODO: public/showcase/image-to-prompt.png -->
-            <span class="tool-card__media-label">Image to Prompt</span>
+            <span class="tool-card__media-label" data-i18n="nav.tool.imageToPrompt">Image to Prompt</span>
           </div>
           <div class="tool-card__body">
-            <h3 class="tool-card__title">🎨 Image to Prompt</h3>
-            <p class="tool-card__desc">Turn any reference image into a precise, editable prompt — tuned for Midjourney, GPT Image 2, and Nano Banana Pro.</p>
+            <h3 class="tool-card__title">🎨 <span data-i18n="nav.tool.imageToPrompt">Image to Prompt</span></h3>
+            <p class="tool-card__desc" data-i18n="tools.image.description">Turn any reference image into a precise, editable prompt — tuned for Midjourney, GPT Image 2, and Nano Banana Pro.</p>
           </div>
         </a>
 
         <a href="/frame" class="tool-card">
           <div class="tool-card__media">
             <!-- TODO: public/showcase/endframe-extractor.png -->
-            <span class="tool-card__media-label">Endframe Extractor</span>
+            <span class="tool-card__media-label" data-i18n="nav.tool.endframe">Endframe Extractor</span>
           </div>
           <div class="tool-card__body">
-            <h3 class="tool-card__title">🖼️ Endframe Extractor</h3>
-            <p class="tool-card__desc">Pull the last frame from any clip — the perfect seed to generate your next scene and keep your sequence flowing.</p>
+            <h3 class="tool-card__title">🖼️ <span data-i18n="nav.tool.endframe">Endframe Extractor</span></h3>
+            <p class="tool-card__desc" data-i18n="tools.endframe.description">Pull the last frame from any clip — the perfect seed to generate your next scene and keep your sequence flowing.</p>
           </div>
         </a>
 
         <a href="/storyboard" class="tool-card">
           <div class="tool-card__media">
             <!-- TODO: public/showcase/storyboard.png -->
-            <span class="tool-card__media-label">Storyboard</span>
+            <span class="tool-card__media-label" data-i18n="nav.tool.storyboard">Storyboard</span>
           </div>
           <div class="tool-card__body">
-            <h3 class="tool-card__title">🎬 Storyboard</h3>
-            <p class="tool-card__desc">Drop in a key image and your idea to create a storyboard grid and shot-by-shot prompts, then use those prompts in Seedance to generate the final video.</p>
+            <h3 class="tool-card__title">🎬 <span data-i18n="nav.tool.storyboard">Storyboard</span></h3>
+            <p class="tool-card__desc" data-i18n="tools.storyboard.description">Drop in a key image and your idea to create a storyboard grid and shot-by-shot prompts, then use those prompts in Seedance to generate the final video.</p>
           </div>
         </a>
 
@@ -244,30 +244,30 @@
   <!-- Upload & Results Section -->
   <section id="upload-section" class="upload-section section-reveal">
     <div class="container">
-      <div class="section-label">Generator</div>
-      <h2 class="section-title">Generate Your Prompt</h2>
+      <div class="section-label" data-i18n="generator.label">Generator</div>
+      <h2 class="section-title" data-i18n="generator.title">Generate Your Prompt</h2>
 
       <!-- Error Display -->
       <div id="errorDisplay" class="error-display" role="alert"></div>
 
       <!-- Upload Card -->
       <div class="card">
-        <div id="dropZone" class="drop-zone" tabindex="0" role="button" aria-label="Upload image">
+        <div id="dropZone" class="drop-zone" tabindex="0" role="button" aria-label="Upload image" data-i18n-attr="aria-label:generator.upload.aria">
           <div class="drop-zone__icon">🖼️</div>
-          <p><strong>Click to upload</strong> or drag &amp; drop</p>
-          <p>JPEG, PNG, WebP, GIF · Max 20 MB</p>
+          <p><strong data-i18n="generator.upload.action">Click to upload</strong> <span data-i18n="generator.upload.orDrop">or drag &amp; drop</span></p>
+          <p data-i18n="generator.upload.formats">JPEG, PNG, WebP, GIF · Max 20 MB</p>
         </div>
         <input type="file" id="fileInput" accept="image/jpeg,image/png,image/webp,image/gif" hidden />
 
         <!-- Preview -->
         <div id="previewContainer" class="preview-container">
-          <img id="previewImg" class="preview-img" src="" alt="Preview" />
-          <button id="clearBtn" class="btn--clear" title="Remove image" aria-label="Remove image">✕</button>
+          <img id="previewImg" class="preview-img" src="" alt="Preview" data-i18n-attr="alt:generator.preview.alt" />
+          <button id="clearBtn" class="btn--clear" title="Remove image" aria-label="Remove image" data-i18n-attr="title:generator.removeImage,aria-label:generator.removeImage">✕</button>
         </div>
       </div>
 
       <!-- Analyze Button -->
-      <button id="analyzeBtn" class="btn btn--primary" disabled>
+      <button id="analyzeBtn" class="btn btn--primary" disabled data-i18n="generator.action.analyze">
         ✨ Analyze Image
       </button>
       <p id="creditsError" class="credits-error-msg" style="display:none"></p>
@@ -275,7 +275,7 @@
       <!-- Loading -->
       <div id="loadingOverlay" class="loading-overlay">
         <div class="spinner"></div>
-        <span>Analyzing image…</span>
+        <span data-i18n="generator.state.analyzing">Analyzing image…</span>
       </div>
 
       <!-- Results -->
@@ -283,18 +283,18 @@
 
         <!-- Prompt Card -->
         <div class="card prompt-card">
-          <h2>Generated Prompt</h2>
+          <h2 data-i18n="generator.result.title">Generated Prompt</h2>
           <div id="promptDisplay" class="prompt-display"></div>
           <div class="prompt-actions">
-            <button id="copyBtn" class="btn btn--accent">📋 Copy Prompt</button>
-            <button id="downloadBtn" class="btn btn--secondary">⬇️ Download .txt</button>
+            <button id="copyBtn" class="btn btn--accent" data-i18n="generator.action.copy">📋 Copy Prompt</button>
+            <button id="downloadBtn" class="btn btn--secondary" data-i18n="generator.action.download">⬇️ Download .txt</button>
           </div>
         </div>
 
         <!-- Analysis Card -->
         <div class="card analysis-card">
           <button id="analysisToggle" class="analysis-card__toggle" aria-expanded="false">
-            <span>Image Analysis</span>
+            <span data-i18n="generator.analysis.title">Image Analysis</span>
             <i class="chevron">▾</i>
           </button>
           <div id="analysisBody" class="analysis-body hidden">
@@ -307,8 +307,8 @@
       <!-- History Panel -->
       <section id="historySection" class="history-section" style="display:none">
         <div class="history-header">
-          <h3>📜 Recent Prompts</h3>
-          <button id="historyCloseBtn" class="btn--icon" aria-label="Close history">✕</button>
+          <h3 data-i18n="generator.history.title">📜 Recent Prompts</h3>
+          <button id="historyCloseBtn" class="btn--icon" aria-label="Close history" data-i18n-attr="aria-label:generator.history.close">✕</button>
         </div>
         <ul id="historyList" class="history-list"></ul>
       </section>
@@ -318,26 +318,26 @@
   <!-- How It Works -->
   <section id="how-it-works" class="how-section section-reveal">
     <div class="container">
-      <div class="section-label">Process</div>
-      <h2 class="section-title">How it Works</h2>
+      <div class="section-label" data-i18n="process.label">Process</div>
+      <h2 class="section-title" data-i18n="process.title">How it Works</h2>
       <div class="steps-grid">
         <div class="step-card">
           <div class="step-num">01</div>
           <div class="step-icon">📸</div>
-          <h3>Upload</h3>
-          <p>Drop any image — photos, artwork, screenshots, renders. We accept JPEG, PNG, WebP, and GIF up to 20 MB.</p>
+          <h3 data-i18n="process.upload.title">Upload</h3>
+          <p data-i18n="process.upload.description">Drop any image — photos, artwork, screenshots, renders. We accept JPEG, PNG, WebP, and GIF up to 20 MB.</p>
         </div>
         <div class="step-card">
           <div class="step-num">02</div>
           <div class="step-icon">🤖</div>
-          <h3>AI Analyzes</h3>
-          <p>Our AI dissects every layer — subjects, colors, lighting, composition, materials, and mood — with precision.</p>
+          <h3 data-i18n="process.analyze.title">AI Analyzes</h3>
+          <p data-i18n="process.analyze.description">Our AI dissects every layer — subjects, colors, lighting, composition, materials, and mood — with precision.</p>
         </div>
         <div class="step-card">
           <div class="step-num">03</div>
           <div class="step-icon">✨</div>
-          <h3>Get Prompt</h3>
-          <p>Receive a fully editable, bracket-segmented prompt ready for Midjourney, GPT Image 2, or Nano Banana Pro.</p>
+          <h3 data-i18n="process.prompt.title">Get Prompt</h3>
+          <p data-i18n="process.prompt.description">Receive a fully editable, bracket-segmented prompt ready for Midjourney, GPT Image 2, or Nano Banana Pro.</p>
         </div>
       </div>
     </div>
@@ -346,8 +346,8 @@
   <!-- Gallery -->
   <section id="gallery" class="gallery-section section-reveal">
     <div class="container">
-      <div class="section-label">Showcase</div>
-      <h2 class="section-title">AI Prompt Gallery</h2>
+      <div class="section-label" data-i18n="gallery.label">Showcase</div>
+      <h2 class="section-title" data-i18n="gallery.title">AI Prompt Gallery</h2>
       <!-- Category Filter Tabs -->
       <div class="gallery-filters" id="galleryFilters"></div>
       <!-- Card Grid -->
@@ -358,15 +358,15 @@
   <!-- Gallery Prompt Modal -->
   <div id="galleryModal" class="gallery-modal-overlay" aria-hidden="true">
     <div class="gallery-modal" role="dialog" aria-modal="true" aria-labelledby="gModalTitle">
-      <button id="gModalClose" class="gmodal__close-btn" aria-label="Close">✕</button>
+      <button id="gModalClose" class="gmodal__close-btn" aria-label="Close" data-i18n-attr="aria-label:common.action.close">✕</button>
       <div class="gmodal__meta">
         <span id="gModalCat" class="gmodal__cat"></span>
       </div>
       <h3 id="gModalTitle" class="gmodal__title"></h3>
-      <p class="gmodal__label">Full AI Prompt</p>
+      <p class="gmodal__label" data-i18n="gallery.modal.promptLabel">Full AI Prompt</p>
       <pre id="gModalPrompt" class="gmodal__prompt"></pre>
       <div class="gmodal__actions">
-        <button id="gModalCopyBtn" class="btn--gallery-copy" type="button">📋 Copy Prompt</button>
+        <button id="gModalCopyBtn" class="btn--gallery-copy" type="button" data-i18n="generator.action.copy">📋 Copy Prompt</button>
       </div>
     </div>
   </div>
@@ -374,34 +374,34 @@
   <!-- Pricing -->
   <section id="pricing" class="pricing-section section-reveal">
     <div class="container">
-      <div class="section-label">Plans</div>
-      <h2 class="section-title">Simple Pricing</h2>
+      <div class="section-label" data-i18n="pricing.label">Plans</div>
+      <h2 class="section-title" data-i18n="pricing.title">Simple Pricing</h2>
       <div class="pricing-grid">
 
         <div class="pricing-card" data-catalog-plan="free">
           <div class="pricing-card__header">
             <h3 data-catalog-field="name">Free</h3>
-            <div class="pricing-card__price"><span class="price-amount" data-catalog-field="price">$0</span><span class="price-period">/month</span></div>
+            <div class="pricing-card__price"><span class="price-amount" data-catalog-field="price">$0</span><span class="price-period" data-i18n="pricing.period.month">/month</span></div>
             <p class="pricing-card__desc" data-catalog-field="description">For trying the core tools</p>
           </div>
           <ul class="pricing-card__features">
-            <li class="feat-yes">✓ 1 analysis per day</li>
-            <li class="feat-yes">✓ Bracket editing</li>
-            <li class="feat-yes">✓ Copy to clipboard</li>
-            <li class="feat-yes">✓ Suggestion chips</li>
-            <li class="feat-yes">✓ Endframe Extractor (free with sign-in)</li>
-            <li class="feat-no">✗ Storyboard Generator</li>
+            <li class="feat-yes" data-i18n="pricing.feature.analysisDaily">✓ 1 analysis per day</li>
+            <li class="feat-yes" data-i18n="pricing.feature.bracketEditing">✓ Bracket editing</li>
+            <li class="feat-yes" data-i18n="pricing.feature.copy">✓ Copy to clipboard</li>
+            <li class="feat-yes" data-i18n="pricing.feature.suggestions">✓ Suggestion chips</li>
+            <li class="feat-yes" data-i18n="pricing.feature.endframe">✓ Endframe Extractor (free with sign-in)</li>
+            <li class="feat-no" data-i18n="pricing.feature.noStoryboard">✗ Storyboard Generator</li>
           </ul>
-          <button id="freePlanBtn" class="btn btn--outline">Get Started</button>
+          <button id="freePlanBtn" class="btn btn--outline" data-i18n="common.action.getStarted">Get Started</button>
         </div>
 
         <div class="pricing-card pricing-card--popular" data-catalog-plan="pro">
-          <div class="popular-badge">POPULAR</div>
+          <div class="popular-badge" data-i18n="pricing.badge.popular">POPULAR</div>
           <div class="pricing-card__header">
             <h3 data-catalog-field="name">Pro</h3>
             <div class="pricing-card__price">
               <span class="price-amount" data-catalog-field="price">$9.99</span>
-              <span class="price-period">/month</span>
+              <span class="price-period" data-i18n="pricing.period.month">/month</span>
             </div>
             <p class="pricing-card__desc" data-catalog-field="description">For individual creators</p>
           </div>
@@ -409,32 +409,32 @@
             <li class="feat-yes" data-catalog-field="credits">✓ 1,000 credits reset each billing month</li>
             <li class="feat-yes" data-catalog-field="storyboards">✓ Up to 8 storyboards (120 credits each)</li>
             <li class="feat-yes" data-catalog-field="analyses">✓ Up to 100 image analyses (10 credits each)</li>
-            <li class="feat-yes">✓ Bracket editing</li>
-            <li class="feat-yes">✓ Copy to clipboard</li>
-            <li class="feat-yes">✓ Suggestion chips</li>
-            <li class="feat-yes">✓ Endframe Extractor (free with sign-in)</li>
+            <li class="feat-yes" data-i18n="pricing.feature.bracketEditing">✓ Bracket editing</li>
+            <li class="feat-yes" data-i18n="pricing.feature.copy">✓ Copy to clipboard</li>
+            <li class="feat-yes" data-i18n="pricing.feature.suggestions">✓ Suggestion chips</li>
+            <li class="feat-yes" data-i18n="pricing.feature.endframe">✓ Endframe Extractor (free with sign-in)</li>
           </ul>
-          <button id="proPlanBtn" class="btn btn--primary">Get Started</button>
+          <button id="proPlanBtn" class="btn btn--primary" data-i18n="common.action.getStarted">Get Started</button>
         </div>
 
         <div class="pricing-card" data-catalog-plan="enterprise">
           <div class="pricing-card__header">
             <h3 data-catalog-field="name">Enterprise</h3>
-            <div class="pricing-card__price"><span class="price-amount" data-catalog-field="price">$19.99</span><span class="price-period">/month</span></div>
+            <div class="pricing-card__price"><span class="price-amount" data-catalog-field="price">$19.99</span><span class="price-period" data-i18n="pricing.period.month">/month</span></div>
             <p class="pricing-card__desc" data-catalog-field="description">For high-volume individual creators</p>
           </div>
           <ul class="pricing-card__features">
             <li class="feat-yes" data-catalog-field="credits">✓ 4,000 credits reset each billing month</li>
             <li class="feat-yes" data-catalog-field="storyboards">✓ Up to 33 storyboards (120 credits each)</li>
             <li class="feat-yes" data-catalog-field="analyses">✓ Up to 400 image analyses (10 credits each)</li>
-            <li class="feat-yes">✓ Same creation tools as Pro</li>
-            <li class="feat-yes">✓ Single-user plan</li>
+            <li class="feat-yes" data-i18n="pricing.feature.sameTools">✓ Same creation tools as Pro</li>
+            <li class="feat-yes" data-i18n="pricing.feature.singleUser">✓ Single-user plan</li>
           </ul>
-          <button id="enterprisePlanBtn" class="btn btn--lavender">Get Started</button>
+          <button id="enterprisePlanBtn" class="btn btn--lavender" data-i18n="common.action.getStarted">Get Started</button>
         </div>
 
       </div>
-      <p class="pricing-note">Pro and Enterprise are monthly subscriptions. Credits reset to the plan allotment at renewal and do not roll over. PromptGen does not currently include API access, team workspaces, custom models, or managed support.</p>
+      <p class="pricing-note" data-i18n="pricing.note">Pro and Enterprise are monthly subscriptions. Credits reset to the plan allotment at renewal and do not roll over. PromptGen does not currently include API access, team workspaces, custom models, or managed support.</p>
     </div>
   </section>
 
@@ -444,13 +444,13 @@
       <div class="footer__inner">
         <div class="footer__brand">
           <span class="footer__logo">PromptGen</span>
-          <p>Turn any image into a perfect AI prompt.</p>
+          <p data-i18n="index.footer.tagline">Turn any image into a perfect AI prompt.</p>
         </div>
         <div class="footer__links">
-          <a href="#home">Home</a>
-          <a href="#how-it-works">How it Works</a>
-          <a href="#gallery">Gallery</a>
-          <a href="#pricing">Pricing</a>
+          <a href="#home" data-i18n="nav.link.home">Home</a>
+          <a href="#how-it-works" data-i18n="nav.link.howItWorks">How it Works</a>
+          <a href="#gallery" data-i18n="nav.link.gallery">Gallery</a>
+          <a href="#pricing" data-i18n="nav.link.pricing">Pricing</a>
         </div>
         <div class="footer__social">
           <a href="#" aria-label="GitHub" class="social-icon">
@@ -462,11 +462,11 @@
         </div>
       </div>
       <div class="footer__bottom">
-        <p>© 2026 PromptGen. All rights reserved.</p>
+        <p data-i18n="common.footer.rights">© 2026 PromptGen. All rights reserved.</p>
         <p style="margin-top:0.5rem;">
-          <a href="/terms.html" class="footer__legal-link">Terms</a>
-          <a href="/privacy.html" class="footer__legal-link">Privacy</a>
-          <a href="/refund.html" class="footer__legal-link">Refund Policy</a>
+          <a href="/terms.html" class="footer__legal-link" data-i18n="common.footer.terms">Terms</a>
+          <a href="/privacy.html" class="footer__legal-link" data-i18n="common.footer.privacy">Privacy</a>
+          <a href="/refund.html" class="footer__legal-link" data-i18n="common.footer.refund">Refund Policy</a>
         </p>
       </div>
     </div>
@@ -474,11 +474,11 @@
 
   <!-- Login Modal (Google OAuth) -->
   <div id="loginModal" class="modal-overlay" aria-hidden="true">
-    <div class="modal" role="dialog" aria-modal="true" aria-label="Login">
-      <button class="modal__close" id="modalClose" aria-label="Close">✕</button>
+    <div class="modal" role="dialog" aria-modal="true" aria-label="Login" data-i18n-attr="aria-label:auth.dialog.login">
+      <button class="modal__close" id="modalClose" aria-label="Close" data-i18n-attr="aria-label:common.action.close">✕</button>
       <div class="modal__logo">PromptGen</div>
-      <h2 class="modal__title">Get Started</h2>
-      <p class="modal__sub">Sign in with your Google account</p>
+      <h2 class="modal__title" data-i18n="common.action.getStarted">Get Started</h2>
+      <p class="modal__sub" data-i18n="auth.signIn.subtitle">Sign in with your Google account</p>
       <button id="googleLoginBtn" class="btn btn--google">
         <svg width="18" height="18" viewBox="0 0 18 18" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
           <path fill="#4285F4" d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.717v2.258h2.908C16.658 14.013 17.64 11.705 17.64 9.2z"/>
@@ -486,19 +486,19 @@
           <path fill="#FBBC05" d="M3.964 10.707A5.41 5.41 0 0 1 3.682 9c0-.593.102-1.17.282-1.707V4.961H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.039l3.007-2.332z"/>
           <path fill="#EA4335" d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.961L3.964 7.293C4.672 5.163 6.656 3.58 9 3.58z"/>
         </svg>
-        Sign in with Google
+        <span data-i18n="common.action.signInGoogle">Sign in with Google</span>
       </button>
     </div>
   </div>
 
   <!-- Auth Required Modal -->
   <div id="authRequiredModal" class="modal-overlay" aria-hidden="true">
-    <div class="modal" role="dialog" aria-modal="true" aria-label="Login required">
-      <button class="modal__close" id="authRequiredClose" aria-label="Close">✕</button>
+    <div class="modal" role="dialog" aria-modal="true" aria-label="Login required" data-i18n-attr="aria-label:auth.dialog.loginRequired">
+      <button class="modal__close" id="authRequiredClose" aria-label="Close" data-i18n-attr="aria-label:common.action.close">✕</button>
       <div class="modal__logo">PromptGen</div>
       <div class="modal-icon">🔒</div>
-      <h2 class="modal__title">Login Required</h2>
-      <p class="modal__sub">Login is required to generate prompts.<br />Get started for free with your Google account.</p>
+      <h2 class="modal__title" data-i18n="auth.required.title">Login Required</h2>
+      <p class="modal__sub" data-i18n="auth.required.description">Login is required to generate prompts. Get started for free with your Google account.</p>
       <button id="authRequiredGoogleBtn" class="btn btn--google">
         <svg width="18" height="18" viewBox="0 0 18 18" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
           <path fill="#4285F4" d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.717v2.258h2.908C16.658 14.013 17.64 11.705 17.64 9.2z"/>
@@ -506,30 +506,30 @@
           <path fill="#FBBC05" d="M3.964 10.707A5.41 5.41 0 0 1 3.682 9c0-.593.102-1.17.282-1.707V4.961H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.039l3.007-2.332z"/>
           <path fill="#EA4335" d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.961L3.964 7.293C4.672 5.163 6.656 3.58 9 3.58z"/>
         </svg>
-        Sign in with Google
+        <span data-i18n="common.action.signInGoogle">Sign in with Google</span>
       </button>
     </div>
   </div>
 
   <!-- Upgrade Modal -->
   <div id="upgradeModal" class="modal-overlay" aria-hidden="true">
-    <div class="modal" role="dialog" aria-modal="true" aria-label="Upgrade">
-      <button class="modal__close" id="upgradeClose" aria-label="Close">✕</button>
+    <div class="modal" role="dialog" aria-modal="true" aria-label="Upgrade" data-i18n-attr="aria-label:auth.dialog.upgrade">
+      <button class="modal__close" id="upgradeClose" aria-label="Close" data-i18n-attr="aria-label:common.action.close">✕</button>
       <div class="modal__logo">PromptGen</div>
       <div class="modal-icon">🚀</div>
-      <h2 class="modal__title" id="upgradeTitle">Daily Limit Reached</h2>
-      <p class="modal__sub" id="upgradeDesc">The free plan allows 1 generation per day.<br />Try again tomorrow or upgrade to Pro.</p>
-      <a href="#pricing" class="btn btn--primary" id="upgradeBtn" style="margin-top:0.5rem">Upgrade to Pro →</a>
+      <h2 class="modal__title" id="upgradeTitle" data-i18n="auth.limit.title">Daily Limit Reached</h2>
+      <p class="modal__sub" id="upgradeDesc" data-i18n="auth.limit.description">The free plan allows 1 generation per day. Try again tomorrow or upgrade to Pro.</p>
+      <a href="#pricing" class="btn btn--primary" id="upgradeBtn" style="margin-top:0.5rem" data-i18n="common.action.upgradePro">Upgrade to Pro →</a>
     </div>
   </div>
 
   <!-- Change Plan Modal -->
   <div id="changePlanModal" class="modal-overlay" aria-hidden="true">
-    <div class="modal" role="dialog" aria-modal="true" aria-label="Change Plan">
-      <button class="modal__close" id="changePlanClose" aria-label="Close">✕</button>
+    <div class="modal" role="dialog" aria-modal="true" aria-label="Change Plan" data-i18n-attr="aria-label:auth.dialog.changePlan">
+      <button class="modal__close" id="changePlanClose" aria-label="Close" data-i18n-attr="aria-label:common.action.close">✕</button>
       <div class="modal__logo">PromptGen</div>
       <div class="modal-icon" id="changePlanIcon">🔄</div>
-      <h2 class="modal__title" id="changePlanTitle">Change Plan</h2>
+      <h2 class="modal__title" id="changePlanTitle" data-i18n="plan.change.title">Change Plan</h2>
 
       <!-- Loading state: fetching preview -->
       <div id="cpStateLoading">
@@ -543,26 +543,35 @@
           <span id="changePlanCreditText"></span>
         </div>
         <div class="modal__btn-row">
-          <button class="btn btn--secondary" id="changePlanCancelBtn">Cancel</button>
-          <button class="btn btn--primary" id="changePlanConfirmBtn">Confirm Change</button>
+          <button class="btn btn--secondary" id="changePlanCancelBtn" data-i18n="plan.change.cancel">Cancel</button>
+          <button class="btn btn--primary" id="changePlanConfirmBtn" data-i18n="plan.change.confirm">Confirm Change</button>
         </div>
       </div>
 
       <!-- Updating state: webhook polling in progress (or confirmed-pending on timeout) -->
       <div id="cpStateUpdating" style="display:none">
         <div id="cpUpdatingSpinner" style="display:flex;justify-content:center;margin:0.5rem 0 1rem"><div class="spinner"></div></div>
-        <p class="modal__sub" id="changePlanUpdatingMsg">Applying your plan change…</p>
-        <button class="btn btn--primary btn--full" id="changePlanRefreshBtn" style="display:none">Refresh now</button>
+        <p class="modal__sub" id="changePlanUpdatingMsg" data-i18n="plan.change.applying">Applying your plan change…</p>
+        <button class="btn btn--primary btn--full" id="changePlanRefreshBtn" style="display:none" data-i18n="plan.change.refresh">Refresh now</button>
       </div>
 
       <!-- Error state -->
       <div id="cpStateError" style="display:none">
         <p class="modal__sub" id="changePlanErrorMsg"></p>
-        <button class="btn btn--secondary btn--full" id="changePlanDismissBtn">Close</button>
+        <button class="btn btn--secondary btn--full" id="changePlanDismissBtn" data-i18n="common.action.close">Close</button>
       </div>
     </div>
   </div>
 
+  <script src="/i18n/runtime.js?v=__ASSET_VERSION__"></script>
+  <script src="/i18n/config.js?v=__ASSET_VERSION__"></script>
+  <script src="/i18n/locales/en.js?v=__ASSET_VERSION__"></script>
+  <script src="/i18n/locales/ko.js?v=__ASSET_VERSION__"></script>
+  <script src="/i18n/locales/ja.js?v=__ASSET_VERSION__"></script>
+  <script src="/i18n/locales/zh-CN.js?v=__ASSET_VERSION__"></script>
+  <script src="/i18n/locales/fr.js?v=__ASSET_VERSION__"></script>
+  <script src="/i18n/locales/ru.js?v=__ASSET_VERSION__"></script>
+  <script src="/i18n/init.js?v=__ASSET_VERSION__"></script>
   <script src="https://cdn.paddle.com/paddle/v2/paddle.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.49.4/dist/umd/supabase.js" integrity="sha256-/anWf4DM5AdPeNY3O7E26Ew0yyNbipHF5ChAaNpt3EI=" crossorigin="anonymous"></script>
   <script src="/analytics.js"></script>

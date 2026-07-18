@@ -39,7 +39,8 @@ test.describe('OAuth and plan access contracts', () => {
     expect(response.status()).toBe(200);
     await expect(page.getByRole('heading', { name: 'Storyboard Generator' })).toBeVisible();
     await expect(page.locator('#planGate')).toContainText('Pro Plan Required');
-    await expect(page.locator('#planGate .sb-cost-value')).toHaveText(String(config.storyboardCost));
+    await expect(page.locator('#planGate [data-i18n="storyboard.plan.description"]'))
+      .toContainText(String(config.storyboardCost));
     await expect(page.locator('#loginBtn')).toContainText('Sign In with Google');
   });
 

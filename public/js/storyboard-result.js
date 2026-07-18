@@ -4,6 +4,17 @@
   const storyboardId = window.location.pathname.split('/').pop();
   let pollTimer = null;
   let currentShots = null;
+  let currentStoryboard = null;
+  let currentStatus = null;
+  let storyboardCost = null;
+  const uiText = (key, values) => window.PromptGenI18n?.t(key, values) || key;
+  const genreLabel = (genre) => uiText(`storyboard.genre.${String(genre).toLowerCase().replace(/[^a-z]/g, '')}`);
+  const styleKey = (style) => ({
+    'Pixar 3D': 'pixar',
+    Cinematic: 'cinematic',
+    Documentary: 'documentary',
+    Animation: 'animation'
+  }[style] || 'cinematic');
 
   async function init() {
     window.addEventListener('scroll', () => {
@@ -14,8 +25,9 @@
     // On failure the number-free default text stays (never blank/NaN).
     StoryboardAPI.getConfig().then(cfg => {
       if (cfg && typeof cfg.storyboardCost === 'number') {
+        storyboardCost = cfg.storyboardCost;
         const note = document.getElementById('refundNote');
-        if (note) note.textContent = `Your ${cfg.storyboardCost} credits have been refunded.`;
+        if (note) note.textContent = uiText('storyboardResult.refundedCredits', { credits: cfg.storyboardCost });
       }
     }).catch(() => {});
 
@@ -40,7 +52,7 @@
 
       if (data.status === 'failed') {
         clearInterval(pollTimer);
-        showError(data.errorMessage || 'Generation failed.');
+        showError(uiText('storyboard.error.generation'));
         return;
       }
 
@@ -50,21 +62,22 @@
         pollTimer = setInterval(checkStatus, 5000);
       }
     } catch (err) {
-      showError('Failed to load status. Please refresh.');
+      showError(uiText('storyboardResult.error.status'));
     }
   }
 
   function showProcessing(data) {
+    currentStatus = data;
     document.getElementById('processingState').style.display = '';
     document.getElementById('errorState').style.display = 'none';
     document.getElementById('resultState').style.display = 'none';
 
-    document.getElementById('processingLabel').textContent = data.stepLabel || 'Processing…';
+    document.getElementById('processingLabel').textContent = uiText(`storyboard.step.${data.currentStep || 'processing'}`);
     const pct = Math.round((data.progress || 0) * 100);
     document.getElementById('progressBar').style.width = `${pct}%`;
     const eta = data.estimatedSecondsRemaining;
     document.getElementById('processingEta').textContent =
-      eta > 0 ? `~${eta}s remaining` : 'Almost done…';
+      eta > 0 ? uiText('storyboardResult.remaining', { seconds: eta }) : uiText('storyboardResult.almostDone');
   }
 
   function showError(msg) {
@@ -77,22 +90,24 @@
   async function loadResult() {
     const data = await StoryboardAPI.getStoryboard(storyboardId);
     if (!data.success) {
-      showError('Failed to load storyboard result.');
+      showError(uiText('storyboardResult.error.load'));
       return;
     }
 
     const sb = data.storyboard;
+    currentStoryboard = sb;
     document.getElementById('processingState').style.display = 'none';
     document.getElementById('errorState').style.display = 'none';
     document.getElementById('resultState').style.display = '';
 
     // Meta
     const meta = document.getElementById('resultMeta');
-    const date = new Date(sb.createdAt).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+    const date = window.PromptGenI18n?.formatDate(new Date(sb.createdAt), { year: 'numeric', month: 'long', day: 'numeric' })
+      || new Date(sb.createdAt).toLocaleDateString();
     meta.innerHTML = `
-      <span class="storyboard-meta-badge">${escapeHtml(sb.style)}</span>
-      <span class="storyboard-meta-badge">${sb.cutCount} Shots</span>
-      ${(sb.genres || []).map(g => `<span class="storyboard-meta-badge">${escapeHtml(g)}</span>`).join('')}
+      <span class="storyboard-meta-badge">${escapeHtml(uiText(`storyboard.style.${styleKey(sb.style)}`))}</span>
+      <span class="storyboard-meta-badge">${escapeHtml(uiText('storyboard.shots.count', { count: sb.cutCount }))}</span>
+      ${(sb.genres || []).map(g => `<span class="storyboard-meta-badge">${escapeHtml(genreLabel(g))}</span>`).join('')}
       <span class="storyboard-meta-date">${date}</span>
     `;
 
@@ -106,13 +121,13 @@
     if (sb.gridUrl) {
       const img = document.getElementById('gridImage');
       img.src = sb.gridUrl;
-      img.alt = `${sb.style} storyboard grid`;
+      img.alt = uiText('storyboardResult.gridAltStyle', { style: uiText(`storyboard.style.${styleKey(sb.style)}`) });
       const dlBtn = document.getElementById('downloadGridBtn');
       dlBtn.style.display = '';
-      dlBtn.addEventListener('click', async (e) => {
+      dlBtn.onclick = async (e) => {
         e.preventDefault();
         try {
-          dlBtn.textContent = '⏳ Downloading…';
+          dlBtn.textContent = uiText('common.state.downloading');
           dlBtn.disabled = true;
           const res = await fetch(sb.gridUrl);
           const blob = await res.blob();
@@ -123,27 +138,29 @@
           a.click();
           URL.revokeObjectURL(url);
         } finally {
-          dlBtn.textContent = '⬇ Download Grid';
+          dlBtn.textContent = uiText('storyboardResult.downloadGrid');
           dlBtn.disabled = false;
         }
-      });
+      };
     }
 
     // Shots
     const shotList = document.getElementById('shotList');
     shotList.innerHTML = '';
     currentShots = sb.shots || [];
+    shotList.parentElement.querySelector('.storyboard-copy-all-btn')?.remove();
 
     // Copy All Prompts button (above shot list)
     const copyAllBtn = document.createElement('button');
     copyAllBtn.className = 'btn btn--secondary storyboard-copy-all-btn';
-    copyAllBtn.textContent = '📋 Copy All Prompts';
+    copyAllBtn.setAttribute('data-i18n', 'storyboardResult.copyAll');
+    copyAllBtn.textContent = uiText('storyboardResult.copyAll');
     copyAllBtn.addEventListener('click', () => {
       if (!currentShots || currentShots.length === 0) return;
 
       const flashFail = () => {
-        copyAllBtn.textContent = '복사 실패 — 다시 시도';
-        setTimeout(() => { copyAllBtn.textContent = '📋 Copy All Prompts'; }, 2000);
+        copyAllBtn.textContent = uiText('common.error.copy');
+        setTimeout(() => { copyAllBtn.textContent = uiText('storyboardResult.copyAll'); }, 2000);
       };
 
       if (!navigator.clipboard) { flashFail(); return; }
@@ -155,8 +172,8 @@
       }).join('\n\n');
 
       navigator.clipboard.writeText(text).then(() => {
-        copyAllBtn.textContent = '✓ Copied!';
-        setTimeout(() => { copyAllBtn.textContent = '📋 Copy All Prompts'; }, 2000);
+        copyAllBtn.textContent = uiText('common.state.copied');
+        setTimeout(() => { copyAllBtn.textContent = uiText('storyboardResult.copyAll'); }, 2000);
       }).catch(flashFail);
     });
     shotList.parentElement.insertBefore(copyAllBtn, shotList);
@@ -166,14 +183,14 @@
       item.className = 'storyboard-shot-item';
       item.innerHTML = `
         <div class="storyboard-shot-header">
-          <span class="storyboard-shot-num">Shot ${shot.shotNumber || i + 1}</span>
+          <span class="storyboard-shot-num" data-i18n="storyboardResult.shotNumber" data-i18n-vars="number:${shot.shotNumber || i + 1}">${escapeHtml(uiText('storyboardResult.shotNumber', { number: shot.shotNumber || i + 1 }))}</span>
           <span class="storyboard-shot-angle">${escapeHtml(shot.cameraAngle || '')}</span>
           <span class="storyboard-shot-beat">${escapeHtml(shot.narrativeBeat || '')}</span>
         </div>
         <p class="storyboard-shot-desc">${escapeHtml(shot.description || '')}</p>
         <div class="storyboard-shot-prompt-wrap">
           <pre class="storyboard-shot-prompt" id="prompt-${i}">${escapeHtml(shot.videoPrompt || '')}</pre>
-          <button class="storyboard-copy-btn" data-target="prompt-${i}" title="Copy prompt">📋 Copy</button>
+          <button class="storyboard-copy-btn" data-target="prompt-${i}" title="${escapeHtml(uiText('gallery.action.copy'))}" data-i18n="common.action.copy" data-i18n-attr="title:gallery.action.copy">${escapeHtml(uiText('common.action.copy'))}</button>
         </div>
       `;
       shotList.appendChild(item);
@@ -185,8 +202,8 @@
         const pre = document.getElementById(btn.dataset.target);
         if (pre) {
           navigator.clipboard.writeText(pre.textContent).then(() => {
-            btn.textContent = '✓ Copied!';
-            setTimeout(() => { btn.textContent = '📋 Copy'; }, 2000);
+            btn.textContent = uiText('common.state.copied');
+            setTimeout(() => { btn.textContent = uiText('common.action.copy'); }, 2000);
           });
         }
       });
@@ -198,4 +215,11 @@
   }
 
   document.addEventListener('DOMContentLoaded', init);
+  document.addEventListener('promptgen:localechange', () => {
+    if (storyboardCost != null) {
+      document.getElementById('refundNote').textContent = uiText('storyboardResult.refundedCredits', { credits: storyboardCost });
+    }
+    if (currentStatus && !currentStoryboard) showProcessing(currentStatus);
+    if (currentStoryboard) loadResult();
+  });
 })();
