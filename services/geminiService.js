@@ -1,4 +1,3 @@
-const { GoogleGenerativeAI } = require('@google/generative-ai');
 const logger = require('../lib/logger');
 const {
   extractGeminiUsage,
@@ -13,6 +12,13 @@ const API_TIMEOUT_MS = 30_000;
 const ANALYSIS_PROMPT_VERSION = process.env.GEMINI_ANALYSIS_PROMPT_VERSION || 'image-analysis-v1';
 const SUGGESTIONS_PROMPT_VERSION = process.env.GEMINI_SUGGESTIONS_PROMPT_VERSION || 'image-suggestions-v1';
 const PARSE_TELEMETRY = Symbol('parseTelemetry');
+
+function createGeminiClient() {
+  // Keep the provider SDK lazy-loaded so parsing-only jobs and tests do not
+  // initialize Google auth transports when no Gemini request is made.
+  const { GoogleGenAI } = require('@google/genai');
+  return new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+}
 
 function withTimeout(promise, ms, label) {
   return Promise.race([
@@ -438,11 +444,7 @@ async function generateSuggestions(brackets) {
   const activeBrackets = brackets.slice(0, BATCH_LIMIT);
   const startedAt = Date.now();
 
-  const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-  const model = genAI.getGenerativeModel({
-    model: MODEL,
-    generationConfig: { temperature: 0.8, maxOutputTokens: 12000 },
-  });
+  const genAI = createGeminiClient();
 
   const bracketList = activeBrackets
     .map((b, i) => `${i + 1}. [${b.original}]`)
@@ -472,9 +474,13 @@ Elements:
 ${bracketList}`;
 
   try {
-    const result  = await model.generateContent(suggestionPrompt);
-    const content = result.response.text();
-    const usage = extractGeminiUsage(result.response.usageMetadata);
+    const result = await genAI.models.generateContent({
+      model: MODEL,
+      contents: suggestionPrompt,
+      config: { temperature: 0.8, maxOutputTokens: 12000 }
+    });
+    const content = result.text;
+    const usage = extractGeminiUsage(result.usageMetadata);
     if (!content) {
       recordAiCall({
         outcome: 'completed',
@@ -590,12 +596,7 @@ ${bracketList}`;
 
 /* ── 이미지 분석 (메인 함수) ── */
 async function analyzeImage(base64Image, mimeType) {
-  const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-  const model = genAI.getGenerativeModel({
-    model: MODEL,
-    systemInstruction: SYSTEM_PROMPT,
-    generationConfig: { temperature: 0.3, maxOutputTokens: 16000 },
-  });
+  const genAI = createGeminiClient();
 
   let lastError;
   const MAX_ATTEMPTS = 3;
@@ -605,15 +606,23 @@ async function analyzeImage(base64Image, mimeType) {
     const startedAt = Date.now();
     try {
       const result = await withTimeout(
-        model.generateContent([
-          { inlineData: { mimeType, data: base64Image } },
-          'Analyze this image and generate the hybrid prompt.',
-        ]),
+        genAI.models.generateContent({
+          model: MODEL,
+          contents: [
+            { inlineData: { mimeType, data: base64Image } },
+            'Analyze this image and generate the hybrid prompt.'
+          ],
+          config: {
+            systemInstruction: SYSTEM_PROMPT,
+            temperature: 0.3,
+            maxOutputTokens: 16000
+          }
+        }),
         API_TIMEOUT_MS,
         'Gemini analyzeImage'
       );
 
-      const content = result.response.text();
+      const content = result.text;
       if (!content) throw new Error('Empty response from Gemini');
 
       const parsed = parseHybridResponse(content);
@@ -629,7 +638,7 @@ async function analyzeImage(base64Image, mimeType) {
         startedAt,
         parseResult: parseTelemetry.parseResult,
         schemaResult: parseTelemetry.schemaResult,
-        usage: extractGeminiUsage(result.response.usageMetadata)
+        usage: extractGeminiUsage(result.usageMetadata)
       });
       if (parseTelemetry.schemaResult === 'degraded') {
         logger.warn('image.analysis.schema_degraded', {
