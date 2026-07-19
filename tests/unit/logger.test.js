@@ -40,6 +40,28 @@ describe('structured logger', () => {
     expect(records[0].record.nested.safe).toBe('visible');
   });
 
+  test('keeps numeric token counts while redacting token credentials', () => {
+    logger.info('test.usage', {
+      usage: {
+        inputTokens: 120,
+        outputTokens: 40,
+        reasoningTokens: 12,
+        totalTokens: 172
+      },
+      accessToken: 'secret-access-token',
+      token: 'secret-token'
+    });
+
+    expect(records[0].record.usage).toEqual({
+      inputTokens: 120,
+      outputTokens: 40,
+      reasoningTokens: 12,
+      totalTokens: 172
+    });
+    expect(records[0].record.accessToken).toBe('[REDACTED]');
+    expect(records[0].record.token).toBe('[REDACTED]');
+  });
+
   test('accepts only safe incoming request IDs', () => {
     expect(logger.createRequestId('valid-request-id-123')).toBe('valid-request-id-123');
     expect(logger.createRequestId('bad id with spaces')).toMatch(
