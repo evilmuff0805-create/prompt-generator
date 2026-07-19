@@ -2,6 +2,7 @@
 
 const mockChatCreate = jest.fn();
 const mockLoggerInfo = jest.fn();
+const mockLoggerWarn = jest.fn();
 
 jest.mock('openai', () => {
   class OpenAI {
@@ -16,7 +17,8 @@ jest.mock('openai', () => {
 });
 
 jest.mock('../../lib/logger', () => ({
-  info: mockLoggerInfo
+  info: mockLoggerInfo,
+  warn: mockLoggerWarn
 }));
 
 process.env.OPENAI_API_KEY = 'test-openai-key';
@@ -61,6 +63,7 @@ describe('Storyboard OpenAI request contract', () => {
   beforeEach(() => {
     mockChatCreate.mockReset();
     mockLoggerInfo.mockReset();
+    mockLoggerWarn.mockReset();
   });
 
   test('uses Luna medium reasoning and an exact strict schema without changing the public character contract', async () => {
@@ -105,6 +108,18 @@ describe('Storyboard OpenAI request contract', () => {
         totalTokens: 300
       }
     }));
+    expect(mockLoggerInfo).toHaveBeenCalledWith('ai.provider_call.completed', expect.objectContaining({
+      provider: 'openai',
+      operation: 'storyboard.text',
+      promptVersion: 'storyboard-v3',
+      parseResult: 'passed',
+      schemaResult: 'passed',
+      usage: {
+        inputTokens: 100,
+        outputTokens: 200,
+        totalTokens: 300
+      }
+    }));
     expect(JSON.stringify(mockLoggerInfo.mock.calls)).not.toContain('A quiet reunion');
   });
 
@@ -130,6 +145,17 @@ describe('Storyboard OpenAI request contract', () => {
 
     expect(mockChatCreate).toHaveBeenCalledTimes(2);
     expect(result.characters).toEqual({ protagonist: 'Alex' });
+    expect(mockLoggerWarn).toHaveBeenCalledWith(
+      'ai.provider_call.failed',
+      expect.objectContaining({
+        provider: 'openai',
+        operation: 'storyboard.text',
+        attempt: 1,
+        retryScheduled: true,
+        parseResult: 'passed',
+        schemaResult: 'failed'
+      })
+    );
     expect(mockLoggerInfo).toHaveBeenCalledWith(
       'storyboard.text.generated',
       expect.objectContaining({ attempt: 2 })
@@ -151,5 +177,13 @@ describe('Storyboard OpenAI request contract', () => {
 
     expect(mockChatCreate).toHaveBeenCalledTimes(1);
     expect(mockLoggerInfo).not.toHaveBeenCalled();
+    expect(mockLoggerWarn).toHaveBeenCalledWith(
+      'ai.provider_call.failed',
+      expect.objectContaining({
+        provider: 'openai',
+        operation: 'storyboard.text',
+        retryScheduled: false
+      })
+    );
   });
 });
