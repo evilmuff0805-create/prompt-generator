@@ -7,7 +7,11 @@ jest.mock('@google/genai', () => ({
   GoogleGenAI: mockGoogleGenAI
 }), { virtual: true });
 
-const { analyzeImage } = require('../../services/geminiService');
+const {
+  analyzeImage,
+  getParseTelemetry,
+  isStructuredOutputEnabled
+} = require('../../services/geminiService');
 
 const ANALYSIS_JSON = {
   subject: {
@@ -51,6 +55,7 @@ describe('@google/genai request contract', () => {
   beforeEach(() => {
     process.env.GEMINI_API_KEY = 'test-key';
     delete process.env.GEMINI_MODEL;
+    delete process.env.GEMINI_STRUCTURED_OUTPUT_ENABLED;
     mockGenerateContent.mockReset();
     mockGoogleGenAI.mockClear();
   });
@@ -105,6 +110,7 @@ describe('@google/genai request contract', () => {
 
     const serializedRequests = JSON.stringify(mockGenerateContent.mock.calls);
     expect(serializedRequests).not.toContain('responseSchema');
+    expect(serializedRequests).not.toContain('responseJsonSchema');
     expect(serializedRequests).not.toContain('responseMimeType');
     expect(serializedRequests).not.toContain('thinkingConfig');
     expect(result.brackets.length).toBeGreaterThan(0);
@@ -120,5 +126,84 @@ describe('@google/genai request contract', () => {
 
     expect(mockGenerateContent).toHaveBeenCalledTimes(1);
     expect(result.brackets).toEqual([]);
+  });
+
+  test('adds JSON Schema only when the dormant canary flag is explicitly enabled', async () => {
+    process.env.GEMINI_STRUCTURED_OUTPUT_ENABLED = 'true';
+    mockGenerateContent
+      .mockResolvedValueOnce({
+        text: JSON.stringify({
+          prose: 'A cinematic rainy street scene.',
+          analysis: ANALYSIS_JSON
+        }),
+        usageMetadata: { promptTokenCount: 100, candidatesTokenCount: 50, totalTokenCount: 150 }
+      })
+      .mockResolvedValueOnce({
+        text: JSON.stringify({ suggestions: [] }),
+        usageMetadata: { promptTokenCount: 40, candidatesTokenCount: 10, totalTokenCount: 50 }
+      });
+
+    const result = await analyzeImage('ZmFrZS1pbWFnZQ==', 'image/png');
+
+    const analysisConfig = mockGenerateContent.mock.calls[0][0].config;
+    expect(analysisConfig).toMatchObject({
+      temperature: 0.3,
+      maxOutputTokens: 16000,
+      responseMimeType: 'application/json',
+      responseJsonSchema: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['prose', 'analysis']
+      }
+    });
+    expect(analysisConfig.systemInstruction).toContain('STRUCTURED OUTPUT MODE');
+
+    const suggestionsConfig = mockGenerateContent.mock.calls[1][0].config;
+    expect(suggestionsConfig).toMatchObject({
+      temperature: 0.8,
+      maxOutputTokens: 12000,
+      responseMimeType: 'application/json',
+      responseJsonSchema: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['suggestions']
+      }
+    });
+    const expectedCount = result.brackets.length;
+    expect(suggestionsConfig.responseJsonSchema.properties.suggestions).toMatchObject({
+      minItems: expectedCount,
+      maxItems: expectedCount
+    });
+    expect(result.prompt).toContain('A cinematic rainy street scene.');
+    expect(getParseTelemetry(result)).toEqual({
+      parseResult: 'passed',
+      schemaResult: 'passed',
+      schemaErrorCodes: []
+    });
+  });
+
+  test('degrades malformed structured output without a second provider call', async () => {
+    process.env.GEMINI_STRUCTURED_OUTPUT_ENABLED = 'true';
+    mockGenerateContent.mockResolvedValueOnce({
+      text: '{"prose":"truncated"',
+      usageMetadata: { promptTokenCount: 20, candidatesTokenCount: 5, totalTokenCount: 25 }
+    });
+
+    const result = await analyzeImage('ZmFrZQ==', 'image/jpeg');
+
+    expect(mockGenerateContent).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({ prompt: '', brackets: [], analysis: {} });
+    expect(getParseTelemetry(result)).toEqual({
+      parseResult: 'failed',
+      schemaResult: 'degraded',
+      schemaErrorCodes: ['structured_json_invalid']
+    });
+  });
+
+  test('enables the canary only for an explicit true value', () => {
+    expect(isStructuredOutputEnabled({ GEMINI_STRUCTURED_OUTPUT_ENABLED: ' TRUE ' })).toBe(true);
+    expect(isStructuredOutputEnabled({ GEMINI_STRUCTURED_OUTPUT_ENABLED: '1' })).toBe(false);
+    expect(isStructuredOutputEnabled({ GEMINI_STRUCTURED_OUTPUT_ENABLED: 'yes' })).toBe(false);
+    expect(isStructuredOutputEnabled({})).toBe(false);
   });
 });

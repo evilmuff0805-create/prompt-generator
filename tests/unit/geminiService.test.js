@@ -8,6 +8,7 @@ const {
   buildFormattedPrompt,
   buildAnalysis,
   validateAnalysisSchema,
+  validateStructuredAnalysisSchema,
   validateSuggestionsSchema,
   getParseTelemetry
 } = require('../../services/geminiService');
@@ -207,6 +208,21 @@ describe('Gemini schema telemetry', () => {
     }, 2)).toEqual([
       'suggestion_items_invalid',
       'suggestion_index_missing'
+    ]);
+  });
+
+  test('keeps stricter structured-output semantics out of the legacy validator', () => {
+    const semanticallyIncomplete = {
+      ...SAMPLE_JSON,
+      composition: { ...SAMPLE_JSON.composition, aspect_ratio: 'wide' },
+      constraints: { must_keep: ['one'], avoid: ['one'] }
+    };
+
+    expect(validateAnalysisSchema(semanticallyIncomplete)).toEqual([]);
+    expect(validateStructuredAnalysisSchema(semanticallyIncomplete)).toEqual([
+      'aspect_ratio_invalid',
+      'must_keep_count_invalid',
+      'avoid_count_invalid'
     ]);
   });
 });
