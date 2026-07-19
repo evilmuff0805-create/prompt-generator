@@ -1,10 +1,18 @@
 const { GoogleGenerativeAI } = require('@google/generative-ai');
+const logger = require('../lib/logger');
+const {
+  extractGeminiUsage,
+  recordAiCall
+} = require('../lib/ai-telemetry');
 
 // Model is env-switchable (GEMINI_MODEL) so rollback/swap needs no code deploy.
 // gemini-2.5-flash retires 2026-10-16; stable replacement is gemini-3.1-flash-lite
 // (thinking_level defaults to 'minimal' — no added cost/latency).
 const MODEL = process.env.GEMINI_MODEL || 'gemini-3.1-flash-lite';
 const API_TIMEOUT_MS = 30_000;
+const ANALYSIS_PROMPT_VERSION = process.env.GEMINI_ANALYSIS_PROMPT_VERSION || 'image-analysis-v1';
+const SUGGESTIONS_PROMPT_VERSION = process.env.GEMINI_SUGGESTIONS_PROMPT_VERSION || 'image-suggestions-v1';
+const PARSE_TELEMETRY = Symbol('parseTelemetry');
 
 function withTimeout(promise, ms, label) {
   return Promise.race([
@@ -13,6 +21,75 @@ function withTimeout(promise, ms, label) {
       setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms)
     )
   ]);
+}
+
+function attachParseTelemetry(result, telemetry) {
+  Object.defineProperty(result, PARSE_TELEMETRY, {
+    configurable: false,
+    enumerable: false,
+    value: Object.freeze({ ...telemetry })
+  });
+  return result;
+}
+
+function getParseTelemetry(result) {
+  return result?.[PARSE_TELEMETRY] || {
+    parseResult: 'not_attempted',
+    schemaResult: 'not_evaluated',
+    schemaErrorCodes: []
+  };
+}
+
+function validateAnalysisSchema(jsonData) {
+  const errors = [];
+  const isObject = value => value && typeof value === 'object' && !Array.isArray(value);
+  const isText = value => typeof value === 'string' && value.trim().length > 0;
+
+  if (!isObject(jsonData)) return ['root_not_object'];
+  if (!isObject(jsonData.subject) || !isText(jsonData.subject.description)) {
+    errors.push('subject_description_missing');
+  }
+  if (!isObject(jsonData.scene) || !isText(jsonData.scene.location)) {
+    errors.push('scene_location_missing');
+  }
+  if (!isObject(jsonData.composition) || !isText(jsonData.composition.aspect_ratio)) {
+    errors.push('aspect_ratio_missing');
+  }
+  if (!isObject(jsonData.style_modifiers) || !isText(jsonData.style_modifiers.medium)) {
+    errors.push('style_medium_missing');
+  }
+  if (!isObject(jsonData.constraints) || !Array.isArray(jsonData.constraints.must_keep)) {
+    errors.push('must_keep_missing');
+  }
+  if (!isObject(jsonData.constraints) || !Array.isArray(jsonData.constraints.avoid)) {
+    errors.push('avoid_missing');
+  }
+
+  return errors;
+}
+
+function validateSuggestionsSchema(parsed, expectedCount) {
+  const entries = parsed?.suggestions;
+  if (!Array.isArray(entries)) return ['suggestions_not_array'];
+
+  const seen = new Set();
+  const errors = [];
+  for (const entry of entries) {
+    if (!Number.isInteger(entry?.index) || entry.index < 1 || entry.index > expectedCount) {
+      errors.push('suggestion_index_invalid');
+      continue;
+    }
+    if (seen.has(entry.index)) errors.push('suggestion_index_duplicate');
+    seen.add(entry.index);
+    if (!Array.isArray(entry.items)
+      || entry.items.length < 3
+      || entry.items.length > 5
+      || entry.items.some(item => typeof item !== 'string' || !item.trim())) {
+      errors.push('suggestion_items_invalid');
+    }
+  }
+  if (seen.size !== expectedCount) errors.push('suggestion_index_missing');
+  return [...new Set(errors)];
 }
 
 const SYSTEM_PROMPT = `You are an expert AI image prompt engineer specializing in Nano Banana Pro, Midjourney, and DALL-E.
@@ -295,10 +372,12 @@ function parseHybridResponse(content) {
 
   let jsonData = null;
   let jsonBlockStart = text.length;
+  let jsonCandidateFound = false;
 
   // 1) ```json ... ``` 코드블록에서 JSON 우선 추출
   const codeBlockMatch = text.match(/```json\s*([\s\S]*?)```/i);
   if (codeBlockMatch) {
+    jsonCandidateFound = true;
     try {
       jsonData = JSON.parse(codeBlockMatch[1].trim());
       jsonBlockStart = text.indexOf(codeBlockMatch[0]);
@@ -309,6 +388,7 @@ function parseHybridResponse(content) {
   if (!jsonData) {
     const rawMatch = text.match(/\{[\s\S]*\}/);
     if (rawMatch) {
+      jsonCandidateFound = true;
       try {
         jsonData = JSON.parse(rawMatch[0]);
         jsonBlockStart = text.indexOf(rawMatch[0]);
@@ -325,14 +405,29 @@ function parseHybridResponse(content) {
     .trim();
 
   if (!jsonData) {
-    return { prompt: prose, brackets: [], analysis: {} };
+    return attachParseTelemetry(
+      { prompt: prose, brackets: [], analysis: {} },
+      {
+        parseResult: jsonCandidateFound ? 'failed' : 'missing',
+        schemaResult: 'degraded',
+        schemaErrorCodes: [jsonCandidateFound ? 'json_invalid' : 'json_missing']
+      }
+    );
   }
 
   // 4) JSON 값들을 [bracket]으로 감싼 포맷팅된 텍스트 + brackets 배열 동시 생성
   const { formattedPrompt, brackets } = buildFormattedPrompt(prose, jsonData);
   const analysis = buildAnalysis(jsonData);
+  const schemaErrorCodes = validateAnalysisSchema(jsonData);
 
-  return { prompt: formattedPrompt, brackets, analysis };
+  return attachParseTelemetry(
+    { prompt: formattedPrompt, brackets, analysis },
+    {
+      parseResult: 'passed',
+      schemaResult: schemaErrorCodes.length === 0 ? 'passed' : 'degraded',
+      schemaErrorCodes
+    }
+  );
 }
 
 /* ── 대안 제안 생성 (Gemini) ── */
@@ -341,8 +436,7 @@ async function generateSuggestions(brackets) {
 
   const BATCH_LIMIT = 30;
   const activeBrackets = brackets.slice(0, BATCH_LIMIT);
-
-  console.log('[Suggestions] Generating for', activeBrackets.length, 'brackets');
+  const startedAt = Date.now();
 
   const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
   const model = genAI.getGenerativeModel({
@@ -380,8 +474,21 @@ ${bracketList}`;
   try {
     const result  = await model.generateContent(suggestionPrompt);
     const content = result.response.text();
-    console.log('[Suggestions] Result:', JSON.stringify(content).slice(0, 200));
-    if (!content) return brackets;
+    const usage = extractGeminiUsage(result.response.usageMetadata);
+    if (!content) {
+      recordAiCall({
+        outcome: 'completed',
+        provider: 'google',
+        operation: 'image.suggestions',
+        model: MODEL,
+        promptVersion: SUGGESTIONS_PROMPT_VERSION,
+        startedAt,
+        parseResult: 'missing',
+        schemaResult: 'degraded',
+        usage
+      });
+      return brackets;
+    }
 
     // ```json 코드블록 우선 추출, 없으면 raw { } 추출
     let jsonStr = content;
@@ -390,7 +497,17 @@ ${bracketList}`;
     const jsonMatch = jsonStr.match(/\{[\s\S]*\}/);
 
     if (!jsonMatch) {
-      console.warn('[Suggestions] No JSON found in response');
+      recordAiCall({
+        outcome: 'completed',
+        provider: 'google',
+        operation: 'image.suggestions',
+        model: MODEL,
+        promptVersion: SUGGESTIONS_PROMPT_VERSION,
+        startedAt,
+        parseResult: 'missing',
+        schemaResult: 'degraded',
+        usage
+      });
       return brackets;
     }
 
@@ -408,21 +525,65 @@ ${bracketList}`;
       fixed += '}'.repeat(Math.max(0, openBraces   - closeBraces));
       try {
         parsed = JSON.parse(fixed);
-        console.log('[Suggestions] JSON repaired successfully');
       } catch {
-        console.warn('[Suggestions] JSON repair failed');
+        recordAiCall({
+          outcome: 'completed',
+          provider: 'google',
+          operation: 'image.suggestions',
+          model: MODEL,
+          promptVersion: SUGGESTIONS_PROMPT_VERSION,
+          startedAt,
+          parseResult: 'failed',
+          schemaResult: 'degraded',
+          usage
+        });
         return brackets;
       }
     }
 
+    const schemaErrorCodes = validateSuggestionsSchema(parsed, activeBrackets.length);
     const suggMap = {};
-    (parsed.suggestions || []).forEach(s => { suggMap[s.index] = s.items || []; });
+    const suggestionEntries = Array.isArray(parsed?.suggestions) ? parsed.suggestions : [];
+    suggestionEntries.forEach(s => {
+      if (!Number.isInteger(s?.index) || !Array.isArray(s?.items)) return;
+      suggMap[s.index] = s.items
+        .filter(item => typeof item === 'string' && item.trim())
+        .slice(0, 5);
+    });
 
     const withSuggestions = activeBrackets.map((b, i) => ({ ...b, suggestions: suggMap[i + 1] || [] }));
-    console.log('[Suggestions] Done. First bracket suggestions:', withSuggestions[0]?.suggestions);
+    recordAiCall({
+      outcome: 'completed',
+      provider: 'google',
+      operation: 'image.suggestions',
+      model: MODEL,
+      promptVersion: SUGGESTIONS_PROMPT_VERSION,
+      startedAt,
+      parseResult: 'passed',
+      schemaResult: schemaErrorCodes.length === 0 ? 'passed' : 'degraded',
+      usage
+    });
     return withSuggestions;
   } catch (err) {
-    console.warn('[Suggestions] Error:', err.message, err.stack?.split('\n')[1]);
+    recordAiCall({
+      outcome: 'failed',
+      provider: 'google',
+      operation: 'image.suggestions',
+      model: MODEL,
+      promptVersion: SUGGESTIONS_PROMPT_VERSION,
+      startedAt,
+      parseResult: 'not_attempted',
+      schemaResult: 'not_evaluated',
+      errorCode: err?.code || err?.name,
+      errorStatus: err?.status || err?.statusCode
+    });
+    logger.warn('image.suggestions.degraded', {
+      provider: 'google',
+      model: MODEL,
+      promptVersion: SUGGESTIONS_PROMPT_VERSION,
+      bracketCount: activeBrackets.length,
+      errorCode: err?.code || err?.name
+    });
     return brackets;
   }
 }
@@ -440,6 +601,8 @@ async function analyzeImage(base64Image, mimeType) {
   const MAX_ATTEMPTS = 3;
 
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+    const attemptNumber = attempt + 1;
+    const startedAt = Date.now();
     try {
       const result = await withTimeout(
         model.generateContent([
@@ -454,11 +617,49 @@ async function analyzeImage(base64Image, mimeType) {
       if (!content) throw new Error('Empty response from Gemini');
 
       const parsed = parseHybridResponse(content);
+      const parseTelemetry = getParseTelemetry(parsed);
+      recordAiCall({
+        outcome: 'completed',
+        provider: 'google',
+        operation: 'image.analysis',
+        model: MODEL,
+        promptVersion: ANALYSIS_PROMPT_VERSION,
+        attempt: attemptNumber,
+        maxAttempts: MAX_ATTEMPTS,
+        startedAt,
+        parseResult: parseTelemetry.parseResult,
+        schemaResult: parseTelemetry.schemaResult,
+        usage: extractGeminiUsage(result.response.usageMetadata)
+      });
+      if (parseTelemetry.schemaResult === 'degraded') {
+        logger.warn('image.analysis.schema_degraded', {
+          provider: 'google',
+          model: MODEL,
+          promptVersion: ANALYSIS_PROMPT_VERSION,
+          schemaErrorCodes: parseTelemetry.schemaErrorCodes
+        });
+      }
       parsed.brackets = await generateSuggestions(parsed.brackets);
       return parsed;
     } catch (err) {
       const status = err.status || err.statusCode;
-      if (attempt < MAX_ATTEMPTS - 1 && (status === 429 || status === 503)) {
+      const retryScheduled = attempt < MAX_ATTEMPTS - 1 && (status === 429 || status === 503);
+      recordAiCall({
+        outcome: 'failed',
+        provider: 'google',
+        operation: 'image.analysis',
+        model: MODEL,
+        promptVersion: ANALYSIS_PROMPT_VERSION,
+        attempt: attemptNumber,
+        maxAttempts: MAX_ATTEMPTS,
+        startedAt,
+        retryScheduled,
+        parseResult: 'not_attempted',
+        schemaResult: 'not_evaluated',
+        errorCode: err?.code || err?.name,
+        errorStatus: status
+      });
+      if (retryScheduled) {
         lastError = err;
         await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
         continue;
@@ -470,4 +671,12 @@ async function analyzeImage(base64Image, mimeType) {
   throw lastError || new Error('Gemini API failed after retries');
 }
 
-module.exports = { analyzeImage, parseHybridResponse, buildFormattedPrompt, buildAnalysis };
+module.exports = {
+  analyzeImage,
+  parseHybridResponse,
+  buildFormattedPrompt,
+  buildAnalysis,
+  validateAnalysisSchema,
+  validateSuggestionsSchema,
+  getParseTelemetry
+};
