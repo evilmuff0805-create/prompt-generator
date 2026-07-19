@@ -7,6 +7,10 @@ const {
   ANALYSIS_RESPONSE_JSON_SCHEMA,
   createSuggestionsResponseJsonSchema
 } = require('../lib/gemini-response-schemas');
+const {
+  extractImageShadowMetadata,
+  isImageMetadataShadowEnabled
+} = require('../lib/image-shadow-metadata');
 
 // Model is env-switchable (GEMINI_MODEL) so rollback/swap needs no code deploy.
 // gemini-2.5-flash retires 2026-10-16; stable replacement is gemini-3.1-flash-lite
@@ -19,6 +23,40 @@ const PARSE_TELEMETRY = Symbol('parseTelemetry');
 
 function isStructuredOutputEnabled(env = process.env) {
   return String(env.GEMINI_STRUCTURED_OUTPUT_ENABLED || '').trim().toLowerCase() === 'true';
+}
+
+async function observeImageMetadataShadow(base64Image, mimeType) {
+  if (!isImageMetadataShadowEnabled()) return;
+
+  const startedAt = Date.now();
+  try {
+    const metadata = await extractImageShadowMetadata(Buffer.from(base64Image, 'base64'));
+    logger.info('image.metadata_shadow.completed', {
+      provider: 'sharp',
+      operation: 'image.metadata_shadow',
+      mimeType,
+      format: metadata.format,
+      sourceWidth: metadata.sourceWidth,
+      sourceHeight: metadata.sourceHeight,
+      displayWidth: metadata.displayWidth,
+      displayHeight: metadata.displayHeight,
+      orientation: metadata.orientation,
+      aspectRatio: metadata.aspectRatio,
+      pages: metadata.pages,
+      animated: metadata.animated,
+      hasAlpha: metadata.hasAlpha,
+      representativeColorComputed: Boolean(metadata.representativeHex),
+      durationMs: Date.now() - startedAt
+    });
+  } catch (error) {
+    logger.warn('image.metadata_shadow.failed', {
+      provider: 'sharp',
+      operation: 'image.metadata_shadow',
+      mimeType,
+      errorCode: error?.code || 'IMAGE_METADATA_EXTRACTION_FAILED',
+      durationMs: Date.now() - startedAt
+    });
+  }
 }
 
 function getPromptVersion(baseVersion, structuredOutput) {
@@ -716,6 +754,10 @@ ${bracketList}`;
 
 /* ── 이미지 분석 (메인 함수) ── */
 async function analyzeImage(base64Image, mimeType) {
+  // Shadow metadata is observability-only. It never replaces or mutates the
+  // original bytes sent to Gemini, and extraction failures are fail-open.
+  await observeImageMetadataShadow(base64Image, mimeType);
+
   const genAI = createGeminiClient();
   const structuredOutput = isStructuredOutputEnabled();
   const promptVersion = getPromptVersion(ANALYSIS_PROMPT_VERSION, structuredOutput);
@@ -819,5 +861,6 @@ module.exports = {
   validateStructuredAnalysisSchema,
   validateSuggestionsSchema,
   getParseTelemetry,
-  isStructuredOutputEnabled
+  isStructuredOutputEnabled,
+  observeImageMetadataShadow
 };
