@@ -3,6 +3,10 @@ const {
   extractGeminiUsage,
   recordAiCall
 } = require('../lib/ai-telemetry');
+const {
+  ANALYSIS_RESPONSE_JSON_SCHEMA,
+  createSuggestionsResponseJsonSchema
+} = require('../lib/gemini-response-schemas');
 
 // Model is env-switchable (GEMINI_MODEL) so rollback/swap needs no code deploy.
 // gemini-2.5-flash retires 2026-10-16; stable replacement is gemini-3.1-flash-lite
@@ -12,6 +16,14 @@ const API_TIMEOUT_MS = 30_000;
 const ANALYSIS_PROMPT_VERSION = process.env.GEMINI_ANALYSIS_PROMPT_VERSION || 'image-analysis-v1';
 const SUGGESTIONS_PROMPT_VERSION = process.env.GEMINI_SUGGESTIONS_PROMPT_VERSION || 'image-suggestions-v1';
 const PARSE_TELEMETRY = Symbol('parseTelemetry');
+
+function isStructuredOutputEnabled(env = process.env) {
+  return String(env.GEMINI_STRUCTURED_OUTPUT_ENABLED || '').trim().toLowerCase() === 'true';
+}
+
+function getPromptVersion(baseVersion, structuredOutput) {
+  return structuredOutput ? `${baseVersion}-json-schema-v1` : baseVersion;
+}
 
 function createGeminiClient() {
   // Keep the provider SDK lazy-loaded so parsing-only jobs and tests do not
@@ -72,6 +84,26 @@ function validateAnalysisSchema(jsonData) {
   }
 
   return errors;
+}
+
+const VALID_ASPECT_RATIOS = new Set([
+  '1:1', '16:9', '9:16', '4:3', '3:4', '4:5', '5:4', '3:2', '2:3', '21:9'
+]);
+
+function validateStructuredAnalysisSchema(jsonData) {
+  const errors = validateAnalysisSchema(jsonData);
+  if (!VALID_ASPECT_RATIOS.has(jsonData?.composition?.aspect_ratio)) {
+    errors.push('aspect_ratio_invalid');
+  }
+  if (!Array.isArray(jsonData?.constraints?.must_keep)
+    || jsonData.constraints.must_keep.length < 5) {
+    errors.push('must_keep_count_invalid');
+  }
+  if (!Array.isArray(jsonData?.constraints?.avoid)
+    || jsonData.constraints.avoid.length < 3) {
+    errors.push('avoid_count_invalid');
+  }
+  return [...new Set(errors)];
 }
 
 function validateSuggestionsSchema(parsed, expectedCount) {
@@ -173,6 +205,14 @@ A detailed JSON object with the following structure:
 8. Include at least 5 items in must_keep constraints
 9. Include at least 3 items in avoid constraints
 10. Analyze the image's aspect ratio precisely. If the image is square, use 1:1. If wider than tall, determine the closest standard ratio (16:9, 3:2, 4:3, 21:9). If taller than wide, use the inverse (9:16, 2:3, 3:4). This must be included in the output.`;
+
+const STRUCTURED_OUTPUT_INSTRUCTION = `
+
+=== STRUCTURED OUTPUT MODE ===
+The request includes a response JSON Schema. Return exactly one JSON object that matches it, with no markdown fences or text outside the object.
+Put the 3-5 sentence prose description in the top-level "prose" field.
+Put the detailed subject, scene, technical, composition, style_modifiers, and constraints object in the top-level "analysis" field.
+The PART 1 and PART 2 directions above describe these two logical fields; do not emit them as separate response blocks.`;
 
 /* ── JSON → 포맷팅된 프롬프트 텍스트 + brackets 동시 생성 ── */
 function buildFormattedPrompt(prose, jsonData) {
@@ -372,9 +412,66 @@ function buildAnalysis(jsonData) {
 }
 
 /* ── 응답 파싱: prose + JSON 분리 → 포맷팅된 프롬프트 생성 ── */
-function parseHybridResponse(content) {
+function parseHybridResponse(content, options = {}) {
   const text = content.trim();
   if (!text) throw new Error('Empty response from Gemini');
+
+  const structuredOutput = options.structuredOutput === true;
+
+  if (structuredOutput) {
+    let envelope;
+    try {
+      envelope = JSON.parse(text);
+    } catch {
+      return attachParseTelemetry(
+        { prompt: '', brackets: [], analysis: {} },
+        {
+          parseResult: 'failed',
+          schemaResult: 'degraded',
+          schemaErrorCodes: ['structured_json_invalid']
+        }
+      );
+    }
+
+    const envelopeErrors = [];
+    if (!envelope || typeof envelope !== 'object' || Array.isArray(envelope)) {
+      envelopeErrors.push('structured_root_not_object');
+    }
+    if (typeof envelope?.prose !== 'string' || !envelope.prose.trim()) {
+      envelopeErrors.push('structured_prose_missing');
+    }
+    if (!envelope?.analysis || typeof envelope.analysis !== 'object' || Array.isArray(envelope.analysis)) {
+      envelopeErrors.push('structured_analysis_missing');
+    }
+
+    if (envelopeErrors.length > 0) {
+      return attachParseTelemetry(
+        {
+          prompt: typeof envelope?.prose === 'string' ? envelope.prose.trim() : '',
+          brackets: [],
+          analysis: {}
+        },
+        {
+          parseResult: 'passed',
+          schemaResult: 'degraded',
+          schemaErrorCodes: envelopeErrors
+        }
+      );
+    }
+
+    const schemaErrorCodes = validateStructuredAnalysisSchema(envelope.analysis);
+    const { formattedPrompt, brackets } = buildFormattedPrompt(envelope.prose.trim(), envelope.analysis);
+    const analysis = buildAnalysis(envelope.analysis);
+
+    return attachParseTelemetry(
+      { prompt: formattedPrompt, brackets, analysis },
+      {
+        parseResult: 'passed',
+        schemaResult: schemaErrorCodes.length === 0 ? 'passed' : 'degraded',
+        schemaErrorCodes
+      }
+    );
+  }
 
   let jsonData = null;
   let jsonBlockStart = text.length;
@@ -437,12 +534,14 @@ function parseHybridResponse(content) {
 }
 
 /* ── 대안 제안 생성 (Gemini) ── */
-async function generateSuggestions(brackets) {
+async function generateSuggestions(brackets, options = {}) {
   if (brackets.length === 0) return brackets;
 
   const BATCH_LIMIT = 30;
   const activeBrackets = brackets.slice(0, BATCH_LIMIT);
   const startedAt = Date.now();
+  const structuredOutput = options.structuredOutput === true;
+  const promptVersion = getPromptVersion(SUGGESTIONS_PROMPT_VERSION, structuredOutput);
 
   const genAI = createGeminiClient();
 
@@ -474,10 +573,16 @@ Elements:
 ${bracketList}`;
 
   try {
+    const config = { temperature: 0.8, maxOutputTokens: 12000 };
+    if (structuredOutput) {
+      config.responseMimeType = 'application/json';
+      config.responseJsonSchema = createSuggestionsResponseJsonSchema(activeBrackets.length);
+    }
+
     const result = await genAI.models.generateContent({
       model: MODEL,
       contents: suggestionPrompt,
-      config: { temperature: 0.8, maxOutputTokens: 12000 }
+      config
     });
     const content = result.text;
     const usage = extractGeminiUsage(result.usageMetadata);
@@ -487,7 +592,7 @@ ${bracketList}`;
         provider: 'google',
         operation: 'image.suggestions',
         model: MODEL,
-        promptVersion: SUGGESTIONS_PROMPT_VERSION,
+        promptVersion,
         startedAt,
         parseResult: 'missing',
         schemaResult: 'degraded',
@@ -508,7 +613,7 @@ ${bracketList}`;
         provider: 'google',
         operation: 'image.suggestions',
         model: MODEL,
-        promptVersion: SUGGESTIONS_PROMPT_VERSION,
+        promptVersion,
         startedAt,
         parseResult: 'missing',
         schemaResult: 'degraded',
@@ -517,11 +622,26 @@ ${bracketList}`;
       return brackets;
     }
 
-    // JSON 파싱 — 실패 시 잘린 JSON 복구 시도
+    // JSON 파싱 — structured output은 전체 응답을 엄격 파싱하고,
+    // legacy 경로만 기존의 잘린 JSON 복구를 유지한다.
     let parsed;
     try {
-      parsed = JSON.parse(jsonMatch[0]);
+      parsed = JSON.parse(structuredOutput ? content : jsonMatch[0]);
     } catch {
+      if (structuredOutput) {
+        recordAiCall({
+          outcome: 'completed',
+          provider: 'google',
+          operation: 'image.suggestions',
+          model: MODEL,
+          promptVersion,
+          startedAt,
+          parseResult: 'failed',
+          schemaResult: 'degraded',
+          usage
+        });
+        return brackets;
+      }
       let fixed = jsonMatch[0];
       const openBrackets  = (fixed.match(/\[/g) || []).length;
       const closeBrackets = (fixed.match(/\]/g) || []).length;
@@ -537,7 +657,7 @@ ${bracketList}`;
           provider: 'google',
           operation: 'image.suggestions',
           model: MODEL,
-          promptVersion: SUGGESTIONS_PROMPT_VERSION,
+          promptVersion,
           startedAt,
           parseResult: 'failed',
           schemaResult: 'degraded',
@@ -563,7 +683,7 @@ ${bracketList}`;
       provider: 'google',
       operation: 'image.suggestions',
       model: MODEL,
-      promptVersion: SUGGESTIONS_PROMPT_VERSION,
+      promptVersion,
       startedAt,
       parseResult: 'passed',
       schemaResult: schemaErrorCodes.length === 0 ? 'passed' : 'degraded',
@@ -576,7 +696,7 @@ ${bracketList}`;
       provider: 'google',
       operation: 'image.suggestions',
       model: MODEL,
-      promptVersion: SUGGESTIONS_PROMPT_VERSION,
+      promptVersion,
       startedAt,
       parseResult: 'not_attempted',
       schemaResult: 'not_evaluated',
@@ -586,7 +706,7 @@ ${bracketList}`;
     logger.warn('image.suggestions.degraded', {
       provider: 'google',
       model: MODEL,
-      promptVersion: SUGGESTIONS_PROMPT_VERSION,
+      promptVersion,
       bracketCount: activeBrackets.length,
       errorCode: err?.code || err?.name
     });
@@ -597,6 +717,8 @@ ${bracketList}`;
 /* ── 이미지 분석 (메인 함수) ── */
 async function analyzeImage(base64Image, mimeType) {
   const genAI = createGeminiClient();
+  const structuredOutput = isStructuredOutputEnabled();
+  const promptVersion = getPromptVersion(ANALYSIS_PROMPT_VERSION, structuredOutput);
 
   let lastError;
   const MAX_ATTEMPTS = 3;
@@ -605,6 +727,18 @@ async function analyzeImage(base64Image, mimeType) {
     const attemptNumber = attempt + 1;
     const startedAt = Date.now();
     try {
+      const config = {
+        systemInstruction: structuredOutput
+          ? `${SYSTEM_PROMPT}${STRUCTURED_OUTPUT_INSTRUCTION}`
+          : SYSTEM_PROMPT,
+        temperature: 0.3,
+        maxOutputTokens: 16000
+      };
+      if (structuredOutput) {
+        config.responseMimeType = 'application/json';
+        config.responseJsonSchema = ANALYSIS_RESPONSE_JSON_SCHEMA;
+      }
+
       const result = await withTimeout(
         genAI.models.generateContent({
           model: MODEL,
@@ -612,11 +746,7 @@ async function analyzeImage(base64Image, mimeType) {
             { inlineData: { mimeType, data: base64Image } },
             'Analyze this image and generate the hybrid prompt.'
           ],
-          config: {
-            systemInstruction: SYSTEM_PROMPT,
-            temperature: 0.3,
-            maxOutputTokens: 16000
-          }
+          config
         }),
         API_TIMEOUT_MS,
         'Gemini analyzeImage'
@@ -625,14 +755,14 @@ async function analyzeImage(base64Image, mimeType) {
       const content = result.text;
       if (!content) throw new Error('Empty response from Gemini');
 
-      const parsed = parseHybridResponse(content);
+      const parsed = parseHybridResponse(content, { structuredOutput });
       const parseTelemetry = getParseTelemetry(parsed);
       recordAiCall({
         outcome: 'completed',
         provider: 'google',
         operation: 'image.analysis',
         model: MODEL,
-        promptVersion: ANALYSIS_PROMPT_VERSION,
+        promptVersion,
         attempt: attemptNumber,
         maxAttempts: MAX_ATTEMPTS,
         startedAt,
@@ -644,11 +774,11 @@ async function analyzeImage(base64Image, mimeType) {
         logger.warn('image.analysis.schema_degraded', {
           provider: 'google',
           model: MODEL,
-          promptVersion: ANALYSIS_PROMPT_VERSION,
+          promptVersion,
           schemaErrorCodes: parseTelemetry.schemaErrorCodes
         });
       }
-      parsed.brackets = await generateSuggestions(parsed.brackets);
+      parsed.brackets = await generateSuggestions(parsed.brackets, { structuredOutput });
       return parsed;
     } catch (err) {
       const status = err.status || err.statusCode;
@@ -658,7 +788,7 @@ async function analyzeImage(base64Image, mimeType) {
         provider: 'google',
         operation: 'image.analysis',
         model: MODEL,
-        promptVersion: ANALYSIS_PROMPT_VERSION,
+        promptVersion,
         attempt: attemptNumber,
         maxAttempts: MAX_ATTEMPTS,
         startedAt,
@@ -686,6 +816,8 @@ module.exports = {
   buildFormattedPrompt,
   buildAnalysis,
   validateAnalysisSchema,
+  validateStructuredAnalysisSchema,
   validateSuggestionsSchema,
-  getParseTelemetry
+  getParseTelemetry,
+  isStructuredOutputEnabled
 };
