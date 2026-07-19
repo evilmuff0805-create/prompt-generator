@@ -3,7 +3,14 @@
  * 순수 함수(parseHybridResponse, buildFormattedPrompt, buildAnalysis)만 테스트
  */
 
-const { parseHybridResponse, buildFormattedPrompt, buildAnalysis } = require('../../services/geminiService');
+const {
+  parseHybridResponse,
+  buildFormattedPrompt,
+  buildAnalysis,
+  validateAnalysisSchema,
+  validateSuggestionsSchema,
+  getParseTelemetry
+} = require('../../services/geminiService');
 
 // ── 테스트용 픽스처 ──
 const SAMPLE_JSON = {
@@ -153,6 +160,12 @@ ${JSON.stringify(SAMPLE_JSON)}
     expect(result.prompt).toBe('Just some plain text with no JSON.');
     expect(result.brackets).toEqual([]);
     expect(result.analysis).toEqual({});
+    expect(getParseTelemetry(result)).toEqual({
+      parseResult: 'missing',
+      schemaResult: 'degraded',
+      schemaErrorCodes: ['json_missing']
+    });
+    expect(Object.keys(result)).not.toContain('parseTelemetry');
   });
 
   test('빈 문자열이면 에러를 throw해야 한다', () => {
@@ -163,5 +176,37 @@ ${JSON.stringify(SAMPLE_JSON)}
     const content = `PART 1: PROSE DESCRIPTION\nThis is the actual prose.\n${JSON.stringify(SAMPLE_JSON)}`;
     const result = parseHybridResponse(content);
     expect(result.prompt).not.toContain('PART 1: PROSE DESCRIPTION');
+  });
+});
+
+describe('Gemini schema telemetry', () => {
+  test('classifies the critical image-analysis shape without logging content', () => {
+    expect(validateAnalysisSchema(SAMPLE_JSON)).toEqual([]);
+
+    const degraded = {
+      ...SAMPLE_JSON,
+      composition: { ...SAMPLE_JSON.composition, aspect_ratio: '' },
+      constraints: { must_keep: [] }
+    };
+    expect(validateAnalysisSchema(degraded)).toEqual([
+      'aspect_ratio_missing',
+      'avoid_missing'
+    ]);
+  });
+
+  test('requires complete 3-5 item suggestion sets for every bracket', () => {
+    expect(validateSuggestionsSchema({
+      suggestions: [
+        { index: 1, items: ['one', 'two', 'three'] },
+        { index: 2, items: ['a', 'b', 'c', 'd', 'e'] }
+      ]
+    }, 2)).toEqual([]);
+
+    expect(validateSuggestionsSchema({
+      suggestions: [{ index: 1, items: ['only one'] }]
+    }, 2)).toEqual([
+      'suggestion_items_invalid',
+      'suggestion_index_missing'
+    ]);
   });
 });
