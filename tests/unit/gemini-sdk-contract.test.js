@@ -12,6 +12,8 @@ const {
   getParseTelemetry,
   isStructuredOutputEnabled
 } = require('../../services/geminiService');
+const logger = require('../../lib/logger');
+const sharp = require('sharp');
 
 const ANALYSIS_JSON = {
   subject: {
@@ -56,8 +58,13 @@ describe('@google/genai request contract', () => {
     process.env.GEMINI_API_KEY = 'test-key';
     delete process.env.GEMINI_MODEL;
     delete process.env.GEMINI_STRUCTURED_OUTPUT_ENABLED;
+    delete process.env.GEMINI_IMAGE_METADATA_SHADOW_ENABLED;
     mockGenerateContent.mockReset();
     mockGoogleGenAI.mockClear();
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
   });
 
   test('preserves the image-analysis and suggestion calls without adding schema or thinking config', async () => {
@@ -126,6 +133,68 @@ describe('@google/genai request contract', () => {
 
     expect(mockGenerateContent).toHaveBeenCalledTimes(1);
     expect(result.brackets).toEqual([]);
+  });
+
+  test('observes metadata without changing the provider request when the shadow flag is enabled', async () => {
+    process.env.GEMINI_IMAGE_METADATA_SHADOW_ENABLED = 'true';
+    const imageBuffer = await sharp({
+      create: {
+        width: 40,
+        height: 20,
+        channels: 4,
+        background: { r: 220, g: 40, b: 20, alpha: 0.5 }
+      }
+    }).png().toBuffer();
+    const imageBase64 = imageBuffer.toString('base64');
+    const infoSpy = jest.spyOn(logger, 'info').mockImplementation(() => ({}));
+    mockGenerateContent.mockResolvedValueOnce({
+      text: 'A plain prose response without structured JSON.',
+      usageMetadata: { promptTokenCount: 20, candidatesTokenCount: 10, totalTokenCount: 30 }
+    });
+
+    const result = await analyzeImage(imageBase64, 'image/png');
+
+    expect(mockGenerateContent).toHaveBeenCalledTimes(1);
+    expect(mockGenerateContent.mock.calls[0][0].contents[0]).toEqual({
+      inlineData: { mimeType: 'image/png', data: imageBase64 }
+    });
+    expect(result.brackets).toEqual([]);
+
+    const completed = infoSpy.mock.calls.find(([event]) => event === 'image.metadata_shadow.completed');
+    expect(completed).toBeDefined();
+    expect(completed[1]).toMatchObject({
+      provider: 'sharp',
+      sourceWidth: 40,
+      sourceHeight: 20,
+      displayWidth: 40,
+      displayHeight: 20,
+      aspectRatio: '16:9',
+      hasAlpha: true,
+      representativeColorComputed: true
+    });
+    expect(completed[1]).not.toHaveProperty('representativeHex');
+    expect(JSON.stringify(completed[1])).not.toContain('#');
+  });
+
+  test('fails open and still makes one unchanged provider call for corrupt shadow input', async () => {
+    process.env.GEMINI_IMAGE_METADATA_SHADOW_ENABLED = 'true';
+    const warnSpy = jest.spyOn(logger, 'warn').mockImplementation(() => ({}));
+    mockGenerateContent.mockResolvedValueOnce({
+      text: 'A plain prose response without structured JSON.',
+      usageMetadata: { promptTokenCount: 20, candidatesTokenCount: 10, totalTokenCount: 30 }
+    });
+
+    const result = await analyzeImage('ZmFrZQ==', 'image/jpeg');
+
+    expect(mockGenerateContent).toHaveBeenCalledTimes(1);
+    expect(mockGenerateContent.mock.calls[0][0].contents[0]).toEqual({
+      inlineData: { mimeType: 'image/jpeg', data: 'ZmFrZQ==' }
+    });
+    expect(result.brackets).toEqual([]);
+    expect(warnSpy).toHaveBeenCalledWith('image.metadata_shadow.failed', expect.objectContaining({
+      provider: 'sharp',
+      errorCode: 'IMAGE_METADATA_EXTRACTION_FAILED'
+    }));
   });
 
   test('adds JSON Schema only when the dormant canary flag is explicitly enabled', async () => {

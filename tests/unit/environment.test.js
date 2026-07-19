@@ -78,6 +78,7 @@ describe('environment contract', () => {
     expect(OPTIONAL_DEFAULTS.OPENAI_TEXT_REASONING_EFFORT).toBe('medium');
     expect(OPTIONAL_DEFAULTS.GEMINI_MODEL).toBe('gemini-3.1-flash-lite');
     expect(OPTIONAL_DEFAULTS.GEMINI_STRUCTURED_OUTPUT_ENABLED).toBe('false');
+    expect(OPTIONAL_DEFAULTS.GEMINI_IMAGE_METADATA_SHADOW_ENABLED).toBe('false');
     expect(OPTIONAL_DEFAULTS).not.toHaveProperty('SUPABASE_SERVICE_ROLE_KEY');
   });
 
