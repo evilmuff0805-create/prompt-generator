@@ -118,7 +118,20 @@ for (const viewport of VIEWPORTS) {
     await expect(video).toHaveAttribute('playsinline', '');
     await expect(video).toHaveAttribute('preload', 'metadata');
     await expect(video).not.toHaveAttribute('autoplay', '');
-    await expect(video.locator('source')).toHaveAttribute('src', '/gallery/storyboards/story05-seedance.mp4');
+    await expect(video.locator('source')).toHaveAttribute('src', '/gallery/storyboards/story06-seedance.mp4');
+    const metadata = await video.evaluate(element => new Promise(resolve => {
+      const read = () => resolve({
+        duration: element.duration,
+        width: element.videoWidth,
+        height: element.videoHeight
+      });
+      if (element.readyState >= HTMLMediaElement.HAVE_METADATA) read();
+      else element.addEventListener('loadedmetadata', read, { once: true });
+    }));
+    expect(metadata.duration).toBeGreaterThanOrEqual(14);
+    expect(metadata.duration).toBeLessThanOrEqual(16);
+    expect(metadata.width).toBeGreaterThanOrEqual(640);
+    expect(metadata.height).toBeGreaterThanOrEqual(360);
     expect(await video.evaluate(element => ({ paused: element.paused, currentTime: element.currentTime }))).toEqual({
       paused: true,
       currentTime: 0
@@ -161,6 +174,7 @@ test('case study boundary and labels follow the selected locale', async ({ page 
   const section = page.locator('#case-study');
   await section.scrollIntoViewIfNeeded();
   await expect(section.locator('#caseStudyTitle')).toHaveText('하나의 시나리오, 아홉 개의 연출된 컷, 하나의 완성된 시퀀스.');
+  await expect(section.locator('.case-study__facts')).toContainText('애니메이션 스타일');
   await expect(section.locator('.case-study__media-label').nth(0)).toContainText('PromptGen 스토리보드');
   await expect(section.locator('.case-study__media-label').nth(1)).toContainText('Seedance 결과');
   await expect(section.locator('.case-study__media').nth(1).locator('figcaption')).toContainText('PromptGen에는 영상 렌더링이 포함되지 않습니다.');
