@@ -29,6 +29,7 @@ const PORT = process.env.PORT || 3000;
 const indexHtmlTemplate = fs.readFileSync(path.join(__dirname, 'public', 'index.html'), 'utf8');
 const versionedHtmlTemplates = new Map([
   ['index.html', indexHtmlTemplate],
+  ['frame.html', fs.readFileSync(path.join(__dirname, 'public', 'frame.html'), 'utf8')],
   ['terms.html', fs.readFileSync(path.join(__dirname, 'public', 'terms.html'), 'utf8')],
   ['privacy.html', fs.readFileSync(path.join(__dirname, 'public', 'privacy.html'), 'utf8')],
   ['refund.html', fs.readFileSync(path.join(__dirname, 'public', 'refund.html'), 'utf8')],
@@ -400,7 +401,7 @@ app.delete('/api/user/history/:id', async (req, res) => {
 });
 
 app.get('/frame', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'frame.html'));
+  sendVersionedPage(res, 'frame.html');
 });
 
 app.get('/storyboard', (req, res) => {
