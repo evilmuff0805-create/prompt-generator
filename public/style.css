@@ -1470,6 +1470,7 @@ button { font-family: inherit; }
 }
 
 .landing-final-cta__copy {
+  flex: 1 1 auto;
   min-width: 0;
   max-width: 42rem;
 }
@@ -1497,6 +1498,7 @@ button { font-family: inherit; }
 
 .landing-final-cta__action {
   flex: 0 0 auto;
+  width: auto;
   min-height: 44px;
   padding-inline: 1.3rem;
   text-align: center;

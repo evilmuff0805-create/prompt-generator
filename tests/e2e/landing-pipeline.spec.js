@@ -67,6 +67,30 @@ for (const viewport of VIEWPORTS) {
     const actionBox = await action.boundingBox();
     expect(actionBox.height).toBeGreaterThanOrEqual(44);
 
+    const ctaLayout = await section.locator('.landing-final-cta').evaluate(element => {
+      const copy = element.querySelector('.landing-final-cta__copy');
+      const action = element.querySelector('.landing-final-cta__action');
+      const heading = element.querySelector('h2');
+      const ctaBox = element.getBoundingClientRect();
+      const copyBox = copy.getBoundingClientRect();
+      const actionBox = action.getBoundingClientRect();
+      const headingBox = heading.getBoundingClientRect();
+      const headingLineHeight = Number.parseFloat(getComputedStyle(heading).lineHeight);
+
+      return {
+        ctaWidth: ctaBox.width,
+        copyWidth: copyBox.width,
+        actionWidth: actionBox.width,
+        headingLines: headingBox.height / headingLineHeight
+      };
+    });
+
+    expect(ctaLayout.copyWidth).toBeGreaterThanOrEqual(viewport.columns === 1 ? 240 : 420);
+    expect(ctaLayout.headingLines).toBeLessThanOrEqual(3.1);
+    if (viewport.columns === 3) {
+      expect(ctaLayout.actionWidth).toBeLessThan(ctaLayout.ctaWidth * 0.5);
+    }
+
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
     expect(overflow).toBeLessThanOrEqual(2);
   });
