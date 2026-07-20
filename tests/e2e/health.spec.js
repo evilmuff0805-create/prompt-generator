@@ -28,6 +28,18 @@ test.describe('Health & Page Load', () => {
 
   test('랜딩과 Image to Prompt의 정보 구조를 분리해야 한다', async ({ page }) => {
     await page.goto('/');
+    await expect(page).toHaveTitle('PromptGen — AI Storyboard Generator & Prompt Tools');
+    await expect(page.locator('meta[name="description"]')).toHaveAttribute('content', 'Turn scenarios and reference images into consistent 4- or 9-shot storyboards with Seedance-ready prompts. Includes Image to Prompt and Endframe Extractor.');
+    await expect(page.locator('link[rel="canonical"]')).toHaveAttribute('href', 'https://promptgen-ai.com/');
+    await expect(page.locator('meta[property="og:url"]')).toHaveAttribute('content', 'https://promptgen-ai.com/');
+    await expect(page.locator('meta[property="og:title"]')).toHaveAttribute('content', 'PromptGen — Direct Your Story, Shot by Shot');
+    await expect(page.locator('meta[name="twitter:title"]')).toHaveAttribute('content', 'PromptGen — Direct Your Story, Shot by Shot');
+    const landingStructuredData = JSON.parse(await page.locator('#productStructuredData').textContent());
+    expect(landingStructuredData).toMatchObject({
+      name: 'PromptGen',
+      url: 'https://promptgen-ai.com/',
+      description: expect.stringContaining('4- or 9-shot storyboard grids')
+    });
     await expect(page.locator('.hero')).toBeVisible();
     await expect(page.locator('#tools')).toBeVisible();
     await expect(page.locator('#pricing')).toBeVisible();
@@ -36,7 +48,17 @@ test.describe('Health & Page Load', () => {
 
     await page.goto('/image-to-prompt');
     await expect(page).toHaveTitle('Image to Prompt Generator — PromptGen');
+    await expect(page.locator('meta[name="description"]')).toHaveAttribute('content', 'Turn any reference image into a precise, editable AI prompt for Midjourney, GPT Image 2, and Nano Banana Pro.');
     await expect(page.locator('link[rel="canonical"]')).toHaveAttribute('href', 'https://promptgen-ai.com/image-to-prompt');
+    await expect(page.locator('meta[property="og:url"]')).toHaveAttribute('content', 'https://promptgen-ai.com/image-to-prompt');
+    await expect(page.locator('meta[property="og:title"]')).toHaveAttribute('content', 'Image to Prompt Generator — PromptGen');
+    await expect(page.locator('meta[name="twitter:title"]')).toHaveAttribute('content', 'Image to Prompt Generator — PromptGen');
+    const imageToolStructuredData = JSON.parse(await page.locator('#productStructuredData').textContent());
+    expect(imageToolStructuredData).toMatchObject({
+      name: 'PromptGen Image to Prompt',
+      url: 'https://promptgen-ai.com/image-to-prompt',
+      description: expect.stringContaining('Turn a reference image into a precise, editable AI prompt')
+    });
     await expect(page.locator('#upload-section')).toBeVisible();
     await expect(page.locator('#how-it-works')).toBeVisible();
     await expect(page.locator('#gallery')).toBeVisible();
