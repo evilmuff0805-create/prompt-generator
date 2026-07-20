@@ -108,6 +108,18 @@
     'tools.endframe.description': 'Pull the last frame from any clip — the perfect seed to generate your next scene and keep your sequence flowing.',
     'tools.storyboard.description': 'Drop in a key image and your idea to create a storyboard grid and shot-by-shot prompts, then use those prompts in Seedance to generate the final video.',
 
+    'landing.trust.label': 'Before You Create',
+    'landing.trust.title': 'Three things to know before you start',
+    'landing.trust.shots.title': 'Choose 4 or 9 directed shots',
+    'landing.trust.shots.description': 'PromptGen builds a consistent storyboard grid and a Seedance-ready prompt for every shot.',
+    'landing.trust.retention.title': 'Results stay available for 90 days',
+    'landing.trust.retention.description': 'Reference images are removed within 24 hours. Generated storyboard grids remain in your history for 90 days.',
+    'landing.trust.boundary.title': 'PromptGen plans. Seedance renders.',
+    'landing.trust.boundary.description': 'PromptGen creates the storyboard and shot prompts. Final video generation happens in Seedance.',
+    'landing.cta.eyebrow': 'Ready to direct the next shot?',
+    'landing.cta.title': 'Turn your idea into a storyboard.',
+    'landing.cta.description': 'Start with a scenario and reference images, then leave with a consistent 4- or 9-shot plan.',
+
     'generator.label': 'Generator',
     'generator.title': 'Generate Your Prompt',
     'generator.upload.aria': 'Upload image',
@@ -150,7 +162,7 @@
     'pricing.feature.sameTools': '✓ Same creation tools as Pro',
     'pricing.feature.singleUser': '✓ Single-user plan',
     'pricing.note': 'Pro and Enterprise are monthly subscriptions. Credits reset to the plan allotment at renewal and do not roll over. PromptGen does not currently include API access, team workspaces, custom models, or managed support.',
-    'index.footer.tagline': 'Turn any image into a perfect AI prompt.',
+    'index.footer.tagline': 'AI tools for visual direction.',
 
     'auth.dialog.login': 'Login',
     'auth.dialog.loginRequired': 'Login required',
