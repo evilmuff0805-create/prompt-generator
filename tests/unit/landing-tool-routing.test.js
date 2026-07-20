@@ -43,4 +43,14 @@ describe('Landing and Image to Prompt routing contract', () => {
     expect(app).toContain("dropZone?.addEventListener('click'");
     expect(app).toContain("historyBtn?.addEventListener('click'");
   });
+
+  test('shared navigation assets are commit-versioned on every affected tool shell', () => {
+    expect(html).toContain('src="/navbar-shared.js?v=__ASSET_VERSION__"');
+    expect(html).toContain('src="/gallery-data.js?v=__ASSET_VERSION__"');
+    expect(html).toContain('src="/gallery.js?v=__ASSET_VERSION__"');
+
+    const frameHtml = read('public/frame.html');
+    expect(frameHtml).toContain('src="/navbar-shared.js?v=__ASSET_VERSION__"');
+    expect(server).toContain("sendVersionedPage(res, 'frame.html')");
+  });
 });
