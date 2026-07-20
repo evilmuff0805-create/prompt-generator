@@ -1,11 +1,18 @@
 const sharp = require('sharp');
 const {
+  DEFAULT_MAX_CONCURRENCY,
+  DEFAULT_SAMPLE_RATE,
   MAX_INPUT_PIXELS,
+  MAX_ALLOWED_CONCURRENCY,
   REPRESENTATIVE_COLOR_SIZE,
   classifyAspectRatio,
   extractImageShadowMetadata,
+  getImageMetadataShadowConfig,
   isImageMetadataShadowEnabled,
   normalizeImageMetadata,
+  parseMaxConcurrency,
+  parseSampleRate,
+  shouldObserveImageMetadata,
   rgbToHex
 } = require('../../lib/image-shadow-metadata');
 
@@ -131,6 +138,26 @@ describe('image metadata shadow', () => {
     expect(isImageMetadataShadowEnabled({ GEMINI_IMAGE_METADATA_SHADOW_ENABLED: ' TRUE ' })).toBe(true);
     expect(isImageMetadataShadowEnabled({ GEMINI_IMAGE_METADATA_SHADOW_ENABLED: '1' })).toBe(false);
     expect(isImageMetadataShadowEnabled({})).toBe(false);
+  });
+
+  test('uses a fail-closed 5% sampling contract and bounded concurrency', () => {
+    expect(DEFAULT_SAMPLE_RATE).toBe(0.05);
+    expect(DEFAULT_MAX_CONCURRENCY).toBe(1);
+    expect(MAX_ALLOWED_CONCURRENCY).toBe(4);
+    expect(getImageMetadataShadowConfig({
+      GEMINI_IMAGE_METADATA_SHADOW_ENABLED: 'true'
+    })).toEqual({ enabled: true, sampleRate: 0.05, maxConcurrency: 1 });
+    expect(parseSampleRate('0')).toBe(0);
+    expect(parseSampleRate('1')).toBe(1);
+    expect(parseSampleRate('1.1')).toBe(0);
+    expect(parseSampleRate('invalid')).toBe(0);
+    expect(parseMaxConcurrency('4')).toBe(4);
+    expect(parseMaxConcurrency('5')).toBe(1);
+    expect(parseMaxConcurrency('0')).toBe(1);
+    expect(shouldObserveImageMetadata({ enabled: true, sampleRate: 0.05 }, () => 0.049)).toBe(true);
+    expect(shouldObserveImageMetadata({ enabled: true, sampleRate: 0.05 }, () => 0.05)).toBe(false);
+    expect(shouldObserveImageMetadata({ enabled: true, sampleRate: 0 }, () => 0)).toBe(false);
+    expect(shouldObserveImageMetadata({ enabled: false, sampleRate: 1 }, () => 0)).toBe(false);
   });
 
   test('classifies ratios symmetrically and handles invalid dimensions', () => {
