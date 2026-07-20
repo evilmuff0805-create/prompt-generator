@@ -9,7 +9,8 @@ const {
 } = require('../lib/gemini-response-schemas');
 const {
   extractImageShadowMetadata,
-  isImageMetadataShadowEnabled
+  getImageMetadataShadowConfig,
+  shouldObserveImageMetadata
 } = require('../lib/image-shadow-metadata');
 
 // Model is env-switchable (GEMINI_MODEL) so rollback/swap needs no code deploy.
@@ -25,12 +26,32 @@ function isStructuredOutputEnabled(env = process.env) {
   return String(env.GEMINI_STRUCTURED_OUTPUT_ENABLED || '').trim().toLowerCase() === 'true';
 }
 
-async function observeImageMetadataShadow(base64Image, mimeType) {
-  if (!isImageMetadataShadowEnabled()) return;
+let activeImageMetadataShadows = 0;
+
+async function observeImageMetadataShadow(base64Image, mimeType, options = {}) {
+  const env = options.env || process.env;
+  const config = getImageMetadataShadowConfig(env);
+  const random = options.random || Math.random;
+  const extractMetadata = options.extractMetadata || extractImageShadowMetadata;
+
+  if (!config.enabled) return { status: 'disabled' };
+  if (!shouldObserveImageMetadata(config, random)) return { status: 'not_sampled' };
+  if (activeImageMetadataShadows >= config.maxConcurrency) {
+    logger.info('image.metadata_shadow.skipped', {
+      provider: 'sharp',
+      operation: 'image.metadata_shadow',
+      reason: 'concurrency_limit',
+      activeObservations: activeImageMetadataShadows,
+      maxConcurrency: config.maxConcurrency,
+      sampleRate: config.sampleRate
+    });
+    return { status: 'skipped', reason: 'concurrency_limit' };
+  }
 
   const startedAt = Date.now();
+  activeImageMetadataShadows += 1;
   try {
-    const metadata = await extractImageShadowMetadata(Buffer.from(base64Image, 'base64'));
+    const metadata = await extractMetadata(Buffer.from(base64Image, 'base64'));
     logger.info('image.metadata_shadow.completed', {
       provider: 'sharp',
       operation: 'image.metadata_shadow',
@@ -46,16 +67,42 @@ async function observeImageMetadataShadow(base64Image, mimeType) {
       animated: metadata.animated,
       hasAlpha: metadata.hasAlpha,
       representativeColorComputed: Boolean(metadata.representativeHex),
+      sampleRate: config.sampleRate,
+      maxConcurrency: config.maxConcurrency,
       durationMs: Date.now() - startedAt
     });
+    return { status: 'completed' };
   } catch (error) {
     logger.warn('image.metadata_shadow.failed', {
       provider: 'sharp',
       operation: 'image.metadata_shadow',
       mimeType,
       errorCode: error?.code || 'IMAGE_METADATA_EXTRACTION_FAILED',
+      sampleRate: config.sampleRate,
+      maxConcurrency: config.maxConcurrency,
       durationMs: Date.now() - startedAt
     });
+    return { status: 'failed', errorCode: error?.code || 'IMAGE_METADATA_EXTRACTION_FAILED' };
+  } finally {
+    activeImageMetadataShadows -= 1;
+  }
+}
+
+function startImageMetadataShadow(observer, base64Image, mimeType) {
+  const handleObserverFailure = () => {
+    logger.warn('image.metadata_shadow.observer_failed', {
+      provider: 'sharp',
+      operation: 'image.metadata_shadow',
+      mimeType,
+      errorCode: 'IMAGE_METADATA_OBSERVER_FAILED'
+    });
+    return { status: 'failed', errorCode: 'IMAGE_METADATA_OBSERVER_FAILED' };
+  };
+
+  try {
+    return Promise.resolve(observer(base64Image, mimeType)).catch(handleObserverFailure);
+  } catch {
+    return Promise.resolve(handleObserverFailure());
   }
 }
 
@@ -753,14 +800,18 @@ ${bracketList}`;
 }
 
 /* ── 이미지 분석 (메인 함수) ── */
-async function analyzeImage(base64Image, mimeType) {
-  // Shadow metadata is observability-only. It never replaces or mutates the
-  // original bytes sent to Gemini, and extraction failures are fail-open.
-  await observeImageMetadataShadow(base64Image, mimeType);
-
+async function analyzeImage(base64Image, mimeType, options = {}) {
   const genAI = createGeminiClient();
   const structuredOutput = isStructuredOutputEnabled();
   const promptVersion = getPromptVersion(ANALYSIS_PROMPT_VERSION, structuredOutput);
+  const shadowObserver = options.shadowObserver || observeImageMetadataShadow;
+  // Start observability work beside the provider request instead of adding it
+  // serially to user latency. The promise is settled before every final exit.
+  const shadowObservation = startImageMetadataShadow(
+    shadowObserver,
+    base64Image,
+    mimeType
+  );
 
   let lastError;
   const MAX_ATTEMPTS = 3;
@@ -821,6 +872,7 @@ async function analyzeImage(base64Image, mimeType) {
         });
       }
       parsed.brackets = await generateSuggestions(parsed.brackets, { structuredOutput });
+      await shadowObservation;
       return parsed;
     } catch (err) {
       const status = err.status || err.statusCode;
@@ -845,10 +897,12 @@ async function analyzeImage(base64Image, mimeType) {
         await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
         continue;
       }
+      await shadowObservation;
       throw err;
     }
   }
 
+  await shadowObservation;
   throw lastError || new Error('Gemini API failed after retries');
 }
 

@@ -10,7 +10,8 @@ jest.mock('@google/genai', () => ({
 const {
   analyzeImage,
   getParseTelemetry,
-  isStructuredOutputEnabled
+  isStructuredOutputEnabled,
+  observeImageMetadataShadow
 } = require('../../services/geminiService');
 const logger = require('../../lib/logger');
 const sharp = require('sharp');
@@ -59,6 +60,8 @@ describe('@google/genai request contract', () => {
     delete process.env.GEMINI_MODEL;
     delete process.env.GEMINI_STRUCTURED_OUTPUT_ENABLED;
     delete process.env.GEMINI_IMAGE_METADATA_SHADOW_ENABLED;
+    delete process.env.GEMINI_IMAGE_METADATA_SHADOW_SAMPLE_RATE;
+    delete process.env.GEMINI_IMAGE_METADATA_SHADOW_MAX_CONCURRENCY;
     mockGenerateContent.mockReset();
     mockGoogleGenAI.mockClear();
   });
@@ -137,6 +140,7 @@ describe('@google/genai request contract', () => {
 
   test('observes metadata without changing the provider request when the shadow flag is enabled', async () => {
     process.env.GEMINI_IMAGE_METADATA_SHADOW_ENABLED = 'true';
+    process.env.GEMINI_IMAGE_METADATA_SHADOW_SAMPLE_RATE = '1';
     const imageBuffer = await sharp({
       create: {
         width: 40,
@@ -178,6 +182,7 @@ describe('@google/genai request contract', () => {
 
   test('fails open and still makes one unchanged provider call for corrupt shadow input', async () => {
     process.env.GEMINI_IMAGE_METADATA_SHADOW_ENABLED = 'true';
+    process.env.GEMINI_IMAGE_METADATA_SHADOW_SAMPLE_RATE = '1';
     const warnSpy = jest.spyOn(logger, 'warn').mockImplementation(() => ({}));
     mockGenerateContent.mockResolvedValueOnce({
       text: 'A plain prose response without structured JSON.',
@@ -194,6 +199,83 @@ describe('@google/genai request contract', () => {
     expect(warnSpy).toHaveBeenCalledWith('image.metadata_shadow.failed', expect.objectContaining({
       provider: 'sharp',
       errorCode: 'IMAGE_METADATA_EXTRACTION_FAILED'
+    }));
+  });
+
+  test('starts shadow work beside the provider request instead of serially before it', async () => {
+    const order = [];
+    let finishShadow;
+    const shadowObserver = jest.fn(() => new Promise((resolve) => {
+      order.push('shadow-started');
+      finishShadow = () => {
+        order.push('shadow-finished');
+        resolve({ status: 'completed' });
+      };
+    }));
+    mockGenerateContent.mockImplementationOnce(async () => {
+      order.push('provider-started');
+      finishShadow();
+      return {
+        text: 'A plain prose response without structured JSON.',
+        usageMetadata: { promptTokenCount: 20, candidatesTokenCount: 10, totalTokenCount: 30 }
+      };
+    });
+
+    await analyzeImage('ZmFrZQ==', 'image/jpeg', { shadowObserver });
+
+    expect(order).toEqual(['shadow-started', 'provider-started', 'shadow-finished']);
+    expect(shadowObserver).toHaveBeenCalledTimes(1);
+    expect(mockGenerateContent).toHaveBeenCalledTimes(1);
+  });
+
+  test('contains an unexpected observer rejection without retrying or blocking the provider result', async () => {
+    const warnSpy = jest.spyOn(logger, 'warn').mockImplementation(() => ({}));
+    const shadowObserver = jest.fn().mockRejectedValue(new Error('unexpected observer failure'));
+    mockGenerateContent.mockResolvedValueOnce({
+      text: 'A plain prose response without structured JSON.',
+      usageMetadata: { promptTokenCount: 20, candidatesTokenCount: 10, totalTokenCount: 30 }
+    });
+
+    const result = await analyzeImage('ZmFrZQ==', 'image/jpeg', { shadowObserver });
+
+    expect(result.brackets).toEqual([]);
+    expect(mockGenerateContent).toHaveBeenCalledTimes(1);
+    expect(warnSpy).toHaveBeenCalledWith('image.metadata_shadow.observer_failed', {
+      provider: 'sharp',
+      operation: 'image.metadata_shadow',
+      mimeType: 'image/jpeg',
+      errorCode: 'IMAGE_METADATA_OBSERVER_FAILED'
+    });
+  });
+
+  test('skips sampled shadow work when the process concurrency limit is occupied', async () => {
+    const infoSpy = jest.spyOn(logger, 'info').mockImplementation(() => ({}));
+    const env = {
+      GEMINI_IMAGE_METADATA_SHADOW_ENABLED: 'true',
+      GEMINI_IMAGE_METADATA_SHADOW_SAMPLE_RATE: '1',
+      GEMINI_IMAGE_METADATA_SHADOW_MAX_CONCURRENCY: '1'
+    };
+    let releaseFirst;
+    const extractMetadata = jest.fn(() => new Promise((resolve) => {
+      releaseFirst = () => resolve({
+        format: 'png', sourceWidth: 1, sourceHeight: 1,
+        displayWidth: 1, displayHeight: 1, orientation: 1,
+        aspectRatio: '1:1', pages: 1, animated: false,
+        hasAlpha: false, representativeHex: '#000000'
+      });
+    }));
+
+    const first = observeImageMetadataShadow('AA==', 'image/png', { env, extractMetadata });
+    await Promise.resolve();
+    const second = await observeImageMetadataShadow('AA==', 'image/png', { env, extractMetadata });
+    releaseFirst();
+    const firstResult = await first;
+
+    expect(firstResult).toEqual({ status: 'completed' });
+    expect(second).toEqual({ status: 'skipped', reason: 'concurrency_limit' });
+    expect(extractMetadata).toHaveBeenCalledTimes(1);
+    expect(infoSpy).toHaveBeenCalledWith('image.metadata_shadow.skipped', expect.objectContaining({
+      reason: 'concurrency_limit', activeObservations: 1, maxConcurrency: 1
     }));
   });
 
