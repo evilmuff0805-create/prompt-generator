@@ -95,6 +95,37 @@ for (const viewport of VIEWPORTS) {
     expect(overflow).toBeLessThanOrEqual(2);
   });
 
+  test(`FAQ remains readable and keyboard-operable at ${viewport.label} width`, async ({ page }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await page.goto('/', { waitUntil: 'domcontentloaded' });
+
+    const faq = page.locator('#faq');
+    await faq.scrollIntoViewIfNeeded();
+    await expect(faq).toBeVisible();
+
+    const items = faq.locator('.faq-item');
+    await expect(items).toHaveCount(6);
+    await expect(items.first()).toHaveAttribute('open', '');
+
+    const secondSummary = items.nth(1).locator('summary');
+    await secondSummary.focus();
+    await expect(secondSummary).toBeFocused();
+    await page.keyboard.press('Enter');
+    await expect(items.nth(1)).toHaveAttribute('open', '');
+    await expect(items.nth(1).locator('.faq-item__answer')).toBeVisible();
+
+    const summaryBox = await secondSummary.boundingBox();
+    expect(summaryBox.height).toBeGreaterThanOrEqual(44);
+
+    const rows = await items.evaluateAll(elements => (
+      elements.map(element => Math.round(element.getBoundingClientRect().left))
+    ));
+    expect(new Set(rows).size).toBe(viewport.columns === 1 ? 1 : 2);
+
+    const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+    expect(overflow).toBeLessThanOrEqual(2);
+  });
+
   test(`case study remains readable and does not autoplay at ${viewport.label} width`, async ({ page }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     await page.goto('/', { waitUntil: 'domcontentloaded' });
@@ -165,6 +196,19 @@ test('expectations and final CTA follow the selected locale', async ({ page }) =
   await expect(section.locator('#expectationsTitle')).toHaveText('시작 전 꼭 알아야 할 세 가지');
   await expect(section.locator('.expectation-card').nth(1)).toContainText('결과는 90일 동안 보관');
   await expect(section.locator('.landing-final-cta__action')).toHaveText('스토리보드 만들기');
+});
+
+test('FAQ questions and answers follow the selected locale', async ({ page }) => {
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await page.locator('[data-locale-select]').selectOption('ko');
+
+  const faq = page.locator('#faq');
+  await faq.scrollIntoViewIfNeeded();
+  await expect(faq.locator('#faqTitle')).toHaveText('만들기 전에 꼭 필요한 답을 확인하세요.');
+  await expect(faq.locator('.faq-item').nth(2).locator('summary')).toContainText('크레딧은 어떻게 사용되나요?');
+  await faq.locator('.faq-item').nth(2).locator('summary').click();
+  await expect(faq.locator('.faq-item').nth(2).locator('.faq-item__answer')).toContainText('생성 1회당 120크레딧');
+  await expect(faq.locator('.faq-item').nth(5).locator('summary')).toContainText('어떤 인터페이스 언어를 지원하나요?');
 });
 
 test('case study boundary and labels follow the selected locale', async ({ page }) => {

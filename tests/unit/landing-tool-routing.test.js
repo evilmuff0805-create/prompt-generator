@@ -85,6 +85,19 @@ describe('Landing and Image to Prompt routing contract', () => {
     expect(html).not.toContain('<details class="expectation-card"');
   });
 
+  test('the landing answers verified pre-purchase questions without changing product boundaries', () => {
+    expect(html).toContain('id="faq" class="landing-faq"');
+    expect(html.match(/<details class="faq-item"/g)).toHaveLength(6);
+    expect(html.match(/<details class="faq-item" open>/g)).toHaveLength(1);
+    expect(html).toContain('data-i18n="faq.credits.answer"');
+    expect(html).toContain('data-i18n="faq.retention.answer"');
+    expect(html).toContain('data-i18n="faq.languages.answer"');
+    expect(html).toContain('uses 120 credits per generation');
+    expect(html).toContain('Reference images are removed within 24 hours');
+    expect(html).toContain('remain available in your history for 90 days');
+    expect(html).toContain('Final video rendering happens separately in Seedance');
+  });
+
   test('the representative case study separates PromptGen planning from Seedance rendering', () => {
     const videoAsset = path.join(ROOT, 'public/gallery/storyboards/story06-seedance.mp4');
     const desktopPoster = path.join(ROOT, 'public/gallery/storyboards/case-study-story06-1280.webp');

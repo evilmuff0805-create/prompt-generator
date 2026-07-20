@@ -27,8 +27,8 @@
   <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/style.css?v=__ASSET_VERSION__" />
   <link rel="icon" href="/favicon.png" type="image/png">
-  <!-- Structured data (schema.org). FAQPage는 페이지에 노출된 FAQ 콘텐츠가 없어 의도적으로 제외
-       (비노출 콘텐츠의 구조화 데이터는 Google 가이드라인 위반 위험). -->
+  <!-- Structured data (schema.org). Locale-specific FAQ schema is intentionally deferred
+       until the native/legal review and locale-URL SEO gate are complete. -->
   <script id="productStructuredData" type="application/ld+json">
   {
     "@context": "https://schema.org",
@@ -579,6 +579,78 @@
           <h3 data-i18n="landing.trust.boundary.title">PromptGen plans. Seedance renders.</h3>
           <p data-i18n="landing.trust.boundary.description">PromptGen creates the storyboard and shot prompts. Final video generation happens in Seedance.</p>
         </article>
+      </div>
+
+      <div id="faq" class="landing-faq" role="region" aria-labelledby="faqTitle">
+        <div class="landing-faq__header">
+          <div>
+            <div class="section-label" data-i18n="faq.label">Questions, Answered</div>
+            <h2 id="faqTitle" class="section-title" data-i18n="faq.title">Know exactly what happens before you create.</h2>
+          </div>
+          <p data-i18n="faq.subtitle">Clear answers about outputs, credits, storage, and the handoff to Seedance.</p>
+        </div>
+
+        <div class="landing-faq__grid">
+          <details class="faq-item" open>
+            <summary>
+              <span data-i18n="faq.output.question">What does the Storyboard tool create?</span>
+              <span class="faq-item__icon" aria-hidden="true"></span>
+            </summary>
+            <div class="faq-item__answer">
+              <p data-i18n="faq.output.answer">A consistent 2 × 2 or 3 × 3 storyboard grid plus a directed prompt for every shot. The plan is ready to take into Seedance for video generation.</p>
+            </div>
+          </details>
+
+          <details class="faq-item">
+            <summary>
+              <span data-i18n="faq.styles.question">How many shots and visual styles can I choose?</span>
+              <span class="faq-item__icon" aria-hidden="true"></span>
+            </summary>
+            <div class="faq-item__answer">
+              <p data-i18n="faq.styles.answer">Choose 4 or 9 shots and one of four styles: Pixar 3D, Cinematic, Documentary, or Animation.</p>
+            </div>
+          </details>
+
+          <details class="faq-item">
+            <summary>
+              <span data-i18n="faq.credits.question">Can I start free, and how do credits work?</span>
+              <span class="faq-item__icon" aria-hidden="true"></span>
+            </summary>
+            <div class="faq-item__answer">
+              <p data-i18n="faq.credits.answer">Free includes one Image to Prompt analysis per day, and Endframe Extractor is free after sign-in. Storyboard is available on paid plans and uses 120 credits per generation.</p>
+            </div>
+          </details>
+
+          <details class="faq-item">
+            <summary>
+              <span data-i18n="faq.video.question">Does PromptGen generate the final video?</span>
+              <span class="faq-item__icon" aria-hidden="true"></span>
+            </summary>
+            <div class="faq-item__answer">
+              <p data-i18n="faq.video.answer">No. PromptGen creates the storyboard grid and shot-by-shot prompts. Final video rendering happens separately in Seedance.</p>
+            </div>
+          </details>
+
+          <details class="faq-item">
+            <summary>
+              <span data-i18n="faq.retention.question">How long are my images and results kept?</span>
+              <span class="faq-item__icon" aria-hidden="true"></span>
+            </summary>
+            <div class="faq-item__answer">
+              <p data-i18n="faq.retention.answer">Reference images are removed within 24 hours. Generated storyboard grids remain available in your history for 90 days.</p>
+            </div>
+          </details>
+
+          <details class="faq-item">
+            <summary>
+              <span data-i18n="faq.languages.question">Which interface languages are available?</span>
+              <span class="faq-item__icon" aria-hidden="true"></span>
+            </summary>
+            <div class="faq-item__answer">
+              <p data-i18n="faq.languages.answer">English is the default. You can switch the full app interface to Korean, Japanese, Simplified Chinese, French, or Russian from the language menu.</p>
+            </div>
+          </details>
+        </div>
       </div>
 
       <div class="landing-final-cta">
