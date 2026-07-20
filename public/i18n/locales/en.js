@@ -46,8 +46,8 @@
     'common.footer.privacy': 'Privacy',
     'common.footer.refund': 'Refund Policy',
 
-    'meta.index.title': 'PromptGen — AI Prompt Generator',
-    'meta.index.description': 'Upload any image and instantly generate detailed, bracket-segmented AI prompts optimized for Midjourney, GPT Image 2, and Nano Banana Pro. Free tier available.',
+    'meta.index.title': 'PromptGen — AI Storyboard Generator & Prompt Tools',
+    'meta.index.description': 'Turn scenarios and reference images into consistent 4- or 9-shot storyboards with Seedance-ready prompts. Includes Image to Prompt and Endframe Extractor.',
     'meta.imageToPrompt.title': 'Image to Prompt Generator — PromptGen',
     'meta.imageToPrompt.description': 'Turn any reference image into a precise, editable AI prompt for Midjourney, GPT Image 2, and Nano Banana Pro.',
     'meta.frame.title': 'Endframe Extractor — PromptGen Tools',

@@ -9,6 +9,7 @@ const read = relativePath => fs.readFileSync(path.join(ROOT, relativePath), 'utf
 describe('Landing and Image to Prompt routing contract', () => {
   const html = read('public/index.html');
   const server = read('server.js');
+  const sitemap = read('public/sitemap.xml');
   const navbar = read('public/navbar-shared.js');
   const app = read('public/app.js');
 
@@ -24,6 +25,21 @@ describe('Landing and Image to Prompt routing contract', () => {
     expect(server).toContain("variant === 'landing' ? 'image-tool' : 'landing'");
     expect(server).toContain("sendPromptGenPage(res, 'image-tool')");
     expect(server).toContain("sendPromptGenPage(res, 'landing')");
+  });
+
+  test('landing and Image to Prompt publish distinct search and social metadata', () => {
+    expect(html).toContain('<title data-i18n="meta.index.title">PromptGen — AI Storyboard Generator &amp; Prompt Tools</title>');
+    expect(html).toContain('content="Turn scenarios and reference images into consistent 4- or 9-shot storyboards with Seedance-ready prompts. Includes Image to Prompt and Endframe Extractor."');
+    expect(html).toContain('<meta property="og:title" content="PromptGen — Direct Your Story, Shot by Shot" />');
+    expect(html).toContain('<meta name="twitter:title" content="PromptGen — Direct Your Story, Shot by Shot" />');
+    expect(html).toContain('"description": "Turn scenarios and reference images into consistent 4- or 9-shot storyboard grids with shot-by-shot Seedance-ready prompts. Includes Image to Prompt and Endframe Extractor."');
+
+    expect(server).toContain("title: 'PromptGen — AI Storyboard Generator & Prompt Tools'");
+    expect(server).toContain("title: 'Image to Prompt Generator — PromptGen'");
+    expect(server).toContain("socialTitle: 'Image to Prompt Generator — PromptGen'");
+    expect(server).toContain("structuredName: 'PromptGen Image to Prompt'");
+
+    expect(sitemap.match(/https:\/\/promptgen-ai\.com\/image-to-prompt/g)).toHaveLength(1);
   });
 
   test('navigation sends Image to Prompt traffic to its tool route without activating a tool on landing', () => {

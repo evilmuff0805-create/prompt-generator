@@ -50,34 +50,58 @@ function removePageVariant(template, variant) {
   return template.replace(pattern, '');
 }
 
+const PAGE_METADATA = Object.freeze({
+  landing: Object.freeze({
+    titleKey: 'meta.index.title',
+    title: 'PromptGen — AI Storyboard Generator & Prompt Tools',
+    descriptionKey: 'meta.index.description',
+    description: 'Turn scenarios and reference images into consistent 4- or 9-shot storyboards with Seedance-ready prompts. Includes Image to Prompt and Endframe Extractor.',
+    canonical: 'https://promptgen-ai.com/',
+    socialTitle: 'PromptGen — Direct Your Story, Shot by Shot',
+    structuredName: 'PromptGen',
+    structuredDescription: 'Turn scenarios and reference images into consistent 4- or 9-shot storyboard grids with shot-by-shot Seedance-ready prompts. Includes Image to Prompt and Endframe Extractor.'
+  }),
+  'image-tool': Object.freeze({
+    titleKey: 'meta.imageToPrompt.title',
+    title: 'Image to Prompt Generator — PromptGen',
+    descriptionKey: 'meta.imageToPrompt.description',
+    description: 'Turn any reference image into a precise, editable AI prompt for Midjourney, GPT Image 2, and Nano Banana Pro.',
+    canonical: 'https://promptgen-ai.com/image-to-prompt',
+    socialTitle: 'Image to Prompt Generator — PromptGen',
+    structuredName: 'PromptGen Image to Prompt',
+    structuredDescription: 'Turn a reference image into a precise, editable AI prompt for Midjourney, GPT Image 2, and Nano Banana Pro.'
+  })
+});
+
+function applyPageMetadata(html, metadata) {
+  return html
+    .replace(
+      /<title data-i18n="meta\.[^"]+\.title">[^<]*<\/title>/,
+      `<title data-i18n="${metadata.titleKey}">${metadata.title}</title>`
+    )
+    .replace(
+      /<meta name="description" content="[^"]*" data-i18n-attr="content:meta\.[^"]+\.description" \/>/,
+      `<meta name="description" content="${metadata.description}" data-i18n-attr="content:${metadata.descriptionKey}" />`
+    )
+    .replace(/<link rel="canonical" href="[^"]*" \/>/, `<link rel="canonical" href="${metadata.canonical}" />`)
+    .replace(/<meta property="og:url" content="[^"]*" \/>/, `<meta property="og:url" content="${metadata.canonical}" />`)
+    .replace(/<meta property="og:title" content="[^"]*" \/>/, `<meta property="og:title" content="${metadata.socialTitle}" />`)
+    .replace(/<meta property="og:description" content="[^"]*" \/>/, `<meta property="og:description" content="${metadata.description}" />`)
+    .replace(/<meta name="twitter:url" content="[^"]*" \/>/, `<meta name="twitter:url" content="${metadata.canonical}" />`)
+    .replace(/<meta name="twitter:title" content="[^"]*" \/>/, `<meta name="twitter:title" content="${metadata.socialTitle}" />`)
+    .replace(/<meta name="twitter:description" content="[^"]*" \/>/, `<meta name="twitter:description" content="${metadata.description}" />`)
+    .replace(/("name": ")[^"]*(",)/, `$1${metadata.structuredName}$2`)
+    .replace(/("url": ")[^"]*(",)/, `$1${metadata.canonical}$2`)
+    .replace(/("description": ")[^"]*(",)/, `$1${metadata.structuredDescription}$2`);
+}
+
 function renderPromptGenPage(variant) {
   const excludedVariant = variant === 'landing' ? 'image-tool' : 'landing';
-  let html = removePageVariant(indexHtmlTemplate, excludedVariant)
-    .replace('<body>', `<body class="${variant === 'landing' ? 'landing-page' : 'image-tool-page'}">`);
-
-  if (variant === 'image-tool') {
-    html = html
-      .replace(
-        '<title data-i18n="meta.index.title">PromptGen — AI Prompt Generator</title>',
-        '<title data-i18n="meta.imageToPrompt.title">Image to Prompt Generator — PromptGen</title>'
-      )
-      .replace(
-        'content="Upload any image and instantly generate detailed, bracket-segmented AI prompts optimized for Midjourney, GPT Image 2, and Nano Banana Pro. Free tier available." data-i18n-attr="content:meta.index.description"',
-        'content="Turn any reference image into a precise, editable AI prompt for Midjourney, GPT Image 2, and Nano Banana Pro." data-i18n-attr="content:meta.imageToPrompt.description"'
-      )
-      .replace(
-        '<link rel="canonical" href="https://promptgen-ai.com/" />',
-        '<link rel="canonical" href="https://promptgen-ai.com/image-to-prompt" />'
-      )
-      .replace(
-        '<meta property="og:url" content="https://promptgen-ai.com/" />',
-        '<meta property="og:url" content="https://promptgen-ai.com/image-to-prompt" />'
-      )
-      .replace(
-        '<meta name="twitter:url" content="https://promptgen-ai.com/" />',
-        '<meta name="twitter:url" content="https://promptgen-ai.com/image-to-prompt" />'
-      );
-  }
+  const html = applyPageMetadata(
+    removePageVariant(indexHtmlTemplate, excludedVariant)
+      .replace('<body>', `<body class="${variant === 'landing' ? 'landing-page' : 'image-tool-page'}">`),
+    PAGE_METADATA[variant]
+  );
 
   return renderVersionedHtml(html, getAssetVersion());
 }
