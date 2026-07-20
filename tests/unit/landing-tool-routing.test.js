@@ -86,16 +86,24 @@ describe('Landing and Image to Prompt routing contract', () => {
   });
 
   test('the representative case study separates PromptGen planning from Seedance rendering', () => {
-    const videoAsset = path.join(ROOT, 'public/gallery/storyboards/story05-seedance.mp4');
+    const videoAsset = path.join(ROOT, 'public/gallery/storyboards/story06-seedance.mp4');
+    const desktopPoster = path.join(ROOT, 'public/gallery/storyboards/case-study-story06-1280.webp');
+    const mobilePoster = path.join(ROOT, 'public/gallery/storyboards/case-study-story06-640.webp');
     expect(fs.existsSync(videoAsset)).toBe(true);
+    expect(fs.existsSync(desktopPoster)).toBe(true);
+    expect(fs.existsSync(mobilePoster)).toBe(true);
     expect(fs.statSync(videoAsset).size).toBeGreaterThan(5 * 1024 * 1024);
     expect(fs.statSync(videoAsset).size).toBeLessThan(15 * 1024 * 1024);
+    expect(fs.statSync(desktopPoster).size).toBeLessThan(300 * 1024);
+    expect(fs.statSync(mobilePoster).size).toBeLessThan(100 * 1024);
 
     expect(html).toContain('id="case-study"');
     expect(html).toContain('id="case-study" class="case-study-section"');
     expect(html).not.toContain('id="case-study" class="case-study-section section-reveal"');
-    expect(html).toContain('src="/gallery/storyboards/hero-storyboard-documentary-1280.webp"');
-    expect(html).toContain('src="/gallery/storyboards/story05-seedance.mp4" type="video/mp4"');
+    expect(html).toContain('src="/gallery/storyboards/case-study-story06-1280.webp"');
+    expect(html).toContain('srcset="/gallery/storyboards/case-study-story06-640.webp"');
+    expect(html).toContain('src="/gallery/storyboards/story06-seedance.mp4" type="video/mp4"');
+    expect(html).not.toContain('story05-seedance.mp4');
     expect(html).toContain('<video controls playsinline preload="metadata"');
     expect(html).not.toMatch(/<video[^>]*\sautoplay(?:\s|=|>)/);
     expect(html).toContain('data-i18n="caseStudy.storyboard.caption"');
