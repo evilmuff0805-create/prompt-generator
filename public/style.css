@@ -242,6 +242,10 @@ a { text-decoration: none; color: inherit; }
   padding: 6rem 0;
 }
 
+body.image-tool-page .upload-section {
+  padding-top: 9rem;
+}
+
 .upload-section .container {
   max-width: 760px;
 }

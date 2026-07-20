@@ -14,17 +14,20 @@
     // 툴 탭 active 클래스 적용
     document.querySelectorAll('.tool-tab').forEach(function (tab) {
       const href = tab.getAttribute('href');
-      const isActive =
-        (href === '/' && (path === '/' || path === '')) ||
-        (href !== '/' && path.startsWith(href));
+      const isActive = href !== '/' && path.startsWith(href);
       tab.classList.toggle('tool-tab--active', isActive);
     });
 
-    // PromptGen 전용 Context 링크 (Home, How it Works, Gallery, Pricing)
-    // 툴 페이지 (/frame 등)에서는 숨김
+    // Landing context links (Home, Pipeline, Pricing) stay on the landing only.
+    // Keep authentication/account controls available on every tool page.
     if (path !== '/' && path !== '') {
       const contextMenu = document.getElementById('navMenu');
-      if (contextMenu) contextMenu.style.display = 'none';
+      if (contextMenu) {
+        contextMenu.querySelector('.navbar__menu-intro')?.setAttribute('hidden', '');
+        contextMenu.querySelectorAll('.nav-link:not(#loginNavBtn)').forEach(function (link) {
+          link.closest('li')?.setAttribute('hidden', '');
+        });
+      }
     }
   }
 

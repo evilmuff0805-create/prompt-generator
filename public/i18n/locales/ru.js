@@ -41,6 +41,8 @@
     'common.footer.refund': 'Правила возврата',
     'meta.index.title': 'PromptGen — генератор ИИ-промптов',
     'meta.index.description': 'Загрузите изображение и мгновенно получите подробный, сегментированный и редактируемый ИИ-промпт для Midjourney, GPT Image 2 и Nano Banana Pro. Доступен бесплатный тариф.',
+    'meta.imageToPrompt.title': 'Генератор промптов по изображению — PromptGen',
+    'meta.imageToPrompt.description': 'Преобразуйте референсное изображение в точный редактируемый ИИ-промпт для Midjourney, GPT Image 2 и Nano Banana Pro.',
     'meta.frame.title': 'Экстрактор последнего кадра — инструменты PromptGen',
     'meta.frame.description': 'Извлеките последний кадр ИИ-видео в высококачественный PNG и используйте его как первый кадр следующего клипа для плавного продолжения.',
     'meta.storyboard.title': 'Генератор ИИ-раскадровок для Seedance 2.0 — PromptGen',

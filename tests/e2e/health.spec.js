@@ -16,14 +16,34 @@ test.describe('Health & Page Load', () => {
     await expect(page).toHaveTitle(/PromptGen/i);
   });
 
-  test('메인 페이지에 업로드 영역이 있어야 한다', async ({ page }) => {
-    await page.goto('/');
+  test('Image to Prompt 페이지에 업로드 영역이 있어야 한다', async ({ page }) => {
+    await page.goto('/image-to-prompt');
     await expect(page.locator('#dropZone')).toBeVisible();
   });
 
-  test('메인 페이지에 Analyze 버튼이 있어야 한다', async ({ page }) => {
-    await page.goto('/');
+  test('Image to Prompt 페이지에 Analyze 버튼이 있어야 한다', async ({ page }) => {
+    await page.goto('/image-to-prompt');
     await expect(page.locator('#analyzeBtn')).toBeVisible();
+  });
+
+  test('랜딩과 Image to Prompt의 정보 구조를 분리해야 한다', async ({ page }) => {
+    await page.goto('/');
+    await expect(page.locator('.hero')).toBeVisible();
+    await expect(page.locator('#tools')).toBeVisible();
+    await expect(page.locator('#pricing')).toBeVisible();
+    await expect(page.locator('#upload-section')).toHaveCount(0);
+    await expect(page.locator('.tool-tab--active')).toHaveCount(0);
+
+    await page.goto('/image-to-prompt');
+    await expect(page).toHaveTitle('Image to Prompt Generator — PromptGen');
+    await expect(page.locator('link[rel="canonical"]')).toHaveAttribute('href', 'https://promptgen-ai.com/image-to-prompt');
+    await expect(page.locator('#upload-section')).toBeVisible();
+    await expect(page.locator('#how-it-works')).toBeVisible();
+    await expect(page.locator('#gallery')).toBeVisible();
+    await expect(page.locator('.hero')).toHaveCount(0);
+    await expect(page.locator('#tools')).toHaveCount(0);
+    await expect(page.locator('#pricing')).toHaveCount(0);
+    await expect(page.locator('.tool-tab[href="/image-to-prompt"]')).toHaveClass(/tool-tab--active/);
   });
 
   test('랜딩 히어로가 핵심 메시지와 생성 CTA를 노출해야 한다', async ({ page }) => {
@@ -41,7 +61,7 @@ test.describe('Health & Page Load', () => {
 
     const secondaryCta = page.locator('.hero__text-link');
     await expect(secondaryCta).toContainText('Try Image to Prompt');
-    await expect(secondaryCta).toHaveAttribute('href', '#upload-section');
+    await expect(secondaryCta).toHaveAttribute('href', '/image-to-prompt#upload-section');
   });
 
   test('Hero 실제 Storyboard 탭은 자동 재생 없이 클릭·키보드로 전환돼야 한다', async ({ page }) => {
@@ -113,8 +133,8 @@ test.describe('Health & Page Load', () => {
   });
 
   test('갤러리 페이지가 정상 로드되어야 한다', async ({ page }) => {
-    await page.goto('/#gallery');
-    await expect(page.locator('body')).toBeVisible();
+    await page.goto('/image-to-prompt#gallery');
+    await expect(page.locator('#gallery')).toBeVisible();
   });
 
   test('법적 페이지(terms)가 접근 가능해야 한다', async ({ page }) => {

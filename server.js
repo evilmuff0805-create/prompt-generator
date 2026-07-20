@@ -43,8 +43,51 @@ function sendVersionedPage(res, fileName) {
   res.type('html').send(renderVersionedHtml(template, getAssetVersion()));
 }
 
-function sendVersionedIndex(req, res) {
-  sendVersionedPage(res, 'index.html');
+function removePageVariant(template, variant) {
+  const marker = `<!-- page:${variant}:`;
+  const pattern = new RegExp(`${marker}start -->[\\s\\S]*?${marker}end -->`, 'g');
+  return template.replace(pattern, '');
+}
+
+function renderPromptGenPage(variant) {
+  const excludedVariant = variant === 'landing' ? 'image-tool' : 'landing';
+  let html = removePageVariant(indexHtmlTemplate, excludedVariant)
+    .replace('<body>', `<body class="${variant === 'landing' ? 'landing-page' : 'image-tool-page'}">`);
+
+  if (variant === 'image-tool') {
+    html = html
+      .replace(
+        '<title data-i18n="meta.index.title">PromptGen — AI Prompt Generator</title>',
+        '<title data-i18n="meta.imageToPrompt.title">Image to Prompt Generator — PromptGen</title>'
+      )
+      .replace(
+        'content="Upload any image and instantly generate detailed, bracket-segmented AI prompts optimized for Midjourney, GPT Image 2, and Nano Banana Pro. Free tier available." data-i18n-attr="content:meta.index.description"',
+        'content="Turn any reference image into a precise, editable AI prompt for Midjourney, GPT Image 2, and Nano Banana Pro." data-i18n-attr="content:meta.imageToPrompt.description"'
+      )
+      .replace(
+        '<link rel="canonical" href="https://promptgen-ai.com/" />',
+        '<link rel="canonical" href="https://promptgen-ai.com/image-to-prompt" />'
+      )
+      .replace(
+        '<meta property="og:url" content="https://promptgen-ai.com/" />',
+        '<meta property="og:url" content="https://promptgen-ai.com/image-to-prompt" />'
+      )
+      .replace(
+        '<meta name="twitter:url" content="https://promptgen-ai.com/" />',
+        '<meta name="twitter:url" content="https://promptgen-ai.com/image-to-prompt" />'
+      );
+  }
+
+  return renderVersionedHtml(html, getAssetVersion());
+}
+
+function sendPromptGenPage(res, variant) {
+  res.setHeader('Cache-Control', 'no-cache, must-revalidate');
+  res.type('html').send(renderPromptGenPage(variant));
+}
+
+function sendLandingPage(req, res) {
+  sendPromptGenPage(res, 'landing');
 }
 
 /* ── Trust Proxy (Railway/reverse proxy 환경) ── */
@@ -134,7 +177,10 @@ app.use((req, res, next) => {
   next();
 });
 
-app.get(['/', '/index.html'], sendVersionedIndex);
+app.get(['/', '/index.html'], sendLandingPage);
+app.get(['/image-to-prompt', '/image-to-prompt/'], (req, res) => {
+  sendPromptGenPage(res, 'image-tool');
+});
 app.get(['/terms.html', '/privacy.html', '/refund.html'], (req, res) => {
   sendVersionedPage(res, req.path.slice(1));
 });
@@ -370,7 +416,7 @@ app.get('/storyboard/:id', (req, res) => {
 });
 
 app.get('*', (req, res) => {
-  sendVersionedIndex(req, res);
+  sendLandingPage(req, res);
 });
 
 app.use((err, req, res, next) => {

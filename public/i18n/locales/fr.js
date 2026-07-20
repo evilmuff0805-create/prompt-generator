@@ -41,6 +41,8 @@
     'common.footer.refund': 'Politique de remboursement',
     'meta.index.title': 'PromptGen — Générateur de prompts IA',
     'meta.index.description': 'Importez une image et générez instantanément des prompts IA détaillés, segmentés et modifiables pour Midjourney, GPT Image 2 et Nano Banana Pro. Offre gratuite disponible.',
+    'meta.imageToPrompt.title': 'Générateur image-vers-prompt — PromptGen',
+    'meta.imageToPrompt.description': 'Transformez une image de référence en prompt IA précis et modifiable pour Midjourney, GPT Image 2 et Nano Banana Pro.',
     'meta.frame.title': 'Extracteur de dernière image — Outils PromptGen',
     'meta.frame.description': 'Extrayez la dernière image d’une vidéo générée par IA en PNG haute qualité et utilisez-la comme première image du clip suivant pour assurer une continuité parfaite.',
     'meta.storyboard.title': 'Générateur de storyboard IA pour Seedance 2.0 — PromptGen',
