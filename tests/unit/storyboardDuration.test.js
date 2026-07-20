@@ -29,7 +29,7 @@ function makeShots(cutCount, durations) {
     lighting: 'soft',
     colorGrade: 'warm',
     durationSeconds: durations[i],
-    videoPrompt: `16:9, ${angles[i]}, action, ~${durations[i]} seconds, cinematic 24fps`
+    videoPrompt: `16:9, ${angles[i]}, action, when a face is visible preserve facial identity, ~${durations[i]} seconds, cinematic 24fps`
   }));
 }
 
@@ -86,7 +86,7 @@ describe('validateStoryboardData — duration 합산 검증', () => {
 
   test('기존 정수 cue("over 3s" 스타일)도 여전히 통과 (회귀 방지)', () => {
     const shots = makeShots(4, Array(4).fill(3));
-    shots[0].videoPrompt = '16:9, WS, action, over 3s, cinematic 24fps';
+    shots[0].videoPrompt = '16:9, WS, action, when a face is visible preserve facial identity, over 3s, cinematic 24fps';
     expect(validateStoryboardData({ shots }, 4)).toEqual([]);
   });
 });
