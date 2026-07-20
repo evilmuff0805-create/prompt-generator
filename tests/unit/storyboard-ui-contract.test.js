@@ -56,6 +56,16 @@ describe('Storyboard Functional Liquid Glass contract', () => {
     expect(source).toContain("setAttribute('aria-pressed', 'false')");
   });
 
+  test('result handoff explains independent reference eligibility without blocking prompts', () => {
+    const html = readPublic('storyboard-result.html');
+    const css = readPublic('style.css');
+    expect(html).toContain('class="storyboard-reference-note" role="note"');
+    expect(html).toContain('data-i18n="storyboardResult.referenceEligibility"');
+    expect(html).toContain('you can still use the shot prompts');
+    expect(css).toContain('.storyboard-reference-note');
+    expect(css).toContain('overflow-wrap: anywhere');
+  });
+
   test('Storyboard routes render asset placeholders instead of sending raw templates', () => {
     const source = fs.readFileSync(path.join(ROOT, 'server.js'), 'utf8');
     for (const file of STORYBOARD_PAGES) {

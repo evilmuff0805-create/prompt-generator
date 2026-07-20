@@ -278,6 +278,7 @@
     'storyboardResult.grid': '스토리보드 그리드',
     'storyboardResult.gridAlt': '스토리보드 그리드',
     'storyboardResult.downloadGrid': '⬇️ 그리드 다운로드',
+    'storyboardResult.referenceEligibility': 'Seedance가 레퍼런스 이미지를 별도로 심사합니다. 그리드가 적합하지 않다고 표시돼도 컷별 프롬프트는 계속 사용할 수 있으며, Seedance 안전 기준에 맞는 중립적인 레퍼런스를 선택하세요. PromptGen은 이 판정을 변경할 수 없습니다.',
     'storyboardResult.prompts': '컷별 프롬프트',
     'storyboardResult.promptsHint': '각 컷의 프롬프트를 Seedance 2.0에 복사해 사용하세요.',
     'common.action.backHome': '← 홈으로 돌아가기',

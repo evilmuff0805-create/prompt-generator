@@ -276,6 +276,7 @@
     'storyboardResult.grid': 'Сетка раскадровки',
     'storyboardResult.gridAlt': 'Сетка раскадровки',
     'storyboardResult.downloadGrid': '⬇️ Скачать сетку',
+    'storyboardResult.referenceEligibility': 'Seedance проверяет референсные изображения самостоятельно. Если сетка признана неподходящей, вы всё равно можете использовать промпты для кадров и выбрать нейтральный референс, соответствующий правилам безопасности Seedance. PromptGen не может изменить это решение.',
     'storyboardResult.prompts': 'Промпты для кадров',
     'storyboardResult.promptsHint': 'Копируйте промпты отдельных кадров в Seedance 2.0.',
     'common.action.backHome': '← На главную',
