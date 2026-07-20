@@ -96,6 +96,7 @@ for (const width of [320, 390]) {
     await page.route('**/js/storyboard-history.js*', route => route.abort());
 
     await page.goto('/storyboard/layout-contract', { waitUntil: 'domcontentloaded' });
+    await page.locator('[data-locale-select]').selectOption('ru');
     await page.evaluate(() => {
       document.getElementById('resultState').style.display = '';
       document.getElementById('resultMeta').innerHTML = '<span class="storyboard-meta-badge">Cinematic</span><span class="storyboard-meta-badge">9 Shots</span><span class="storyboard-meta-date">July 18, 2026</span>';
@@ -105,6 +106,8 @@ for (const width of [320, 390]) {
     });
     expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(2);
     await expect(page.locator('.storyboard-shot-prompt')).toBeVisible();
+    await expect(page.locator('.storyboard-reference-note')).toContainText('Seedance проверяет референсные изображения самостоятельно.');
+    await expect(page.locator('.storyboard-reference-note')).toHaveAttribute('role', 'note');
 
     await page.goto('/storyboard/history', { waitUntil: 'domcontentloaded' });
     await page.evaluate(() => {

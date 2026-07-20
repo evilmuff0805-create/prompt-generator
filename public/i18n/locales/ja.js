@@ -276,6 +276,7 @@
     'storyboardResult.grid': 'ストーリーボードグリッド',
     'storyboardResult.gridAlt': 'ストーリーボードグリッド',
     'storyboardResult.downloadGrid': '⬇️ グリッドをダウンロード',
+    'storyboardResult.referenceEligibility': '参照画像はSeedanceが独自に審査します。グリッドが対象外と判定されてもショット別プロンプトは引き続き利用できるため、Seedanceの安全基準を満たす中立的な参照画像を選んでください。PromptGenからこの判定を変更することはできません。',
     'storyboardResult.prompts': 'ショット別プロンプト',
     'storyboardResult.promptsHint': '各ショットのプロンプトをSeedance 2.0へコピーして使います。',
     'common.action.backHome': '← ホームに戻る',

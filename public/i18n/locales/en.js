@@ -295,6 +295,7 @@
     'storyboardResult.grid': 'Storyboard Grid',
     'storyboardResult.gridAlt': 'Storyboard grid',
     'storyboardResult.downloadGrid': '⬇️ Download Grid',
+    'storyboardResult.referenceEligibility': 'Seedance reviews reference images independently. If a grid is not eligible, you can still use the shot prompts and choose a neutral reference that meets Seedance’s safety rules. PromptGen cannot override that decision.',
     'storyboardResult.prompts': 'Shot Prompts',
     'storyboardResult.promptsHint': 'Copy individual prompts into Seedance 2.0 for each shot.',
 

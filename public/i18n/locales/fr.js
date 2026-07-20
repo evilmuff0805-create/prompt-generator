@@ -276,6 +276,7 @@
     'storyboardResult.grid': 'Grille du storyboard',
     'storyboardResult.gridAlt': 'Grille du storyboard',
     'storyboardResult.downloadGrid': '⬇️ Télécharger la grille',
+    'storyboardResult.referenceEligibility': 'Seedance évalue les images de référence de manière indépendante. Si une grille est refusée, vous pouvez toujours utiliser les prompts plan par plan et choisir une référence neutre conforme aux règles de sécurité de Seedance. PromptGen ne peut pas modifier cette décision.',
     'storyboardResult.prompts': 'Prompts des plans',
     'storyboardResult.promptsHint': 'Copiez chaque prompt dans Seedance 2.0 pour générer le plan correspondant.',
     'common.action.backHome': '← Retour à l’accueil',

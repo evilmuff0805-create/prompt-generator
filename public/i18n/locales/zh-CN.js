@@ -276,6 +276,7 @@
     'storyboardResult.grid': '故事板网格',
     'storyboardResult.gridAlt': '故事板网格',
     'storyboardResult.downloadGrid': '⬇️ 下载网格',
+    'storyboardResult.referenceEligibility': '参考图片由 Seedance 独立审核。即使故事板网格被判定为不符合条件，你仍可继续使用逐镜头提示词，并选择符合 Seedance 安全规则的中性参考图片。PromptGen 无法更改该审核结果。',
     'storyboardResult.prompts': '镜头提示词',
     'storyboardResult.promptsHint': '将每个镜头的提示词复制到 Seedance 2.0 中使用。',
     'common.action.backHome': '← 返回首页',

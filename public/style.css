@@ -3346,6 +3346,30 @@ button { font-family: inherit; }
 }
 .storyboard-dl-btn { font-size: 0.85rem; }
 
+.storyboard-reference-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.65rem;
+  max-width: 760px;
+  margin: 1rem auto 0;
+  padding: 0.85rem 1rem;
+  border: 1px solid rgba(103, 232, 249, 0.2);
+  border-radius: var(--radius);
+  background: rgba(12, 17, 29, 0.92);
+  color: var(--clr-text-muted);
+  font-size: 0.78rem;
+  line-height: 1.6;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+
+.storyboard-reference-note__icon {
+  flex: 0 0 auto;
+  color: var(--clr-mint);
+  font-size: 0.95rem;
+  line-height: 1.35;
+}
+
 .storyboard-prompts-hint { font-size: 0.8rem; color: var(--clr-text-muted); margin-bottom: 1.25rem; }
 
 .storyboard-scenario-text {
