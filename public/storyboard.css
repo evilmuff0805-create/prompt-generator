@@ -390,6 +390,21 @@ body.storyboard-shell::before {
   box-shadow: none;
 }
 
+.storyboard-retention-notice {
+  max-width: 68ch;
+  margin: 0.85rem 0 0 auto;
+  color: #8f98ae;
+  font-size: 0.72rem;
+  line-height: 1.55;
+  text-align: right;
+  text-wrap: pretty;
+}
+
+.storyboard-header .storyboard-retention-notice {
+  margin: 0 0 1rem;
+  text-align: center;
+}
+
 /* State surfaces: glass shell, opaque message content. */
 .storyboard-card {
   border-color: var(--sb-line);

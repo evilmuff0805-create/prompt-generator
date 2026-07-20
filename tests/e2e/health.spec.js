@@ -29,9 +29,11 @@ test.describe('Health & Page Load', () => {
   test('랜딩 히어로가 핵심 메시지와 생성 CTA를 노출해야 한다', async ({ page }) => {
     await page.goto('/');
 
-    await expect(page.locator('.hero__title')).toContainText('See the image.');
-    await expect(page.locator('.hero__title')).toContainText('Direct the result.');
+    await expect(page.locator('.hero__title')).toContainText('Turn your story.');
+    await expect(page.locator('.hero__title')).toContainText('Into every shot.');
     await expect(page.locator('.hero-demo')).toBeVisible();
+    await expect(page.locator('#heroStoryboardAnimation img')).toBeVisible();
+    await expect(page.locator('.hero-storyboard__tabs [role="tab"]')).toHaveCount(3);
 
     const primaryCta = page.locator('.btn--hero');
     await expect(primaryCta).toContainText('Create a storyboard');
@@ -40,6 +42,32 @@ test.describe('Health & Page Load', () => {
     const secondaryCta = page.locator('.hero__text-link');
     await expect(secondaryCta).toContainText('Try Image to Prompt');
     await expect(secondaryCta).toHaveAttribute('href', '#upload-section');
+  });
+
+  test('Hero 실제 Storyboard 탭은 자동 재생 없이 클릭·키보드로 전환돼야 한다', async ({ page }) => {
+    await page.goto('/');
+
+    const animation = page.locator('#heroStoryboardTabAnimation');
+    const documentary = page.locator('#heroStoryboardTabDocumentary');
+    const cinematic = page.locator('#heroStoryboardTabCinematic');
+
+    await expect(animation).toHaveAttribute('aria-selected', 'true');
+    await expect(page.locator('#heroStoryboardAnimation')).toBeVisible();
+    await expect.poll(() => page.locator('#heroStoryboardAnimation img').evaluate(image => image.complete && image.naturalWidth > 0)).toBe(true);
+    await page.waitForTimeout(250);
+    await expect(animation).toHaveAttribute('aria-selected', 'true');
+
+    await documentary.click();
+    await expect(documentary).toHaveAttribute('aria-selected', 'true');
+    await expect(page.locator('#heroStoryboardDocumentary')).toBeVisible();
+    await expect.poll(() => page.locator('#heroStoryboardDocumentary img').evaluate(image => image.complete && image.naturalWidth > 0)).toBe(true);
+    await expect(page.locator('#heroStoryboardAnimation')).toBeHidden();
+
+    await documentary.press('ArrowRight');
+    await expect(cinematic).toBeFocused();
+    await expect(cinematic).toHaveAttribute('aria-selected', 'true');
+    await expect(page.locator('#heroStoryboardCinematic')).toBeVisible();
+    await expect.poll(() => page.locator('#heroStoryboardCinematic img').evaluate(image => image.complete && image.naturalWidth > 0)).toBe(true);
   });
 
   test('모바일 내비게이션은 상태를 알리고 스크롤을 잠근 뒤 Escape로 닫혀야 한다', async ({ page }) => {
@@ -69,7 +97,6 @@ test.describe('Health & Page Load', () => {
     await page.emulateMedia({ reducedMotion: 'reduce' });
     await page.goto('/');
 
-    await expect(page.locator('.scene__scan')).toHaveCSS('animation-name', 'none');
     await expect(page.locator('.hero__aurora--mint')).toHaveCSS('animation-name', 'none');
   });
 

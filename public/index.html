@@ -127,9 +127,9 @@
 
     <div class="hero__shell">
       <div class="hero__content">
-        <div class="hero__badge"><span class="hero__badge-dot"></span><span data-i18n="hero.badge">AI-powered visual direction</span></div>
-        <h1 class="hero__title"><span data-i18n="hero.title.first">See the image.</span><br /><span class="hero__title-highlight" data-i18n="hero.title.second">Direct the result.</span></h1>
-        <p class="hero__sub" data-i18n="hero.subtitle">Turn any reference image into a precise, editable prompt for Midjourney, GPT Image 2, and Nano Banana Pro.</p>
+        <div class="hero__badge"><span class="hero__badge-dot"></span><span data-i18n="hero.badge">AI-powered storyboard direction</span></div>
+        <h1 class="hero__title"><span data-i18n="hero.title.first">Turn your story.</span><br /><span class="hero__title-highlight" data-i18n="hero.title.second">Into every shot.</span></h1>
+        <p class="hero__sub" data-i18n="hero.subtitle">Transform a scenario and reference images into a consistent 4- or 9-shot storyboard with Seedance-ready prompts.</p>
         <div class="hero__actions">
           <a href="/storyboard" class="btn btn--hero">
             <span data-i18n="hero.action.storyboard">Create a storyboard</span>
@@ -138,62 +138,67 @@
           <a href="#upload-section" class="hero__text-link"><span data-i18n="hero.action.imageToPrompt">Try Image to Prompt</span> <span aria-hidden="true">↓</span></a>
         </div>
         <div class="hero__proof" aria-label="Product benefits">
-          <span><i aria-hidden="true">✓</i> <span data-i18n="hero.proof.free">1 free Image to Prompt daily</span></span>
-          <span><i aria-hidden="true">✓</i> <span data-i18n="hero.proof.editable">Editable prompt segments</span></span>
-          <span><i aria-hidden="true">✓</i> <span data-i18n="hero.proof.noCard">No card required</span></span>
+          <span><i aria-hidden="true">✓</i> <span data-i18n="hero.proof.free">4 or 9 directed shots</span></span>
+          <span><i aria-hidden="true">✓</i> <span data-i18n="hero.proof.editable">Consistent visual storytelling</span></span>
+          <span><i aria-hidden="true">✓</i> <span data-i18n="hero.proof.noCard">Seedance-ready prompts</span></span>
         </div>
       </div>
 
-      <div class="hero__visual" aria-hidden="true">
+      <div class="hero__visual">
         <div class="hero-demo liquid-glass">
           <div class="hero-demo__topbar">
             <div class="hero-demo__dots"><span></span><span></span><span></span></div>
-            <span class="hero-demo__mode"><span data-i18n="hero.demo.image">IMAGE</span> <i>→</i> <span data-i18n="hero.demo.prompt">PROMPT</span></span>
+            <span class="hero-demo__mode"><span data-i18n="hero.showcase.mode">REAL STORYBOARD</span> <i>/</i> <span data-i18n="hero.showcase.shots">9 SHOTS</span></span>
             <span class="hero-demo__status"><i></i> <span data-i18n="hero.demo.ready">READY</span></span>
           </div>
 
-          <div class="hero-demo__workspace">
-            <div class="hero-demo__source">
-              <div class="hero-demo__source-label" data-i18n="hero.demo.reference">REFERENCE / 01</div>
-              <div class="hero-demo__scene">
-                <span class="scene__sun"></span>
-                <span class="scene__mountain scene__mountain--back"></span>
-                <span class="scene__mountain scene__mountain--front"></span>
-                <span class="scene__subject"></span>
-                <span class="scene__scan"></span>
-              </div>
-              <div class="hero-demo__meta"><span>4:5</span><span data-i18n="hero.demo.portrait">PORTRAIT</span><span data-i18n="hero.demo.analyzed">ANALYZED</span></div>
+          <div class="hero-storyboard__stage">
+            <div id="heroStoryboardAnimation" class="hero-storyboard__panel" role="tabpanel" aria-labelledby="heroStoryboardTabAnimation">
+              <img src="/gallery/storyboards/hero-storyboard-animation-1280.webp"
+                srcset="/gallery/storyboards/hero-storyboard-animation-640.webp 640w, /gallery/storyboards/hero-storyboard-animation-1280.webp 1280w"
+                sizes="(max-width: 560px) calc(100vw - 48px), (max-width: 1040px) min(90vw, 700px), 660px"
+                width="1280" height="853" fetchpriority="high" decoding="async"
+                alt="Nine-shot animated cyberpunk rooftop chase storyboard"
+                data-i18n-attr="alt:hero.showcase.alt.animation" />
             </div>
+            <div id="heroStoryboardDocumentary" class="hero-storyboard__panel" role="tabpanel" aria-labelledby="heroStoryboardTabDocumentary" hidden>
+              <img src="/gallery/storyboards/hero-storyboard-documentary-1280.webp"
+                srcset="/gallery/storyboards/hero-storyboard-documentary-640.webp 640w, /gallery/storyboards/hero-storyboard-documentary-1280.webp 1280w"
+                sizes="(max-width: 560px) calc(100vw - 48px), (max-width: 1040px) min(90vw, 700px), 660px"
+                width="1280" height="853" loading="eager" fetchpriority="low" decoding="async"
+                alt="Nine-shot ultra-realistic documentary-style historical action storyboard"
+                data-i18n-attr="alt:hero.showcase.alt.documentary" />
+            </div>
+            <div id="heroStoryboardCinematic" class="hero-storyboard__panel" role="tabpanel" aria-labelledby="heroStoryboardTabCinematic" hidden>
+              <img src="/gallery/storyboards/hero-storyboard-cinematic-1280.webp"
+                srcset="/gallery/storyboards/hero-storyboard-cinematic-640.webp 640w, /gallery/storyboards/hero-storyboard-cinematic-1280.webp 1280w"
+                sizes="(max-width: 560px) calc(100vw - 48px), (max-width: 1040px) min(90vw, 700px), 660px"
+                width="1280" height="853" loading="eager" fetchpriority="low" decoding="async"
+                alt="Nine-shot ultra-realistic cinematic alley confrontation storyboard"
+                data-i18n-attr="alt:hero.showcase.alt.cinematic" />
+            </div>
+            <div class="hero-storyboard__badge"><span data-i18n="hero.showcase.actual">ACTUAL OUTPUT</span><strong>3 × 3</strong></div>
+          </div>
 
-            <div class="hero-demo__prompt">
-              <div class="hero-demo__prompt-head">
-                <span data-i18n="hero.demo.directorPrompt">DIRECTOR PROMPT</span>
-                <span class="hero-demo__model">NANO BANANA PRO</span>
-              </div>
-              <div class="hero-demo__prompt-copy">
-                <span class="prompt-token prompt-token--mint">[subject: solitary figure]</span>
-                <span class="prompt-token prompt-token--violet">[lighting: diffused dusk]</span>
-                <span class="prompt-token prompt-token--coral">[camera: low angle, 50mm]</span>
-                <span class="prompt-token">[setting: sculptural desert ridge]</span>
-              </div>
-              <div class="hero-demo__lines"><span></span><span></span><span></span></div>
-              <div class="hero-demo__prompt-foot"><span data-i18n="hero.demo.segments">12 SEGMENTS</span><span data-i18n="hero.demo.detailPercent">98% DETAIL</span></div>
-            </div>
+          <div class="hero-storyboard__tabs" role="tablist" aria-label="Storyboard visual styles" data-i18n-attr="aria-label:hero.showcase.tabsLabel">
+            <button id="heroStoryboardTabAnimation" type="button" role="tab" aria-selected="true" aria-controls="heroStoryboardAnimation" tabindex="0" data-hero-storyboard-tab="animation" data-i18n="hero.showcase.animation">Animation</button>
+            <button id="heroStoryboardTabDocumentary" type="button" role="tab" aria-selected="false" aria-controls="heroStoryboardDocumentary" tabindex="-1" data-hero-storyboard-tab="documentary" data-i18n="hero.showcase.documentary">Documentary</button>
+            <button id="heroStoryboardTabCinematic" type="button" role="tab" aria-selected="false" aria-controls="heroStoryboardCinematic" tabindex="-1" data-hero-storyboard-tab="cinematic" data-i18n="hero.showcase.cinematic">Cinematic</button>
           </div>
 
           <div class="hero-demo__footer">
-            <span data-i18n="hero.demo.footer">Visual language, made editable.</span>
-            <span class="hero-demo__generate"><span data-i18n="hero.demo.generate">GENERATE</span> <i>↗</i></span>
+            <span data-i18n="hero.showcase.footer">Scenario → storyboard grid → shot prompts</span>
+            <span class="hero-demo__generate"><span data-i18n="hero.showcase.created">CREATED WITH PROMPTGEN</span> <i>↗</i></span>
           </div>
         </div>
 
         <div class="hero-float hero-float--analysis liquid-glass">
-          <span data-i18n="hero.demo.composition">COMPOSITION</span>
-          <strong data-i18n="hero.demo.layeredDepth">Layered depth</strong>
+          <span data-i18n="hero.showcase.direction">VISUAL DIRECTION</span>
+          <strong data-i18n="hero.showcase.consistency">Shot-to-shot consistency</strong>
         </div>
         <div class="hero-float hero-float--accuracy liquid-glass">
-          <span class="hero-float__ring">98</span>
-          <span><small data-i18n="hero.demo.detail">DETAIL</small><strong data-i18n="hero.demo.promptReady">Prompt ready</strong></span>
+          <span class="hero-float__ring">16:9</span>
+          <span><small data-i18n="hero.showcase.format">FORMAT</small><strong data-i18n="hero.showcase.seedance">Seedance-ready</strong></span>
         </div>
       </div>
     </div>
@@ -584,6 +589,7 @@
   <script src="/analytics.js"></script>
   <script src="/js/changePlan-helpers.js?v=__ASSET_VERSION__"></script>
   <script src="/app.js?v=__ASSET_VERSION__"></script>
+  <script src="/hero-storyboards.js?v=__ASSET_VERSION__"></script>
   <script src="/navbar-shared.js"></script>
   <script src="/gallery-data.js"></script>
   <script src="/gallery.js"></script>

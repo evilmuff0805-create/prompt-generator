@@ -117,7 +117,7 @@ describe('Cinematic realism prompt contract', () => {
     expect(validateStoryboardData(data, 9, 'Cinematic')).toEqual([]);
   });
 
-  test.each(['Pixar 3D', 'Documentary', 'Animation'])(
+  test.each(['Pixar 3D', 'Animation'])(
     '%s remains free of the Cinematic-only realism contract',
     style => {
       expect(buildSystemPrompt({ style, cutCount: 9 })).not.toContain('ultra-realistic');
@@ -133,4 +133,42 @@ describe('Cinematic realism prompt contract', () => {
       )).toEqual([]);
     }
   );
+});
+
+describe('Documentary ultra-realistic prompt contract', () => {
+  test.each([9, 4])('system and grid prompts carry documentary realism for %i cuts', cutCount => {
+    const systemPrompt = buildSystemPrompt({ style: 'Documentary', cutCount });
+    const gridPrompt = buildGridPrompt(makeData(cutCount), 'Documentary', cutCount);
+
+    for (const prompt of [systemPrompt, gridPrompt]) {
+      expect(prompt).toContain('ultra-realistic');
+      expect(prompt).toContain('authentic skin, fabric, surface, and environmental textures');
+      expect(prompt).toContain('natural available light');
+      expect(prompt).toContain('real documentary camera optics');
+      expect(prompt).toContain('no waxy skin');
+      expect(prompt).toContain('no synthetic CGI or over-smoothed AI look');
+    }
+  });
+
+  test('Documentary validation requires ultra-realistic in every shot prompt', () => {
+    const errors = validateStoryboardData(
+      makeData(9, { includeUltraRealistic: false }),
+      9,
+      'Documentary'
+    );
+
+    expect(errors).toHaveLength(9);
+    expect(errors.every(error => error.includes('for Documentary style'))).toBe(true);
+    expect(validateStoryboardData(makeData(9), 9, 'Documentary')).toEqual([]);
+  });
+
+  test('Documentary realism does not inherit Cinematic continuity-only constraints', () => {
+    const systemPrompt = buildSystemPrompt({ style: 'Documentary', cutCount: 9 });
+    const gridPrompt = buildGridPrompt(makeData(9), 'Documentary', 9);
+
+    for (const phrase of CINEMATIC_CONTINUITY_PHRASES) {
+      expect(systemPrompt).not.toContain(phrase);
+      expect(gridPrompt).not.toContain(phrase);
+    }
+  });
 });

@@ -11,7 +11,7 @@ test.describe('English-first locale policy', () => {
     await page.goto('/', { waitUntil: 'domcontentloaded' });
     await expect(page.locator('html')).toHaveAttribute('lang', 'en');
     await expect(page.locator('[data-locale-select]')).toHaveValue('en');
-    await expect(page.locator('.hero__title')).toContainText('Direct the result.');
+    await expect(page.locator('.hero__title')).toContainText('Into every shot.');
   });
 });
 
@@ -23,7 +23,7 @@ test('global language switcher translates pages and preserves the explicit choic
   await expect(page.locator('html')).toHaveAttribute('lang', 'en');
 
   await localeSelect.selectOption('ko');
-  await expect(page.locator('.hero__title')).toContainText('결과를 연출하세요.');
+  await expect(page.locator('.hero__title')).toContainText('모든 컷으로.');
   await expect(page.locator('html')).toHaveAttribute('lang', 'ko');
 
   await page.goto('/frame', { waitUntil: 'domcontentloaded' });
