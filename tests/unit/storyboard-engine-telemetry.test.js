@@ -47,7 +47,7 @@ describe('Storyboard constraint telemetry', () => {
       style: 'Cinematic',
       cutCount: 4
     })).rejects.toThrow(
-      'Storyboard validation failed after 2 attempts: camera_angle_unique, aspect_ratio, frame_rate, cinematic_realism, duration_cue, duration_total'
+      'Storyboard validation failed after 2 attempts: camera_angle_unique, aspect_ratio, frame_rate, cinematic_realism, face_identity, duration_cue, duration_total'
     );
 
     expect(mockGenerateStoryboardData).toHaveBeenCalledTimes(2);
