@@ -66,13 +66,13 @@
   <!-- Navigation -->
   <nav id="navbar" class="navbar">
     <div class="navbar__inner">
-      <a href="#home" class="navbar__logo" aria-label="PromptGen home" data-i18n-attr="aria-label:nav.logo.home">
+      <a href="/" class="navbar__logo" aria-label="PromptGen home" data-i18n-attr="aria-label:nav.logo.home">
         <span class="navbar__logo-mark"><img src="/favicon.png" width="32" height="32" alt="" /></span>
         <span>PromptGen</span>
       </a>
       <!-- Tool Tabs -->
       <div class="tool-tabs" id="toolTabs">
-        <a href="/" class="tool-tab">🎨 <span class="tab-label" data-i18n="nav.tool.imageToPrompt">Image to Prompt</span></a>
+        <a href="/image-to-prompt" class="tool-tab">🎨 <span class="tab-label" data-i18n="nav.tool.imageToPrompt">Image to Prompt</span></a>
         <a href="/frame" class="tool-tab">🖼️ <span class="tab-label" data-i18n="nav.tool.endframe">Endframe Extractor</span></a>
         <a href="/storyboard" class="tool-tab">🎬 <span class="tab-label" data-i18n="nav.tool.storyboard">Storyboard</span></a>
       </div>
@@ -81,10 +81,9 @@
           <span data-i18n="nav.menu.intro.eyebrow">Explore PromptGen</span>
           <strong data-i18n="nav.menu.intro.title">Visual ideas, translated into direction.</strong>
         </li>
-        <li><a href="#home" class="nav-link" data-i18n="nav.link.home">Home</a></li>
-        <li><a href="#how-it-works" class="nav-link" data-i18n="nav.link.howItWorks">How it Works</a></li>
-        <li><a href="#gallery" class="nav-link" data-i18n="nav.link.gallery">Gallery</a></li>
-        <li><a href="#pricing" class="nav-link" data-i18n="nav.link.pricing">Pricing</a></li>
+        <li><a href="/#home" class="nav-link" data-i18n="nav.link.home">Home</a></li>
+        <li><a href="/#tools" class="nav-link" data-i18n="tools.label">The Pipeline</a></li>
+        <li><a href="/#pricing" class="nav-link" data-i18n="nav.link.pricing">Pricing</a></li>
         <li id="authNavItem">
           <!-- shown when logged out -->
           <a href="#" class="nav-link" id="loginNavBtn" data-i18n="nav.action.login">Login</a>
@@ -115,6 +114,7 @@
     </div>
   </nav>
 
+  <!-- page:landing:start -->
   <!-- Hero Section -->
   <section id="home" class="hero">
     <div class="hero__backdrop" aria-hidden="true">
@@ -135,7 +135,7 @@
             <span data-i18n="hero.action.storyboard">Create a storyboard</span>
             <span aria-hidden="true">↗</span>
           </a>
-          <a href="#upload-section" class="hero__text-link"><span data-i18n="hero.action.imageToPrompt">Try Image to Prompt</span> <span aria-hidden="true">↓</span></a>
+          <a href="/image-to-prompt#upload-section" class="hero__text-link"><span data-i18n="hero.action.imageToPrompt">Try Image to Prompt</span> <span aria-hidden="true">↗</span></a>
         </div>
         <div class="hero__proof" aria-label="Product benefits">
           <span><i aria-hidden="true">✓</i> <span data-i18n="hero.proof.free">4 or 9 directed shots</span></span>
@@ -216,7 +216,7 @@
       <p class="tools-subtitle" data-i18n="tools.subtitle">Three tools for prompt development and video pre-production. Final video generation happens in Seedance.</p>
       <div class="tools-grid">
 
-        <a href="/" class="tool-card">
+        <a href="/image-to-prompt" class="tool-card">
           <div class="tool-card__media">
             <!-- TODO: public/showcase/image-to-prompt.png -->
             <span class="tool-card__media-label" data-i18n="nav.tool.imageToPrompt">Image to Prompt</span>
@@ -252,7 +252,9 @@
       </div>
     </div>
   </section>
+  <!-- page:landing:end -->
 
+  <!-- page:image-tool:start -->
   <!-- Upload & Results Section -->
   <section id="upload-section" class="upload-section section-reveal">
     <div class="container">
@@ -382,7 +384,9 @@
       </div>
     </div>
   </div>
+  <!-- page:image-tool:end -->
 
+  <!-- page:landing:start -->
   <!-- Pricing -->
   <section id="pricing" class="pricing-section section-reveal">
     <div class="container">
@@ -449,6 +453,7 @@
       <p class="pricing-note" data-i18n="pricing.note">Pro and Enterprise are monthly subscriptions. Credits reset to the plan allotment at renewal and do not roll over. PromptGen does not currently include API access, team workspaces, custom models, or managed support.</p>
     </div>
   </section>
+  <!-- page:landing:end -->
 
   <!-- Footer -->
   <footer class="footer">
@@ -459,10 +464,10 @@
           <p data-i18n="index.footer.tagline">Turn any image into a perfect AI prompt.</p>
         </div>
         <div class="footer__links">
-          <a href="#home" data-i18n="nav.link.home">Home</a>
-          <a href="#how-it-works" data-i18n="nav.link.howItWorks">How it Works</a>
-          <a href="#gallery" data-i18n="nav.link.gallery">Gallery</a>
-          <a href="#pricing" data-i18n="nav.link.pricing">Pricing</a>
+          <a href="/#home" data-i18n="nav.link.home">Home</a>
+          <a href="/#tools" data-i18n="tools.label">The Pipeline</a>
+          <a href="/image-to-prompt#upload-section" data-i18n="nav.tool.imageToPrompt">Image to Prompt</a>
+          <a href="/#pricing" data-i18n="nav.link.pricing">Pricing</a>
         </div>
         <div class="footer__social">
           <a href="#" aria-label="GitHub" class="social-icon">
@@ -531,7 +536,7 @@
       <div class="modal-icon">🚀</div>
       <h2 class="modal__title" id="upgradeTitle" data-i18n="auth.limit.title">Daily Limit Reached</h2>
       <p class="modal__sub" id="upgradeDesc" data-i18n="auth.limit.description">The free plan allows 1 generation per day. Try again tomorrow or upgrade to Pro.</p>
-      <a href="#pricing" class="btn btn--primary" id="upgradeBtn" style="margin-top:0.5rem" data-i18n="common.action.upgradePro">Upgrade to Pro →</a>
+      <a href="/#pricing" class="btn btn--primary" id="upgradeBtn" style="margin-top:0.5rem" data-i18n="common.action.upgradePro">Upgrade to Pro →</a>
     </div>
   </div>
 

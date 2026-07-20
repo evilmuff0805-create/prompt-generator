@@ -146,6 +146,7 @@ let currentUserPlan = null;
 let currentUserCredits = 0;
 
 function updateAnalyzeButtonState() {
+  if (!analyzeBtn) return;
   const creditsErrorEl = document.getElementById('creditsError');
   const isPaid = ['pro', 'enterprise', 'paid'].includes(currentUserPlan);
   const analysisCreditCost = getAnalysisCreditCost();
@@ -189,23 +190,23 @@ const analysisGrid     = document.getElementById('analysisGrid');
 const errorDisplay     = document.getElementById('errorDisplay');
 
 /* ── Upload Handling ── */
-dropZone.addEventListener('click', () => fileInput.click());
-dropZone.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') fileInput.click(); });
+dropZone?.addEventListener('click', () => fileInput.click());
+dropZone?.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') fileInput.click(); });
 
-dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
-dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
-dropZone.addEventListener('drop', e => {
+dropZone?.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
+dropZone?.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
+dropZone?.addEventListener('drop', e => {
   e.preventDefault();
   dropZone.classList.remove('drag-over');
   const file = e.dataTransfer.files[0];
   if (file) handleFileSelect(file);
 });
 
-fileInput.addEventListener('change', () => {
+fileInput?.addEventListener('change', () => {
   if (fileInput.files[0]) handleFileSelect(fileInput.files[0]);
 });
 
-clearBtn.addEventListener('click', clearFile);
+clearBtn?.addEventListener('click', clearFile);
 
 function handleFileSelect(file) {
   if (state.analyzing) return;
@@ -238,7 +239,7 @@ function clearFile() {
 }
 
 /* ── Analyze ── */
-analyzeBtn.addEventListener('click', async () => {
+analyzeBtn?.addEventListener('click', async () => {
   if (!state.file || state.analyzing) return;
 
   // Check auth first
@@ -447,7 +448,7 @@ function closeActiveChip() {
 document.addEventListener('click', closeActiveChip);
 
 /* ── Analysis Toggle ── */
-analysisToggle.addEventListener('click', () => {
+analysisToggle?.addEventListener('click', () => {
   const expanded = analysisToggle.getAttribute('aria-expanded') === 'true';
   analysisToggle.setAttribute('aria-expanded', String(!expanded));
   analysisBody.classList.toggle('hidden', expanded);
@@ -498,7 +499,7 @@ function renderAnalysis(analysis) {
 
 /* ── Download ── */
 const downloadBtn = document.getElementById('downloadBtn');
-downloadBtn.addEventListener('click', () => {
+downloadBtn?.addEventListener('click', () => {
   if (!state.result) return;
 
   const prompt = buildFinalPrompt(state.result.prompt, state.result.brackets || []);
@@ -519,7 +520,7 @@ downloadBtn.addEventListener('click', () => {
 });
 
 /* ── Copy ── */
-copyBtn.addEventListener('click', async () => {
+copyBtn?.addEventListener('click', async () => {
   if (!state.result) return;
 
   const prompt = buildFinalPrompt(state.result.prompt, state.result.brackets || []);
@@ -940,7 +941,11 @@ const historyCloseBtn  = document.getElementById('historyCloseBtn');
 
 let historyOpen = false;
 
-historyBtn.addEventListener('click', async () => {
+historyBtn?.addEventListener('click', async () => {
+  if (!historySection) {
+    window.location.assign('/image-to-prompt?history=open');
+    return;
+  }
   if (historyOpen) {
     historySection.style.display = 'none';
     historyOpen = false;
@@ -952,10 +957,15 @@ historyBtn.addEventListener('click', async () => {
   historySection.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 });
 
-historyCloseBtn.addEventListener('click', () => {
+historyCloseBtn?.addEventListener('click', () => {
   historySection.style.display = 'none';
   historyOpen = false;
 });
+
+if (historySection && new URLSearchParams(window.location.search).get('history') === 'open') {
+  window.setTimeout(() => historyBtn?.click(), 0);
+  window.history.replaceState({}, '', window.location.pathname + window.location.hash);
+}
 
 async function loadHistory() {
   const { data: { session } } = await sbClient.auth.getSession();

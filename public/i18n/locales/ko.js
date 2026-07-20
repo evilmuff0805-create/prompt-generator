@@ -43,6 +43,8 @@
     'common.footer.refund': '환불 정책',
     'meta.index.title': 'PromptGen — AI 프롬프트 생성기',
     'meta.index.description': '이미지를 업로드하면 Midjourney, GPT Image 2, Nano Banana Pro에 최적화된 상세한 괄호형 AI 프롬프트를 즉시 생성합니다. 무료 플랜도 이용할 수 있습니다.',
+    'meta.imageToPrompt.title': '이미지 투 프롬프트 생성기 — PromptGen',
+    'meta.imageToPrompt.description': '레퍼런스 이미지를 Midjourney, GPT Image 2, Nano Banana Pro용 정밀하고 편집 가능한 AI 프롬프트로 변환하세요.',
     'meta.frame.title': '엔드프레임 추출기 — PromptGen 도구',
     'meta.frame.description': 'AI 생성 영상의 마지막 프레임을 고화질 PNG로 추출하세요. 다음 클립의 첫 프레임으로 사용해 자연스럽게 이어지는 AI 영상을 만들 수 있습니다.',
     'meta.storyboard.title': 'Seedance 2.0용 AI 스토리보드 생성기 — PromptGen',

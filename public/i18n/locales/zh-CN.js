@@ -41,6 +41,8 @@
     'common.footer.refund': '退款政策',
     'meta.index.title': 'PromptGen — AI 提示词生成器',
     'meta.index.description': '上传任意图片，即刻生成适用于 Midjourney、GPT Image 2 和 Nano Banana Pro 的详细、分段且可编辑的 AI 提示词。提供免费方案。',
+    'meta.imageToPrompt.title': '图片转提示词生成器 — PromptGen',
+    'meta.imageToPrompt.description': '将参考图片转换为适用于 Midjourney、GPT Image 2 和 Nano Banana Pro 的精准、可编辑 AI 提示词。',
     'meta.frame.title': '尾帧提取器 — PromptGen 工具',
     'meta.frame.description': '将 AI 生成视频的最后一帧提取为高质量 PNG，并作为下一段视频的首帧，打造流畅连续的 AI 视频。',
     'meta.storyboard.title': 'Seedance 2.0 AI 故事板生成器 — PromptGen',

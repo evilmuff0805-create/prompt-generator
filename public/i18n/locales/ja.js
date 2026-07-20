@@ -41,6 +41,8 @@
     'common.footer.refund': '返金ポリシー',
     'meta.index.title': 'PromptGen — AIプロンプト生成ツール',
     'meta.index.description': '画像をアップロードするだけで、Midjourney、GPT Image 2、Nano Banana Pro向けの詳細で編集可能なAIプロンプトをすぐに生成できます。無料プランも利用可能です。',
+    'meta.imageToPrompt.title': '画像からプロンプト生成 — PromptGen',
+    'meta.imageToPrompt.description': '参照画像をMidjourney、GPT Image 2、Nano Banana Pro向けの精密で編集可能なAIプロンプトに変換します。',
     'meta.frame.title': '最終フレーム抽出 — PromptGen Tools',
     'meta.frame.description': 'AI生成動画の最後のフレームを高品質PNGとして抽出。次のクリップの最初のフレームに使い、自然につながるAI動画を作成できます。',
     'meta.storyboard.title': 'Seedance 2.0向けAIストーリーボード生成 — PromptGen',

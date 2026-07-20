@@ -24,6 +24,7 @@ const MATRIX = [
 
 const STATIC_PAGES = [
   { path: '/', name: 'landing', anchor: '.hero__title' },
+  { path: '/image-to-prompt', name: 'image-to-prompt', anchor: '#dropZone' },
   { path: '/frame', name: 'endframe', anchor: '.section-title' },
   { path: '/storyboard', name: 'storyboard', anchor: '.storyboard-title' },
   { path: '/privacy.html', name: 'privacy', anchor: '.page-title' }
