@@ -1363,6 +1363,152 @@ button { font-family: inherit; }
 .feat-no  { color: var(--clr-text-muted); }
 
 /* ══════════════════════════════════════
+   EXPECTATIONS + FINAL CTA
+══════════════════════════════════════ */
+.expectations-section {
+  position: relative;
+  padding: 2rem 0 7rem;
+  overflow: hidden;
+}
+
+.expectations-section::before {
+  content: '';
+  position: absolute;
+  width: min(52rem, 86vw);
+  aspect-ratio: 1;
+  right: -24rem;
+  bottom: -31rem;
+  border-radius: 50%;
+  pointer-events: none;
+  background: radial-gradient(circle, rgba(0, 255, 204, 0.12), rgba(184, 169, 255, 0.04) 42%, transparent 72%);
+  filter: blur(10px);
+}
+
+.expectations-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1rem;
+  margin-top: 2.25rem;
+}
+
+.expectation-card {
+  position: relative;
+  min-width: 0;
+  padding: 1.5rem;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: var(--radius-xl);
+  background:
+    linear-gradient(145deg, rgba(255, 255, 255, 0.075), rgba(255, 255, 255, 0.025)),
+    rgba(17, 18, 25, 0.76);
+  box-shadow: 0 18px 55px rgba(0, 0, 0, 0.22), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  backdrop-filter: blur(18px) saturate(125%);
+  -webkit-backdrop-filter: blur(18px) saturate(125%);
+}
+
+.expectation-card__icon {
+  width: 2.75rem;
+  height: 2.75rem;
+  display: grid;
+  place-items: center;
+  margin-bottom: 1.15rem;
+  border: 1px solid rgba(0, 255, 204, 0.28);
+  border-radius: 0.9rem;
+  color: var(--clr-mint);
+  background: rgba(0, 255, 204, 0.07);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+.expectation-card__icon svg {
+  width: 1.35rem;
+  height: 1.35rem;
+}
+
+.expectation-card h3 {
+  margin-bottom: 0.65rem;
+  font-size: 1rem;
+  line-height: 1.35;
+}
+
+.expectation-card p {
+  color: var(--clr-text-muted);
+  font-size: 0.86rem;
+  line-height: 1.65;
+}
+
+.landing-final-cta {
+  position: relative;
+  isolation: isolate;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 2rem;
+  margin-top: 1.25rem;
+  padding: clamp(1.5rem, 4vw, 2.5rem);
+  overflow: hidden;
+  border: 1px solid rgba(0, 255, 204, 0.24);
+  border-radius: calc(var(--radius-xl) + 0.25rem);
+  background:
+    linear-gradient(115deg, rgba(0, 255, 204, 0.11), rgba(184, 169, 255, 0.08) 58%, rgba(255, 255, 255, 0.035)),
+    rgba(16, 17, 24, 0.84);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(22px) saturate(130%);
+  -webkit-backdrop-filter: blur(22px) saturate(130%);
+}
+
+.landing-final-cta::after {
+  content: '';
+  position: absolute;
+  z-index: -1;
+  width: 15rem;
+  height: 15rem;
+  top: -9rem;
+  right: 12%;
+  border-radius: 50%;
+  pointer-events: none;
+  background: rgba(184, 169, 255, 0.16);
+  filter: blur(45px);
+}
+
+.landing-final-cta__copy {
+  min-width: 0;
+  max-width: 42rem;
+}
+
+.landing-final-cta__eyebrow {
+  margin-bottom: 0.55rem;
+  color: var(--clr-mint);
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.landing-final-cta h2 {
+  margin-bottom: 0.55rem;
+  font-size: clamp(1.45rem, 3.2vw, 2.25rem);
+  line-height: 1.12;
+}
+
+.landing-final-cta__copy > p:last-child {
+  color: var(--clr-text-muted);
+  font-size: 0.9rem;
+  line-height: 1.6;
+}
+
+.landing-final-cta__action {
+  flex: 0 0 auto;
+  min-height: 44px;
+  padding-inline: 1.3rem;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.landing-final-cta__action:focus-visible {
+  outline: 3px solid rgba(184, 169, 255, 0.68);
+  outline-offset: 4px;
+}
+
+/* ══════════════════════════════════════
    FOOTER
 ══════════════════════════════════════ */
 .footer {
@@ -1608,8 +1754,18 @@ button { font-family: inherit; }
 
   .steps-grid,
   .tools-grid,
-  .pricing-grid {
+  .pricing-grid,
+  .expectations-grid {
     grid-template-columns: 1fr;
+  }
+
+  .landing-final-cta {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .landing-final-cta__action {
+    width: 100%;
   }
 
   .tools-subtitle {
@@ -4612,7 +4768,8 @@ body.nav-open {
   .tools-section,
   .how-section,
   .gallery-section,
-  .pricing-section {
+  .pricing-section,
+  .expectations-section {
     padding-top: 5rem;
     padding-bottom: 5rem;
   }

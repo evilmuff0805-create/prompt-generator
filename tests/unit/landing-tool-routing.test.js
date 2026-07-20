@@ -76,4 +76,12 @@ describe('Landing and Image to Prompt routing contract', () => {
     expect(html).toContain('data-i18n="hero.showcase.actual"');
     expect(html).toContain('data-i18n="frame.result.alt"');
   });
+
+  test('the landing closes with visible verified expectations and a storyboard CTA', () => {
+    expect(html.match(/class="expectation-card"/g)).toHaveLength(3);
+    expect(html).toContain('data-i18n="landing.trust.retention.description"');
+    expect(html).toContain('data-i18n="landing.trust.boundary.description"');
+    expect(html).toContain('class="btn btn--primary landing-final-cta__action" href="/storyboard"');
+    expect(html).not.toContain('<details class="expectation-card"');
+  });
 });

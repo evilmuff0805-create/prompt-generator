@@ -45,6 +45,31 @@ for (const viewport of VIEWPORTS) {
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
     expect(overflow).toBeLessThanOrEqual(2);
   });
+
+  test(`expectations and final CTA remain usable at ${viewport.label} width`, async ({ page }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await page.goto('/', { waitUntil: 'domcontentloaded' });
+
+    const section = page.locator('.expectations-section');
+    await section.scrollIntoViewIfNeeded();
+    await expect(section).toBeVisible();
+    await expect(section.locator('.expectation-card')).toHaveCount(3);
+
+    const action = section.locator('.landing-final-cta__action');
+    await expect(action).toBeVisible();
+    await expect(action).toHaveAttribute('href', '/storyboard');
+
+    const cardRows = await section.locator('.expectation-card').evaluateAll(elements => (
+      elements.map(element => Math.round(element.getBoundingClientRect().top))
+    ));
+    expect(new Set(cardRows).size).toBe(viewport.columns === 1 ? 3 : 1);
+
+    const actionBox = await action.boundingBox();
+    expect(actionBox.height).toBeGreaterThanOrEqual(44);
+
+    const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+    expect(overflow).toBeLessThanOrEqual(2);
+  });
 }
 
 test('pipeline evidence labels follow the selected locale', async ({ page }) => {
@@ -54,4 +79,15 @@ test('pipeline evidence labels follow the selected locale', async ({ page }) => 
   await expect(page.locator('#tools .tool-card__media-label').first()).toHaveText('이미지→프롬프트');
   await expect(page.locator('#tools .tool-card__proof').nth(1)).toContainText('추출된 마지막 프레임');
   await expect(page.locator('#tools .tool-card__media-label').nth(2)).toHaveText('실제 결과');
+});
+
+test('expectations and final CTA follow the selected locale', async ({ page }) => {
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await page.locator('[data-locale-select]').selectOption('ko');
+
+  const section = page.locator('.expectations-section');
+  await section.scrollIntoViewIfNeeded();
+  await expect(section.locator('#expectationsTitle')).toHaveText('시작 전 꼭 알아야 할 세 가지');
+  await expect(section.locator('.expectation-card').nth(1)).toContainText('결과는 90일 동안 보관');
+  await expect(section.locator('.landing-final-cta__action')).toHaveText('스토리보드 만들기');
 });
