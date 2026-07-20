@@ -26,6 +26,13 @@ const LEGAL_UPDATED_DATE = Object.freeze({
   fr: '18 juillet 2026',
   ru: '18 июля 2026 г.'
 });
+const PRIVACY_UPDATED_DATE = Object.freeze({
+  ko: '2026년 7월 20일',
+  ja: '2026年7月20日',
+  'zh-CN': '2026年7月20日',
+  fr: '20 juillet 2026',
+  ru: '20 июля 2026 г.'
+});
 
 function catalog(locale) {
   return locale === 'en' ? english : require(`../../public/i18n/locales/${locale}`);
@@ -198,7 +205,9 @@ describe('page integration and legal parity', () => {
       expect(disclosure).toContain(detail);
     }
     expect(disclosure).toContain('href="mailto:codemeet@naver.com"');
-    expect(html).toContain('Last Updated: July 18, 2026');
+    expect(html).toContain(file === 'privacy.html'
+      ? 'Last Updated: July 20, 2026'
+      : 'Last Updated: July 18, 2026');
   });
 
   test.each(LEGAL_FILES)('%s deploy-versions every local stylesheet and script', file => {
@@ -232,17 +241,20 @@ describe('page integration and legal parity', () => {
       const refund = documents[locale].refund.html.replace(/[\s,]/g, '');
       for (const fact of ['1000', '4000', '10', '120']) expect(terms).toContain(fact);
       for (const service of ['Paddle', 'Seedance', 'USD']) expect(terms).toContain(service);
-      for (const fact of ['30', '180']) expect(privacy).toContain(fact);
+      for (const fact of ['24', '30', '90', '180']) expect(privacy).toContain(fact);
       for (const service of ['Supabase', 'Gemini', 'OpenAI', 'Paddle', 'Railway', 'Cloudflare']) expect(privacy).toContain(service);
       for (const fact of ['1000', '4000', '14']) expect(refund).toContain(fact);
       expect(refund).toContain('https://www.paddle.com/legal/refund-policy');
-      for (const html of [terms, privacy, refund]) {
+      for (const [documentType, html] of [['terms', terms], ['privacy', privacy], ['refund', refund]]) {
         const disclosure = operatorBlock(html);
         for (const detail of OPERATOR_DETAILS) {
           expect(disclosure).toContain(detail.replace(/[\s,]/g, ''));
         }
         expect(disclosure).toContain('href="mailto:codemeet@naver.com"');
-        expect(html).toContain(LEGAL_UPDATED_DATE[locale].replace(/[\s,]/g, ''));
+        const expectedDate = documentType === 'privacy'
+          ? PRIVACY_UPDATED_DATE[locale]
+          : LEGAL_UPDATED_DATE[locale];
+        expect(html).toContain(expectedDate.replace(/[\s,]/g, ''));
         expect(html).not.toMatch(/<script|onerror=|onload=/i);
       }
     }

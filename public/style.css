@@ -3352,7 +3352,7 @@ body.nav-open {
   letter-spacing: -0.01em;
 }
 
-.btn--hero span {
+.btn--hero > span[aria-hidden='true'] {
   display: grid;
   width: 1.7rem;
   height: 1.7rem;
@@ -3366,7 +3366,7 @@ body.nav-open {
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.62), 0 20px 46px rgba(0, 255, 204, 0.27);
 }
 
-.btn--hero:hover span {
+.btn--hero:hover > span[aria-hidden='true'] {
   transform: translate(2px, -2px);
 }
 
@@ -3421,7 +3421,7 @@ body.nav-open {
 .hero__visual {
   position: relative;
   width: 100%;
-  min-height: 540px;
+  min-height: 620px;
   perspective: 1200px;
 }
 
@@ -3499,6 +3499,115 @@ body.nav-open {
   border-radius: 50%;
   background: var(--clr-mint);
   box-shadow: 0 0 12px rgba(0, 255, 204, 0.8);
+}
+
+/* Real PromptGen storyboard results. Tabs are user-controlled and never autoplay. */
+.hero-storyboard__stage {
+  position: relative;
+  padding: 0.75rem;
+  background:
+    radial-gradient(circle at 8% 8%, rgba(0, 255, 204, 0.08), transparent 36%),
+    radial-gradient(circle at 92% 86%, rgba(184, 169, 255, 0.1), transparent 34%),
+    rgba(5, 5, 9, 0.45);
+}
+
+.hero-storyboard__panel {
+  position: relative;
+  overflow: hidden;
+  aspect-ratio: 3 / 2;
+  border: 1px solid rgba(255, 255, 255, 0.11);
+  border-radius: 1rem;
+  background: #090b11;
+  box-shadow: 0 18px 55px rgba(0, 0, 0, 0.34), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+.hero-storyboard__panel[hidden] {
+  display: none;
+}
+
+.hero-storyboard__panel img {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.hero-storyboard__panel::after {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  content: '';
+  background:
+    linear-gradient(125deg, rgba(255, 255, 255, 0.08), transparent 22%),
+    linear-gradient(to top, rgba(4, 5, 8, 0.2), transparent 30%);
+}
+
+.hero-storyboard__badge {
+  position: absolute;
+  z-index: 2;
+  top: 1.35rem;
+  right: 1.35rem;
+  display: flex;
+  min-height: 34px;
+  padding: 0.35rem 0.55rem;
+  align-items: center;
+  gap: 0.5rem;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 0.6rem;
+  background: rgba(7, 9, 14, 0.68);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 10px 30px rgba(0, 0, 0, 0.28);
+  color: rgba(229, 231, 241, 0.66);
+  font-size: 0.5rem;
+  font-weight: 750;
+  letter-spacing: 0.1em;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+.hero-storyboard__badge strong {
+  color: var(--clr-mint);
+  font-size: 0.58rem;
+}
+
+.hero-storyboard__tabs {
+  display: grid;
+  padding: 0.65rem 0.8rem;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.55rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+  background: rgba(8, 8, 12, 0.34);
+}
+
+.hero-storyboard__tabs button {
+  min-width: 0;
+  min-height: 42px;
+  padding: 0.45rem 0.55rem;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 0.7rem;
+  background: rgba(255, 255, 255, 0.025);
+  color: rgba(218, 220, 231, 0.56);
+  font: inherit;
+  font-size: 0.62rem;
+  font-weight: 720;
+  line-height: 1.2;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  transition: border-color 0.2s ease, background 0.2s ease, color 0.2s ease;
+}
+
+.hero-storyboard__tabs button:hover,
+.hero-storyboard__tabs button[aria-selected='true'] {
+  border-color: rgba(0, 255, 204, 0.36);
+  background: rgba(0, 255, 204, 0.09);
+  color: rgba(135, 255, 231, 0.94);
+}
+
+.hero-storyboard__tabs button:focus-visible {
+  outline: 2px solid var(--clr-mint);
+  outline-offset: 2px;
 }
 
 .hero-demo__workspace {
@@ -3721,6 +3830,7 @@ body.nav-open {
 
 .hero-demo__footer {
   min-height: 58px;
+  gap: 0.75rem;
   border-top: 1px solid rgba(255, 255, 255, 0.08);
   border-bottom: 0;
   color: rgba(215, 215, 228, 0.45);
@@ -4204,7 +4314,7 @@ body.nav-open {
   }
 
   .hero__visual {
-    min-height: 450px;
+    min-height: 580px;
   }
 
   .hero-demo {
@@ -4283,7 +4393,7 @@ body.nav-open {
   }
 
   .hero__visual {
-    min-height: 520px;
+    min-height: 500px;
   }
 
   .hero-demo {
@@ -4296,6 +4406,30 @@ body.nav-open {
 
   .hero-demo__topbar {
     min-height: 48px;
+  }
+
+  .hero-storyboard__stage {
+    padding: 0.5rem;
+  }
+
+  .hero-storyboard__panel {
+    border-radius: 0.85rem;
+  }
+
+  .hero-storyboard__badge {
+    top: 0.9rem;
+    right: 0.9rem;
+  }
+
+  .hero-storyboard__tabs {
+    padding: 0.55rem;
+    gap: 0.35rem;
+  }
+
+  .hero-storyboard__tabs button {
+    min-height: 44px;
+    padding: 0.4rem 0.25rem;
+    font-size: 0.56rem;
   }
 
   .hero-demo__mode {
@@ -4340,6 +4474,13 @@ body.nav-open {
 
   .hero-demo__footer {
     min-height: 52px;
+    padding: 0 0.7rem;
+    font-size: 0.5rem;
+  }
+
+  .hero-demo__generate {
+    padding-left: 0.55rem;
+    font-size: 0.48rem;
   }
 
   .hero-float--analysis {

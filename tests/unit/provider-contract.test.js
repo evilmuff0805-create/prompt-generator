@@ -30,7 +30,9 @@ describe('AI provider contract', () => {
 
     expect(privacy).toContain('Google Gemini API');
     expect(privacy).toContain('OpenAI API');
-    expect(privacy).toContain('Storyboard references and generated grids');
+    expect(privacy).toContain('Storyboard reference uploads');
+    expect(privacy).toContain('Generated Storyboard grids');
+    expect(privacy).toContain('90 days from creation');
     expect(privacy).not.toContain('Groq API');
   });
 });
