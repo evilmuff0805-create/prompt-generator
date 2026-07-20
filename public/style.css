@@ -776,6 +776,11 @@ button { font-family: inherit; }
   box-shadow: var(--glow-mint);
   transform: translateY(-4px);
 }
+.tool-card:focus-visible {
+  outline: 2px solid var(--clr-mint);
+  outline-offset: 4px;
+  border-color: var(--clr-mint);
+}
 
 .tool-card__media {
   position: relative;
@@ -786,9 +791,29 @@ button { font-family: inherit; }
   background:
     linear-gradient(135deg, rgba(0,255,204,0.06), rgba(184,169,255,0.06));
   border-bottom: 1px solid var(--clr-border);
+  overflow: hidden;
+  isolation: isolate;
+}
+
+.tool-card__media img {
+  position: relative;
+  z-index: 1;
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transition: transform 0.35s ease, filter 0.35s ease;
+}
+
+.tool-card:hover .tool-card__media img {
+  transform: scale(1.025);
 }
 
 .tool-card__media-label {
+  position: absolute;
+  z-index: 4;
+  top: 0.75rem;
+  left: 0.75rem;
   font-size: 0.72rem;
   font-weight: 700;
   text-transform: uppercase;
@@ -796,14 +821,75 @@ button { font-family: inherit; }
   color: var(--clr-text-muted);
 }
 
+.tool-card__proof {
+  position: absolute;
+  z-index: 4;
+  right: 0.75rem;
+  bottom: 0.75rem;
+  left: 0.75rem;
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  min-width: 0;
+  font-size: 0.625rem;
+  font-weight: 750;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: rgba(238, 238, 247, 0.88);
+}
+
+.tool-card__proof span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tool-card__proof i {
+  color: var(--clr-mint);
+  font-style: normal;
+}
+
+.tool-card__proof strong {
+  margin-left: auto;
+  color: var(--clr-mint);
+  font-size: inherit;
+}
+
 .tool-card__body {
+  flex: 1;
   padding: 1.5rem;
 }
 
 .tool-card__title {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
   font-size: 1.125rem;
   font-weight: 700;
   margin-bottom: 0.5rem;
+}
+
+.tool-card__title-icon {
+  display: inline-grid;
+  flex: 0 0 auto;
+  width: 2rem;
+  height: 2rem;
+  place-items: center;
+  border: 1px solid rgba(0, 255, 204, 0.22);
+  border-radius: 0.65rem;
+  background: rgba(0, 255, 204, 0.07);
+  color: var(--clr-mint);
+}
+
+.tool-card__title-icon svg {
+  width: 1.1rem;
+  height: 1.1rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .tool-card__desc {
@@ -3973,30 +4059,41 @@ body.nav-open {
     rgba(255, 255, 255, 0.018);
 }
 
-.tool-card__media::before,
 .tool-card__media::after {
   content: '';
   position: absolute;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 0.7rem;
-  background: rgba(12, 12, 18, 0.5);
-  box-shadow: inset 0 1px 0 rgba(255,255,255,0.05);
+  z-index: 2;
+  inset: 0;
+  pointer-events: none;
+  background:
+    linear-gradient(180deg, rgba(5, 6, 10, 0.26), transparent 42%),
+    linear-gradient(0deg, rgba(5, 6, 10, 0.82), transparent 48%);
 }
 
-.tool-card__media::before {
-  width: 44%;
-  height: 52%;
-  transform: translate(-26%, 8%) rotate(-5deg);
+.tool-card__media--image img {
+  filter: saturate(0.9) contrast(1.04);
 }
 
-.tool-card__media::after {
-  width: 46%;
-  height: 44%;
-  transform: translate(30%, -12%) rotate(5deg);
+.tool-card__media--endframe img {
+  object-position: center 86%;
+}
+
+.tool-card__media--storyboard::before {
+  content: '';
+  position: absolute;
+  z-index: 0;
+  inset: -1rem;
+  background: url('/gallery/storyboards/hero-storyboard-animation-640.webp') center / cover no-repeat;
+  filter: blur(14px) saturate(0.8);
+  opacity: 0.32;
+}
+
+.tool-card__media--storyboard img {
+  object-fit: contain;
+  background: rgba(5, 6, 10, 0.42);
 }
 
 .tool-card__media-label {
-  z-index: 2;
   padding: 0.42rem 0.65rem;
   border: 1px solid rgba(0, 255, 204, 0.18);
   border-radius: 999px;
@@ -4004,6 +4101,16 @@ body.nav-open {
   color: rgba(0, 255, 204, 0.72);
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
+}
+
+.tool-card__proof {
+  padding: 0.58rem 0.68rem;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 0.7rem;
+  background: rgba(8, 8, 12, 0.68);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.055);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
 }
 
 @keyframes heroAurora {
@@ -4553,7 +4660,9 @@ body.nav-open {
   .hero-float,
   .hero-demo,
   .hero__grid,
-  .navbar__menu > li {
+  .navbar__menu > li,
+  .tool-card,
+  .tool-card__media img {
     animation: none;
     transition-duration: 0.01ms;
   }

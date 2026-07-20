@@ -217,34 +217,63 @@
       <div class="tools-grid">
 
         <a href="/image-to-prompt" class="tool-card">
-          <div class="tool-card__media">
-            <!-- TODO: public/showcase/image-to-prompt.png -->
+          <div class="tool-card__media tool-card__media--image">
+            <img src="/gallery/pipeline-image-to-prompt-640.webp" width="640" height="360" loading="lazy" decoding="async" alt="" />
             <span class="tool-card__media-label" data-i18n="nav.tool.imageToPrompt">Image to Prompt</span>
+            <div class="tool-card__proof">
+              <span data-i18n="hero.demo.reference">REFERENCE / 01</span>
+              <i aria-hidden="true">→</i>
+              <span data-i18n="hero.demo.prompt">PROMPT</span>
+              <strong data-i18n="hero.demo.ready">READY</strong>
+            </div>
           </div>
           <div class="tool-card__body">
-            <h3 class="tool-card__title">🎨 <span data-i18n="nav.tool.imageToPrompt">Image to Prompt</span></h3>
+            <h3 class="tool-card__title">
+              <span class="tool-card__title-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24"><rect x="3.5" y="3.5" width="17" height="17" rx="4"></rect><path d="m7 16 3.5-4 2.5 2.5 2-2 2.5 3.5"></path><circle cx="15.8" cy="8.3" r="1.2"></circle></svg>
+              </span>
+              <span data-i18n="nav.tool.imageToPrompt">Image to Prompt</span>
+            </h3>
             <p class="tool-card__desc" data-i18n="tools.image.description">Turn any reference image into a precise, editable prompt — tuned for Midjourney, GPT Image 2, and Nano Banana Pro.</p>
           </div>
         </a>
 
         <a href="/frame" class="tool-card">
-          <div class="tool-card__media">
-            <!-- TODO: public/showcase/endframe-extractor.png -->
+          <div class="tool-card__media tool-card__media--endframe">
+            <img src="/gallery/pipeline-endframe-640.webp" width="640" height="360" loading="lazy" decoding="async" alt="" />
             <span class="tool-card__media-label" data-i18n="nav.tool.endframe">Endframe Extractor</span>
+            <div class="tool-card__proof">
+              <span data-i18n="frame.result.alt">Extracted last frame</span>
+              <strong>PNG</strong>
+            </div>
           </div>
           <div class="tool-card__body">
-            <h3 class="tool-card__title">🖼️ <span data-i18n="nav.tool.endframe">Endframe Extractor</span></h3>
+            <h3 class="tool-card__title">
+              <span class="tool-card__title-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="14" rx="3"></rect><path d="M7 5v14M17 5v14M3.5 9h3.5M17 9h3.5M3.5 15h3.5M17 15h3.5"></path></svg>
+              </span>
+              <span data-i18n="nav.tool.endframe">Endframe Extractor</span>
+            </h3>
             <p class="tool-card__desc" data-i18n="tools.endframe.description">Pull the last frame from any clip — the perfect seed to generate your next scene and keep your sequence flowing.</p>
           </div>
         </a>
 
         <a href="/storyboard" class="tool-card">
-          <div class="tool-card__media">
-            <!-- TODO: public/showcase/storyboard.png -->
-            <span class="tool-card__media-label" data-i18n="nav.tool.storyboard">Storyboard</span>
+          <div class="tool-card__media tool-card__media--storyboard">
+            <img src="/gallery/storyboards/hero-storyboard-animation-640.webp" width="640" height="427" loading="lazy" decoding="async" alt="" />
+            <span class="tool-card__media-label" data-i18n="hero.showcase.actual">ACTUAL OUTPUT</span>
+            <div class="tool-card__proof">
+              <span data-i18n="hero.showcase.shots">9 SHOTS</span>
+              <strong>3 × 3</strong>
+            </div>
           </div>
           <div class="tool-card__body">
-            <h3 class="tool-card__title">🎬 <span data-i18n="nav.tool.storyboard">Storyboard</span></h3>
+            <h3 class="tool-card__title">
+              <span class="tool-card__title-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24"><rect x="3.5" y="3.5" width="17" height="17" rx="4"></rect><path d="M9.2 3.5v17M14.8 3.5v17M3.5 9.2h17M3.5 14.8h17"></path></svg>
+              </span>
+              <span data-i18n="nav.tool.storyboard">Storyboard</span>
+            </h3>
             <p class="tool-card__desc" data-i18n="tools.storyboard.description">Drop in a key image and your idea to create a storyboard grid and shot-by-shot prompts, then use those prompts in Seedance to generate the final video.</p>
           </div>
         </a>

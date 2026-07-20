@@ -53,4 +53,27 @@ describe('Landing and Image to Prompt routing contract', () => {
     expect(frameHtml).toContain('src="/navbar-shared.js?v=__ASSET_VERSION__"');
     expect(server).toContain("sendVersionedPage(res, 'frame.html')");
   });
+
+  test('the landing pipeline uses lightweight product evidence instead of placeholder media', () => {
+    expect(html).not.toContain('TODO: public/showcase');
+    expect(html).not.toContain('src="/gallery/2.png"');
+    expect(html).not.toContain('src="/endframe-demo.gif"');
+
+    const assets = [
+      'public/gallery/pipeline-image-to-prompt-640.webp',
+      'public/gallery/pipeline-endframe-640.webp',
+      'public/gallery/storyboards/hero-storyboard-animation-640.webp'
+    ];
+
+    for (const asset of assets) {
+      const fullPath = path.join(ROOT, asset);
+      expect(fs.existsSync(fullPath)).toBe(true);
+      expect(fs.statSync(fullPath).size).toBeLessThan(100 * 1024);
+      expect(html).toContain(`src="/${asset.replace('public/', '')}"`);
+    }
+
+    expect(html.match(/class="tool-card__proof"/g)).toHaveLength(3);
+    expect(html).toContain('data-i18n="hero.showcase.actual"');
+    expect(html).toContain('data-i18n="frame.result.alt"');
+  });
 });
