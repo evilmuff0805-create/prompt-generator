@@ -94,6 +94,44 @@ for (const viewport of VIEWPORTS) {
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
     expect(overflow).toBeLessThanOrEqual(2);
   });
+
+  test(`case study remains readable and does not autoplay at ${viewport.label} width`, async ({ page }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await page.goto('/', { waitUntil: 'domcontentloaded' });
+
+    const section = page.locator('#case-study');
+    await section.scrollIntoViewIfNeeded();
+    await expect(section).toBeVisible();
+    await expect(section.locator('.case-study__media')).toHaveCount(2);
+    const storyboardImage = section.locator('.case-study__media--storyboard img');
+    await storyboardImage.scrollIntoViewIfNeeded();
+    await expect.poll(() => storyboardImage.evaluate(image => image.naturalWidth)).toBeGreaterThan(0);
+    await storyboardImage.evaluate(image => image.decode());
+
+    const rows = await section.locator('.case-study__media').evaluateAll(elements => (
+      elements.map(element => Math.round(element.getBoundingClientRect().top))
+    ));
+    expect(new Set(rows).size).toBe(viewport.columns === 1 ? 2 : 1);
+
+    const video = section.locator('video');
+    await expect(video).toHaveAttribute('controls', '');
+    await expect(video).toHaveAttribute('playsinline', '');
+    await expect(video).toHaveAttribute('preload', 'metadata');
+    await expect(video).not.toHaveAttribute('autoplay', '');
+    await expect(video.locator('source')).toHaveAttribute('src', '/gallery/storyboards/story05-seedance.mp4');
+    expect(await video.evaluate(element => ({ paused: element.paused, currentTime: element.currentTime }))).toEqual({
+      paused: true,
+      currentTime: 0
+    });
+
+    const action = section.locator('.case-study__action');
+    await expect(action).toHaveAttribute('href', '/storyboard');
+    const actionBox = await action.boundingBox();
+    expect(actionBox.height).toBeGreaterThanOrEqual(44);
+
+    const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+    expect(overflow).toBeLessThanOrEqual(2);
+  });
 }
 
 test('pipeline evidence labels follow the selected locale', async ({ page }) => {
@@ -114,4 +152,16 @@ test('expectations and final CTA follow the selected locale', async ({ page }) =
   await expect(section.locator('#expectationsTitle')).toHaveText('시작 전 꼭 알아야 할 세 가지');
   await expect(section.locator('.expectation-card').nth(1)).toContainText('결과는 90일 동안 보관');
   await expect(section.locator('.landing-final-cta__action')).toHaveText('스토리보드 만들기');
+});
+
+test('case study boundary and labels follow the selected locale', async ({ page }) => {
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await page.locator('[data-locale-select]').selectOption('ko');
+
+  const section = page.locator('#case-study');
+  await section.scrollIntoViewIfNeeded();
+  await expect(section.locator('#caseStudyTitle')).toHaveText('하나의 시나리오, 아홉 개의 연출된 컷, 하나의 완성된 시퀀스.');
+  await expect(section.locator('.case-study__media-label').nth(0)).toContainText('PromptGen 스토리보드');
+  await expect(section.locator('.case-study__media-label').nth(1)).toContainText('Seedance 결과');
+  await expect(section.locator('.case-study__media').nth(1).locator('figcaption')).toContainText('PromptGen에는 영상 렌더링이 포함되지 않습니다.');
 });

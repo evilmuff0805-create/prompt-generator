@@ -281,6 +281,61 @@
       </div>
     </div>
   </section>
+
+  <!-- Representative Storyboard Case Study -->
+  <section id="case-study" class="case-study-section" aria-labelledby="caseStudyTitle">
+    <div class="container">
+      <div class="case-study__header">
+        <div>
+          <div class="section-label" data-i18n="caseStudy.label">Representative Case Study</div>
+          <h2 id="caseStudyTitle" class="section-title" data-i18n="caseStudy.title">One scenario. Nine directed shots. One finished sequence.</h2>
+        </div>
+        <p data-i18n="caseStudy.subtitle">See how PromptGen turns a tense fortress encounter into a consistent shot plan, ready to render in Seedance.</p>
+      </div>
+
+      <div class="case-study__facts" aria-label="Case study facts" data-i18n-attr="aria-label:caseStudy.factsLabel">
+        <span data-i18n="caseStudy.fact.style">Documentary style</span>
+        <span data-i18n="caseStudy.fact.shots">9 directed shots</span>
+        <span data-i18n="caseStudy.fact.duration">Within the 15-second limit</span>
+      </div>
+
+      <div class="case-study__media-grid">
+        <figure class="case-study__media case-study__media--storyboard">
+          <div class="case-study__media-label">
+            <span>01</span>
+            <strong data-i18n="caseStudy.storyboard.label">PromptGen storyboard</strong>
+          </div>
+          <picture>
+            <source media="(max-width: 640px)" srcset="/gallery/storyboards/hero-storyboard-documentary-640.webp" />
+            <img src="/gallery/storyboards/hero-storyboard-documentary-1280.webp" width="1280" height="853" loading="lazy" decoding="async" alt="Nine-shot documentary storyboard set on a Joseon-era fortress" data-i18n-attr="alt:caseStudy.storyboard.alt" />
+          </picture>
+          <figcaption data-i18n="caseStudy.storyboard.caption">The generated 3 × 3 grid keeps characters, wardrobe, weather, and geography aligned from shot to shot.</figcaption>
+        </figure>
+
+        <figure class="case-study__media case-study__media--video">
+          <div class="case-study__media-label">
+            <span>02</span>
+            <strong data-i18n="caseStudy.video.label">Seedance result</strong>
+          </div>
+          <div class="case-study__video-frame">
+            <video controls playsinline preload="metadata" poster="/gallery/storyboards/hero-storyboard-documentary-1280.webp" aria-label="Final Seedance video generated from the nine-shot plan" data-i18n-attr="aria-label:caseStudy.video.aria">
+              <source src="/gallery/storyboards/story05-seedance.mp4" type="video/mp4" />
+            </video>
+          </div>
+          <figcaption data-i18n="caseStudy.video.caption">Final video generated in Seedance from PromptGen’s storyboard and shot prompts. Video rendering is not included in PromptGen.</figcaption>
+        </figure>
+      </div>
+
+      <div class="case-study__sequence" aria-label="Narrative sequence" data-i18n-attr="aria-label:caseStudy.sequenceLabel">
+        <div><span>01</span><strong data-i18n="caseStudy.sequence.establish">Establish the fortress and confrontation</strong></div>
+        <i aria-hidden="true">→</i>
+        <div><span>04</span><strong data-i18n="caseStudy.sequence.escalate">Escalate through readable action</strong></div>
+        <i aria-hidden="true">→</i>
+        <div><span>09</span><strong data-i18n="caseStudy.sequence.resolve">Resolve on a clear reaction</strong></div>
+        <a class="btn btn--outline case-study__action" href="/storyboard" data-i18n="caseStudy.action">Build your shot plan</a>
+      </div>
+    </div>
+  </section>
   <!-- page:landing:end -->
 
   <!-- page:image-tool:start -->

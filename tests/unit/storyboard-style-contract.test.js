@@ -25,10 +25,11 @@ const CINEMATIC_CONTINUITY_PHRASES = [
   'faces, hands, contact points, and story-critical props inside the safe area'
 ];
 
-function makeData(cutCount, { includeUltraRealistic = true } = {}) {
+function makeData(cutCount, { includeUltraRealistic = true, includeFaceIdentity = true } = {}) {
   const angles = cutCount === 9 ? ANGLES_9 : ANGLES_4;
   const duration = cutCount === 9 ? 1.5 : 3.5;
   const realism = includeUltraRealistic ? ', ultra-realistic' : '';
+  const faceIdentity = includeFaceIdentity ? ', when a face is visible preserve facial identity' : '';
 
   return {
     characters: { protagonist: 'Alex' },
@@ -42,7 +43,7 @@ function makeData(cutCount, { includeUltraRealistic = true } = {}) {
       lighting: 'motivated practical light',
       colorGrade: 'filmic',
       durationSeconds: duration,
-      videoPrompt: `16:9, ${angles[index]}, grounded action${realism}, ~${duration} seconds, cinematic 24fps`
+      videoPrompt: `16:9, ${angles[index]}, grounded action${realism}${faceIdentity}, ~${duration} seconds, cinematic 24fps`
     }))
   };
 }
@@ -131,6 +132,38 @@ describe('Cinematic realism prompt contract', () => {
         9,
         style
       )).toEqual([]);
+    }
+  );
+});
+
+describe('Recurring face identity prompt contract', () => {
+  test.each(['Cinematic', 'Documentary', 'Pixar 3D', 'Animation'])(
+    '%s carries face identity safeguards into system and grid prompts',
+    style => {
+      const systemPrompt = buildSystemPrompt({ style, cutCount: 9 });
+      const gridPrompt = buildGridPrompt(makeData(9), style, 9);
+
+      for (const prompt of [systemPrompt, gridPrompt]) {
+        expect(prompt).toContain('preserve facial identity');
+        expect(prompt).toContain('stable facial geometry frame to frame');
+        expect(prompt).toContain('keep facial landmarks readable through motion');
+        expect(prompt).toContain('no face morphing, melting, identity drift');
+        expect(prompt).toContain('smeared facial detail');
+      }
+    }
+  );
+
+  test.each(['Cinematic', 'Documentary', 'Pixar 3D', 'Animation'])(
+    '%s validation rejects shot prompts without the identity marker',
+    style => {
+      const errors = validateStoryboardData(
+        makeData(9, { includeFaceIdentity: false }),
+        9,
+        style
+      );
+
+      expect(errors).toHaveLength(9);
+      expect(errors.every(error => error.includes('missing "preserve facial identity"'))).toBe(true);
     }
   );
 });
