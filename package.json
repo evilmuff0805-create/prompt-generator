@@ -8,6 +8,7 @@
     "test:unit": "jest tests/unit --runInBand --forceExit",
     "test:e2e": "playwright test tests/e2e",
     "test": "npm run test:unit && npm run test:e2e",
+    "generate:og": "node scripts/generate-og-images.js",
     "cleanup": "node scripts/daily-cleanup.js",
     "cleanup:dry-run": "node scripts/daily-cleanup.js --dry-run",
     "audit:paddle-catalog": "node scripts/audit-paddle-catalog.js",
