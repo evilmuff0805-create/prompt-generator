@@ -467,7 +467,19 @@ app.get('/share/:token', (req, res) => {
   ));
 });
 
+app.get('/api/*', (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  res.status(404).json({ success: false, code: 'NOT_FOUND' });
+});
+
 app.get('*', (req, res) => {
+  const normalizedPath = req.path.replace(/\/+$/, '') || '/';
+  if (path.posix.extname(normalizedPath)) {
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('X-Robots-Tag', 'noindex, nofollow');
+    return res.status(404).type('text').send('Not found');
+  }
+
   sendLandingPage(req, res);
 });
 
