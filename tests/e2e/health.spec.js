@@ -154,6 +154,30 @@ test.describe('Health & Page Load', () => {
     expect(res.status()).toBe(401);
   });
 
+  test('존재하지 않는 실행 스크립트와 정적 자원 경로는 랜딩 대신 404를 반환해야 한다', async ({ request }) => {
+    for (const requestPath of ['/1.php', '/100.php/', '/missing-runtime.js']) {
+      const res = await request.get(requestPath);
+      expect(res.status()).toBe(404);
+      expect(res.headers()['cache-control']).toBe('no-store');
+      expect(res.headers()['x-robots-tag']).toBe('noindex, nofollow');
+      expect(await res.text()).toBe('Not found');
+    }
+  });
+
+  test('존재하지 않는 API GET은 HTML 랜딩이 아니라 JSON 404를 반환해야 한다', async ({ request }) => {
+    const res = await request.get('/api/not-a-real-endpoint');
+    expect(res.status()).toBe(404);
+    expect(res.headers()['content-type']).toContain('application/json');
+    expect(res.headers()['cache-control']).toBe('no-store');
+    expect(await res.json()).toEqual({ success: false, code: 'NOT_FOUND' });
+  });
+
+  test('확장자가 없는 레거시 마케팅 경로의 랜딩 fallback은 유지해야 한다', async ({ request }) => {
+    const res = await request.get('/legacy-campaign');
+    expect(res.status()).toBe(200);
+    expect(await res.text()).toContain('PromptGen');
+  });
+
   test('갤러리 페이지가 정상 로드되어야 한다', async ({ page }) => {
     await page.goto('/image-to-prompt#gallery');
     await expect(page.locator('#gallery')).toBeVisible();
