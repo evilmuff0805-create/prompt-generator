@@ -76,6 +76,27 @@ async function deleteStoryboard(storyboardId) {
   return res.json();
 }
 
+async function getStoryboardShareStatus(storyboardId) {
+  const res = await apiFetch(`/${storyboardId}/share`);
+  return res.json();
+}
+
+async function createStoryboardShare(storyboardId) {
+  const res = await apiFetch(`/${storyboardId}/share`, {
+    method: 'POST',
+    body: JSON.stringify({
+      confirmed: true,
+      consentVersion: 'unlisted-grid-v1'
+    })
+  });
+  return res.json();
+}
+
+async function revokeStoryboardShare(storyboardId) {
+  const res = await apiFetch(`/${storyboardId}/share`, { method: 'DELETE' });
+  return res.json();
+}
+
 async function uploadReference(file, onProgress) {
   const token = await getAuthToken();
   const formData = new FormData();
@@ -115,5 +136,6 @@ async function getUserProfile() {
 window.StoryboardAPI = {
   getAuthToken, getCurrentUser, signInWithGoogle, signOut, onAuthStateChange,
   generateStoryboard, getStatus, getStoryboard, listStoryboards, deleteStoryboard,
+  getStoryboardShareStatus, createStoryboardShare, revokeStoryboardShare,
   uploadReference, getUserProfile, getConfig
 };

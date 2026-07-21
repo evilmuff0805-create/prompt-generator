@@ -14,24 +14,33 @@ const APP_HTML = [
   'frame.html',
   'storyboard.html',
   'storyboard-history.html',
-  'storyboard-result.html'
+  'storyboard-result.html',
+  'storyboard-share.html'
 ];
+const THIRD_PARTY_APP_HTML = APP_HTML.filter(file => file !== 'storyboard-share.html');
 const ALL_HTML = [...APP_HTML, 'terms.html', 'privacy.html', 'refund.html'];
 const LEGAL_FILES = ['terms.html', 'privacy.html', 'refund.html'];
 const OPERATOR_DETAILS = ['codemeet', 'yerim suk', '470-32-01835', 'codemeet@naver.com'];
-const LEGAL_UPDATED_DATE = Object.freeze({
+const TERMS_UPDATED_DATE = Object.freeze({
+  ko: '2026년 7월 21일',
+  ja: '2026年7月21日',
+  'zh-CN': '2026年7月21日',
+  fr: '21 juillet 2026',
+  ru: '21 июля 2026 г.'
+});
+const PRIVACY_UPDATED_DATE = Object.freeze({
+  ko: '2026년 7월 21일',
+  ja: '2026年7月21日',
+  'zh-CN': '2026年7月21日',
+  fr: '21 juillet 2026',
+  ru: '21 июля 2026 г.'
+});
+const REFUND_UPDATED_DATE = Object.freeze({
   ko: '2026년 7월 18일',
   ja: '2026年7月18日',
   'zh-CN': '2026年7月18日',
   fr: '18 juillet 2026',
   ru: '18 июля 2026 г.'
-});
-const PRIVACY_UPDATED_DATE = Object.freeze({
-  ko: '2026년 7월 20일',
-  ja: '2026年7月20日',
-  'zh-CN': '2026年7月20日',
-  fr: '20 juillet 2026',
-  ru: '20 июля 2026 г.'
 });
 
 function catalog(locale) {
@@ -189,7 +198,7 @@ describe('page integration and legal parity', () => {
     expect(html).toContain('/i18n/init.js');
   });
 
-  test.each(APP_HTML)('%s initializes locale before third-party SDKs', file => {
+  test.each(THIRD_PARTY_APP_HTML)('%s initializes locale before third-party SDKs', file => {
     const html = fs.readFileSync(path.join(ROOT, 'public', file), 'utf8');
     const i18nInitIndex = html.indexOf('/i18n/init.js');
     const thirdPartyIndex = html.indexOf('<script src="https://');
@@ -205,9 +214,9 @@ describe('page integration and legal parity', () => {
       expect(disclosure).toContain(detail);
     }
     expect(disclosure).toContain('href="mailto:codemeet@naver.com"');
-    expect(html).toContain(file === 'privacy.html'
-      ? 'Last Updated: July 20, 2026'
-      : 'Last Updated: July 18, 2026');
+    expect(html).toContain(file === 'refund.html'
+      ? 'Last Updated: July 18, 2026'
+      : 'Last Updated: July 21, 2026');
   });
 
   test.each(LEGAL_FILES)('%s deploy-versions every local stylesheet and script', file => {
@@ -253,7 +262,9 @@ describe('page integration and legal parity', () => {
         expect(disclosure).toContain('href="mailto:codemeet@naver.com"');
         const expectedDate = documentType === 'privacy'
           ? PRIVACY_UPDATED_DATE[locale]
-          : LEGAL_UPDATED_DATE[locale];
+          : documentType === 'terms'
+            ? TERMS_UPDATED_DATE[locale]
+            : REFUND_UPDATED_DATE[locale];
         expect(html).toContain(expectedDate.replace(/[\s,]/g, ''));
         expect(html).not.toMatch(/<script|onerror=|onload=/i);
       }
