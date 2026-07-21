@@ -17,6 +17,49 @@ test('Storyboard pages serve deploy-versioned assets without leaking placeholder
   }
 });
 
+for (const width of [320, 720, 1440]) {
+  test(`Unlisted shared grid is localized, minimal and overflow-safe at ${width}px`, async ({ page }) => {
+    const token = 'A'.repeat(43);
+    const imagePath = `/api/share/${token}/image`;
+    await page.setViewportSize({ width, height: 844 });
+    await page.route(new RegExp(`/api/share/${token}/image$`), route => route.fulfill({
+      status: 200,
+      contentType: 'image/png',
+      body: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64')
+    }));
+    await page.route(new RegExp(`/api/share/${token}$`), route => route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        success: true,
+        storyboard: {
+          style: 'Cinematic',
+          cutCount: 9,
+          createdAt: '2026-07-20T00:00:00.000Z',
+          expiresAt: '2026-10-18T00:00:00.000Z',
+          imagePath
+        }
+      })
+    }));
+
+    await page.goto(`/share/${token}`, { waitUntil: 'domcontentloaded' });
+    await page.locator('[data-locale-select]').selectOption('ru');
+    await expect(page.locator('[data-i18n="storyboardShare.title"]')).toHaveText('Общая сетка раскадровки');
+    await expect(page.locator('#shareGridImage')).toBeVisible();
+    await expect(page.locator('meta[name="robots"]')).toHaveAttribute('content', 'noindex,nofollow,noarchive');
+
+    const safety = await page.evaluate(() => ({
+      overflow: document.documentElement.scrollWidth - window.innerWidth,
+      bodyText: document.body.textContent,
+      scripts: [...document.scripts].map(script => script.src)
+    }));
+    expect(safety.overflow).toBeLessThanOrEqual(2);
+    expect(safety.bodyText).not.toContain('private scenario');
+    expect(safety.bodyText).not.toContain('private prompt');
+    expect(safety.scripts.some(src => src.includes('analytics.js'))).toBe(false);
+  });
+}
+
 for (const { width, label } of [
   { width: 320, label: '320px' },
   { width: 390, label: '390px' },

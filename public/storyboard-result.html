@@ -88,6 +88,34 @@
           </p>
         </div>
 
+        <!-- Explicit opt-in, unlisted grid-only sharing -->
+        <section class="storyboard-card storyboard-share-control" aria-labelledby="shareControlTitle">
+          <div class="storyboard-share-control__heading">
+            <div>
+              <p class="storyboard-share-eyebrow" data-i18n="storyboardShare.eyebrow">UNLISTED STORYBOARD</p>
+              <h2 id="shareControlTitle" class="storyboard-section-title" data-i18n="storyboardShare.control.title">Share this grid with a private link</h2>
+            </div>
+            <span class="storyboard-share-control__badge" data-i18n="storyboardShare.control.badge">Grid only</span>
+          </div>
+          <p class="storyboard-share-control__description" data-i18n="storyboardShare.control.description">The link is not listed or indexed. Anyone who has the exact link can view the generated grid until you unpublish it or the Storyboard expires.</p>
+          <label class="storyboard-share-consent">
+            <input id="shareConsent" type="checkbox" />
+            <span data-i18n="storyboardShare.control.consent">I confirm I have the right to share this grid. I understand that anyone with the link can view it, while my scenario, prompts, references, and account identity stay private.</span>
+          </label>
+          <div class="storyboard-share-actions">
+            <button id="createShareBtn" type="button" class="btn btn--secondary" disabled data-i18n="storyboardShare.control.create">Create unlisted link</button>
+            <button id="revokeShareBtn" type="button" class="btn btn--outline storyboard-share-revoke" hidden data-i18n="storyboardShare.control.unpublish">Unpublish link</button>
+          </div>
+          <div id="shareLinkRow" class="storyboard-share-link" hidden>
+            <label for="shareLinkInput" data-i18n="storyboardShare.control.linkLabel">Share link</label>
+            <div class="storyboard-share-link__row">
+              <input id="shareLinkInput" type="text" readonly spellcheck="false" />
+              <button id="copyShareBtn" type="button" class="btn btn--outline" data-i18n="storyboardShare.control.copy">Copy link</button>
+            </div>
+          </div>
+          <p id="shareStatus" class="storyboard-share-status" role="status" aria-live="polite"></p>
+        </section>
+
         <!-- Shot Prompts -->
         <div class="storyboard-card">
           <h2 class="storyboard-section-title" data-i18n="storyboardResult.prompts">Shot Prompts</h2>

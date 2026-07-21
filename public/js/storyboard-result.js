@@ -7,6 +7,9 @@
   let currentStoryboard = null;
   let currentStatus = null;
   let storyboardCost = null;
+  let shareState = { active: false, expiresAt: null };
+  let currentSharePath = null;
+  let shareHandlersBound = false;
   const uiText = (key, values) => window.PromptGenI18n?.t(key, values) || key;
   const genreLabel = (genre) => uiText(`storyboard.genre.${String(genre).toLowerCase().replace(/[^a-z]/g, '')}`);
   const styleKey = (style) => ({
@@ -144,6 +147,8 @@
       };
     }
 
+    await initializeSharePanel();
+
     // Shots
     const shotList = document.getElementById('shotList');
     shotList.innerHTML = '';
@@ -210,6 +215,120 @@
         }
       });
     });
+  }
+
+  function formatShareDate(value) {
+    const date = new Date(value);
+    return window.PromptGenI18n?.formatDate(date, {
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric'
+    }) || date.toLocaleDateString();
+  }
+
+  function renderSharePanel(messageKey) {
+    const consent = document.getElementById('shareConsent');
+    const createButton = document.getElementById('createShareBtn');
+    const revokeButton = document.getElementById('revokeShareBtn');
+    const linkRow = document.getElementById('shareLinkRow');
+    const linkInput = document.getElementById('shareLinkInput');
+    const status = document.getElementById('shareStatus');
+    if (!consent || !createButton || !revokeButton || !linkRow || !linkInput || !status) return;
+
+    createButton.disabled = !consent.checked;
+    createButton.textContent = uiText(shareState.active
+      ? 'storyboardShare.control.rotate'
+      : 'storyboardShare.control.create');
+    revokeButton.hidden = !shareState.active;
+    linkRow.hidden = !currentSharePath;
+    linkInput.value = currentSharePath ? `${window.location.origin}${currentSharePath}` : '';
+
+    if (messageKey) {
+      status.textContent = uiText(messageKey, shareState.expiresAt
+        ? { date: formatShareDate(shareState.expiresAt) }
+        : {});
+    } else if (shareState.active) {
+      status.textContent = uiText('storyboardShare.control.active', {
+        date: formatShareDate(shareState.expiresAt)
+      });
+    } else {
+      status.textContent = '';
+    }
+  }
+
+  function bindShareHandlers() {
+    if (shareHandlersBound) return;
+    shareHandlersBound = true;
+    const consent = document.getElementById('shareConsent');
+    const createButton = document.getElementById('createShareBtn');
+    const revokeButton = document.getElementById('revokeShareBtn');
+    const copyButton = document.getElementById('copyShareBtn');
+    const linkInput = document.getElementById('shareLinkInput');
+
+    consent.addEventListener('change', () => renderSharePanel());
+
+    createButton.addEventListener('click', async () => {
+      if (!consent.checked) return;
+      createButton.disabled = true;
+      createButton.textContent = uiText('storyboardShare.control.creating');
+      try {
+        const data = await StoryboardAPI.createStoryboardShare(storyboardId);
+        if (!data?.success || !data.share?.path) throw new Error(data?.code || 'CREATE_FAILED');
+        currentSharePath = data.share.path;
+        shareState = {
+          active: true,
+          expiresAt: data.share.expiresAt,
+          createdAt: data.share.createdAt
+        };
+        consent.checked = false;
+        renderSharePanel('storyboardShare.control.created');
+      } catch (_) {
+        renderSharePanel('storyboardShare.error.create');
+      }
+    });
+
+    revokeButton.addEventListener('click', async () => {
+      if (!window.confirm(uiText('storyboardShare.control.unpublishConfirm'))) return;
+      revokeButton.disabled = true;
+      try {
+        const data = await StoryboardAPI.revokeStoryboardShare(storyboardId);
+        if (!data?.success) throw new Error(data?.code || 'REVOKE_FAILED');
+        shareState = { active: false, expiresAt: null };
+        currentSharePath = null;
+        consent.checked = false;
+        renderSharePanel('storyboardShare.control.unpublished');
+      } catch (_) {
+        renderSharePanel('storyboardShare.error.unpublish');
+      } finally {
+        revokeButton.disabled = false;
+      }
+    });
+
+    copyButton.addEventListener('click', async () => {
+      if (!linkInput.value) return;
+      try {
+        if (!navigator.clipboard) throw new Error('CLIPBOARD_UNAVAILABLE');
+        await navigator.clipboard.writeText(linkInput.value);
+        renderSharePanel('storyboardShare.control.copied');
+      } catch (_) {
+        linkInput.focus();
+        linkInput.select();
+        renderSharePanel('common.error.copy');
+      }
+    });
+  }
+
+  async function initializeSharePanel() {
+    bindShareHandlers();
+    try {
+      const data = await StoryboardAPI.getStoryboardShareStatus(storyboardId);
+      if (!data?.success) throw new Error(data?.code || 'STATUS_FAILED');
+      shareState = data.share || { active: false, expiresAt: null };
+      if (!shareState.active) currentSharePath = null;
+      renderSharePanel();
+    } catch (_) {
+      renderSharePanel('storyboardShare.error.status');
+    }
   }
 
   function escapeHtml(str) {

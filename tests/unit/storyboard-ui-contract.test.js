@@ -7,7 +7,8 @@ const ROOT = path.join(__dirname, '..', '..');
 const STORYBOARD_PAGES = [
   'storyboard.html',
   'storyboard-history.html',
-  'storyboard-result.html'
+  'storyboard-result.html',
+  'storyboard-share.html'
 ];
 
 function readPublic(file) {
@@ -17,7 +18,7 @@ function readPublic(file) {
 describe('Storyboard Functional Liquid Glass contract', () => {
   test.each(STORYBOARD_PAGES)('%s uses the isolated, deploy-versioned UI layer', file => {
     const html = readPublic(file);
-    expect(html).toContain('<body class="storyboard-shell">');
+    expect(html).toContain('<body class="storyboard-shell');
     expect(html).toContain('/style.css?v=__ASSET_VERSION__');
     expect(html).toContain('/storyboard.css?v=__ASSET_VERSION__');
 
@@ -68,8 +69,9 @@ describe('Storyboard Functional Liquid Glass contract', () => {
 
   test('Storyboard routes render asset placeholders instead of sending raw templates', () => {
     const source = fs.readFileSync(path.join(ROOT, 'server.js'), 'utf8');
-    for (const file of STORYBOARD_PAGES) {
+    for (const file of STORYBOARD_PAGES.filter(file => file !== 'storyboard-share.html')) {
       expect(source).toContain(`sendVersionedPage(res, '${file}')`);
     }
+    expect(source).toContain("versionedHtmlTemplates.get('storyboard-share.html')");
   });
 });

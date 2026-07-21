@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title data-i18n="meta.storyboardShare.title">Shared Storyboard — PromptGen</title>
+  <meta name="robots" content="noindex,nofollow,noarchive" />
+  <meta name="referrer" content="no-referrer" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/style.css?v=__ASSET_VERSION__" />
+  <link rel="stylesheet" href="/storyboard.css?v=__ASSET_VERSION__" />
+  <link rel="icon" href="/favicon.png" type="image/png" />
+</head>
+<body class="storyboard-shell storyboard-share-shell">
+  <nav id="navbar" class="navbar">
+    <div class="navbar__inner">
+      <a href="/" class="navbar__logo">
+        <img src="/favicon.png" width="32" height="32" alt="" />
+        PromptGen
+      </a>
+      <a href="/" class="storyboard-back-link" data-i18n="common.action.backHome">← Back to Home</a>
+    </div>
+  </nav>
+
+  <main class="storyboard-page storyboard-share-page">
+    <div class="container storyboard-share-container">
+      <div id="shareLoading" class="storyboard-card storyboard-card--center storyboard-share-state" role="status" aria-live="polite">
+        <div class="storyboard-icon" aria-hidden="true">🎬</div>
+        <p data-i18n="storyboardShare.loading">Loading shared storyboard…</p>
+      </div>
+
+      <div id="shareError" class="storyboard-card storyboard-card--center storyboard-error-state storyboard-share-state" role="alert" hidden>
+        <div class="storyboard-icon" aria-hidden="true">🔒</div>
+        <h1 data-i18n="storyboardShare.unavailable.title">This shared storyboard is unavailable</h1>
+        <p data-i18n="storyboardShare.unavailable.description">The link may have expired, been unpublished, or been copied incorrectly.</p>
+        <a href="/" class="btn btn--primary" data-i18n="common.action.backHome">← Back to Home</a>
+      </div>
+
+      <article id="shareResult" class="storyboard-share-result" hidden>
+        <header class="storyboard-share-heading">
+          <p class="storyboard-share-eyebrow" data-i18n="storyboardShare.eyebrow">UNLISTED STORYBOARD</p>
+          <h1 data-i18n="storyboardShare.title">Shared Storyboard Grid</h1>
+          <p data-i18n="storyboardShare.description">This page shows only the generated grid. The scenario, prompts, reference images, and creator identity are not shared.</p>
+        </header>
+
+        <div class="storyboard-result-meta" id="shareMeta" aria-label="Storyboard details" data-i18n-attr="aria-label:storyboardShare.details"></div>
+
+        <div class="storyboard-card storyboard-grid-card storyboard-share-grid-card">
+          <img id="shareGridImage" class="storyboard-grid-img" src="" alt="Shared storyboard grid" data-i18n-attr="alt:storyboardShare.gridAlt" />
+          <p class="storyboard-share-notice" role="note">
+            <span aria-hidden="true">ⓘ</span>
+            <span id="shareExpiryText"></span>
+          </p>
+        </div>
+      </article>
+    </div>
+  </main>
+
+  <script src="/i18n/runtime.js?v=__ASSET_VERSION__"></script>
+  <script src="/i18n/config.js?v=__ASSET_VERSION__"></script>
+  <script src="/i18n/locales/en.js?v=__ASSET_VERSION__"></script>
+  <script src="/i18n/locales/ko.js?v=__ASSET_VERSION__"></script>
+  <script src="/i18n/locales/ja.js?v=__ASSET_VERSION__"></script>
+  <script src="/i18n/locales/zh-CN.js?v=__ASSET_VERSION__"></script>
+  <script src="/i18n/locales/fr.js?v=__ASSET_VERSION__"></script>
+  <script src="/i18n/locales/ru.js?v=__ASSET_VERSION__"></script>
+  <script src="/i18n/init.js?v=__ASSET_VERSION__"></script>
+  <script src="/js/storyboard-share.js?v=__ASSET_VERSION__"></script>
+</body>
+</html>

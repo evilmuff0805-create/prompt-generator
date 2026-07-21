@@ -18,6 +18,7 @@ const { createClient } = require('@supabase/supabase-js');
 const rateLimit = require('express-rate-limit');
 const logger = require('./lib/logger');
 const { getPublicProductCatalog } = require('./lib/product-catalog');
+const { redactShareTokenPath } = require('./lib/storyboard-sharing');
 const {
   getAssetVersion,
   renderVersionedHtml,
@@ -35,7 +36,8 @@ const versionedHtmlTemplates = new Map([
   ['refund.html', fs.readFileSync(path.join(__dirname, 'public', 'refund.html'), 'utf8')],
   ['storyboard.html', fs.readFileSync(path.join(__dirname, 'public', 'storyboard.html'), 'utf8')],
   ['storyboard-history.html', fs.readFileSync(path.join(__dirname, 'public', 'storyboard-history.html'), 'utf8')],
-  ['storyboard-result.html', fs.readFileSync(path.join(__dirname, 'public', 'storyboard-result.html'), 'utf8')]
+  ['storyboard-result.html', fs.readFileSync(path.join(__dirname, 'public', 'storyboard-result.html'), 'utf8')],
+  ['storyboard-share.html', fs.readFileSync(path.join(__dirname, 'public', 'storyboard-share.html'), 'utf8')]
 ]);
 
 function sendVersionedPage(res, fileName) {
@@ -143,6 +145,14 @@ const analyticsLimiter = rateLimit({
   message: { accepted: false, code: 'ANALYTICS_RATE_LIMITED' }
 });
 
+const shareLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, code: 'SHARE_RATE_LIMITED' }
+});
+
 /* ── Correlation ID + structured API access log ── */
 app.use((req, res, next) => {
   const requestId = logger.createRequestId(req.headers['x-request-id']);
@@ -157,7 +167,7 @@ app.use((req, res, next) => {
     logger.info('http.request.completed', {
       requestId,
       method: req.method,
-      path: req.path,
+      path: redactShareTokenPath(req.path),
       statusCode: res.statusCode,
       durationMs: Math.round(durationMs)
     });
@@ -209,6 +219,9 @@ app.get(['/image-to-prompt', '/image-to-prompt/'], (req, res) => {
 app.get(['/terms.html', '/privacy.html', '/refund.html'], (req, res) => {
   sendVersionedPage(res, req.path.slice(1));
 });
+app.get('/storyboard-share.html', (req, res) => {
+  res.status(404).type('text').send('Not found');
+});
 app.use(express.static('public', {
   index: false,
   setHeaders: setStaticCacheHeaders
@@ -217,12 +230,16 @@ app.use(express.static('public', {
 const analyzeRouter = require('./routes/analyze');
 const paymentRouter = require('./routes/payment');
 const storyboardRouter = require('./routes/storyboard');
+const storyboardSharingRouter = require('./routes/storyboard-sharing');
+const publicStoryboardShareRouter = require('./routes/public-storyboard-share');
 const analyticsRouter = require('./routes/analytics');
 app.use('/api/analyze', analyzeLimiter);   // 분석 엔드포인트에 엄격한 제한
 app.use('/api/analytics', analyticsLimiter, analyticsRouter);
 app.use('/api', apiLimiter);               // 나머지 API 전체에 일반 제한
 app.use('/api', analyzeRouter);
 app.use('/api/payment', paymentRouter);
+app.use('/api/share', shareLimiter, publicStoryboardShareRouter);
+app.use('/api/storyboard', storyboardSharingRouter);
 app.use('/api/storyboard', storyboardRouter);
 
 app.get('/api/health', (req, res) => {
@@ -440,6 +457,16 @@ app.get('/storyboard/:id', (req, res) => {
   sendVersionedPage(res, 'storyboard-result.html');
 });
 
+app.get('/share/:token', (req, res) => {
+  res.setHeader('Cache-Control', 'private, no-store, max-age=0');
+  res.setHeader('X-Robots-Tag', 'noindex, nofollow, noarchive');
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  res.type('html').send(renderVersionedHtml(
+    versionedHtmlTemplates.get('storyboard-share.html'),
+    getAssetVersion()
+  ));
+});
+
 app.get('*', (req, res) => {
   sendLandingPage(req, res);
 });
@@ -448,7 +475,7 @@ app.use((err, req, res, next) => {
   logger.error('http.request.failed', {
     requestId: req.id,
     method: req.method,
-    path: req.path,
+    path: redactShareTokenPath(req.path),
     statusCode: err.status || 500,
     error: err
   });
