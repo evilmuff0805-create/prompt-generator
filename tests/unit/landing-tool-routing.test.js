@@ -37,7 +37,12 @@ describe('Landing and Image to Prompt routing contract', () => {
     expect(server).toContain("title: 'PromptGen — AI Storyboard Generator & Prompt Tools'");
     expect(server).toContain("title: 'Image to Prompt Generator — PromptGen'");
     expect(server).toContain("socialTitle: 'Image to Prompt Generator — PromptGen'");
+    expect(server).toContain("image: 'https://promptgen-ai.com/og-image-image-to-prompt.png'");
+    expect(server).toContain("imageAlt: 'PromptGen Image to Prompt analysis preview'");
     expect(server).toContain("structuredName: 'PromptGen Image to Prompt'");
+    expect(server).toContain('<meta property="og:image" content="${metadata.image}" />');
+    expect(server).toContain('<meta name="twitter:image" content="${metadata.image}" />');
+    expect(server).toContain('<meta property="og:image:alt" content="${metadata.imageAlt}" />');
 
     expect(sitemap.match(/https:\/\/promptgen-ai\.com\/image-to-prompt/g)).toHaveLength(1);
   });

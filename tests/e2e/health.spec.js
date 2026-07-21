@@ -33,6 +33,10 @@ test.describe('Health & Page Load', () => {
     await expect(page.locator('link[rel="canonical"]')).toHaveAttribute('href', 'https://promptgen-ai.com/');
     await expect(page.locator('meta[property="og:url"]')).toHaveAttribute('content', 'https://promptgen-ai.com/');
     await expect(page.locator('meta[property="og:title"]')).toHaveAttribute('content', 'PromptGen — Direct Your Story, Shot by Shot');
+    await expect(page.locator('meta[property="og:image"]')).toHaveAttribute('content', 'https://promptgen-ai.com/og-image-landing.png');
+    await expect(page.locator('meta[property="og:image:alt"]')).toHaveAttribute('content', 'PromptGen AI storyboard direction preview');
+    await expect(page.locator('meta[property="og:image:width"]')).toHaveAttribute('content', '1200');
+    await expect(page.locator('meta[property="og:image:height"]')).toHaveAttribute('content', '630');
     await expect(page.locator('meta[name="twitter:title"]')).toHaveAttribute('content', 'PromptGen — Direct Your Story, Shot by Shot');
     const landingStructuredData = JSON.parse(await page.locator('#productStructuredData').textContent());
     expect(landingStructuredData).toMatchObject({
@@ -52,6 +56,8 @@ test.describe('Health & Page Load', () => {
     await expect(page.locator('link[rel="canonical"]')).toHaveAttribute('href', 'https://promptgen-ai.com/image-to-prompt');
     await expect(page.locator('meta[property="og:url"]')).toHaveAttribute('content', 'https://promptgen-ai.com/image-to-prompt');
     await expect(page.locator('meta[property="og:title"]')).toHaveAttribute('content', 'Image to Prompt Generator — PromptGen');
+    await expect(page.locator('meta[property="og:image"]')).toHaveAttribute('content', 'https://promptgen-ai.com/og-image-image-to-prompt.png');
+    await expect(page.locator('meta[property="og:image:alt"]')).toHaveAttribute('content', 'PromptGen Image to Prompt analysis preview');
     await expect(page.locator('meta[name="twitter:title"]')).toHaveAttribute('content', 'Image to Prompt Generator — PromptGen');
     const imageToolStructuredData = JSON.parse(await page.locator('#productStructuredData').textContent());
     expect(imageToolStructuredData).toMatchObject({
@@ -152,6 +158,25 @@ test.describe('Health & Page Load', () => {
   test('인증 없이 /api/user/profile GET은 401을 반환해야 한다', async ({ request }) => {
     const res = await request.get('/api/user/profile');
     expect(res.status()).toBe(401);
+  });
+
+  test('도구별 소셜 미리보기 이미지는 실제 1200×630 PNG로 제공되어야 한다', async ({ request, page }) => {
+    for (const imagePath of [
+      '/og-image-landing.png',
+      '/og-image-image-to-prompt.png',
+      '/og-image-storyboard.png',
+      '/og-image-frame.png'
+    ]) {
+      const response = await request.get(imagePath);
+      expect(response.status()).toBe(200);
+      expect(response.headers()['content-type']).toContain('image/png');
+      expect((await response.body()).length).toBeGreaterThan(40 * 1024);
+    }
+
+    await page.goto('/storyboard');
+    await expect(page.locator('meta[property="og:image"]')).toHaveAttribute('content', 'https://promptgen-ai.com/og-image-storyboard.png');
+    await page.goto('/frame');
+    await expect(page.locator('meta[property="og:image"]')).toHaveAttribute('content', 'https://promptgen-ai.com/og-image-frame.png');
   });
 
   test('존재하지 않는 실행 스크립트와 정적 자원 경로는 랜딩 대신 404를 반환해야 한다', async ({ request }) => {

@@ -59,6 +59,8 @@ const PAGE_METADATA = Object.freeze({
     descriptionKey: 'meta.index.description',
     description: 'Turn scenarios and reference images into consistent 4- or 9-shot storyboards with Seedance-ready prompts. Includes Image to Prompt and Endframe Extractor.',
     canonical: 'https://promptgen-ai.com/',
+    image: 'https://promptgen-ai.com/og-image-landing.png',
+    imageAlt: 'PromptGen AI storyboard direction preview',
     socialTitle: 'PromptGen — Direct Your Story, Shot by Shot',
     structuredName: 'PromptGen',
     structuredDescription: 'Turn scenarios and reference images into consistent 4- or 9-shot storyboard grids with shot-by-shot Seedance-ready prompts. Includes Image to Prompt and Endframe Extractor.'
@@ -69,6 +71,8 @@ const PAGE_METADATA = Object.freeze({
     descriptionKey: 'meta.imageToPrompt.description',
     description: 'Turn any reference image into a precise, editable AI prompt for Midjourney, GPT Image 2, and Nano Banana Pro.',
     canonical: 'https://promptgen-ai.com/image-to-prompt',
+    image: 'https://promptgen-ai.com/og-image-image-to-prompt.png',
+    imageAlt: 'PromptGen Image to Prompt analysis preview',
     socialTitle: 'Image to Prompt Generator — PromptGen',
     structuredName: 'PromptGen Image to Prompt',
     structuredDescription: 'Turn a reference image into a precise, editable AI prompt for Midjourney, GPT Image 2, and Nano Banana Pro.'
@@ -89,9 +93,13 @@ function applyPageMetadata(html, metadata) {
     .replace(/<meta property="og:url" content="[^"]*" \/>/, `<meta property="og:url" content="${metadata.canonical}" />`)
     .replace(/<meta property="og:title" content="[^"]*" \/>/, `<meta property="og:title" content="${metadata.socialTitle}" />`)
     .replace(/<meta property="og:description" content="[^"]*" \/>/, `<meta property="og:description" content="${metadata.description}" />`)
+    .replace(/<meta property="og:image" content="[^"]*" \/>/, `<meta property="og:image" content="${metadata.image}" />`)
+    .replace(/<meta property="og:image:alt" content="[^"]*" \/>/, `<meta property="og:image:alt" content="${metadata.imageAlt}" />`)
     .replace(/<meta name="twitter:url" content="[^"]*" \/>/, `<meta name="twitter:url" content="${metadata.canonical}" />`)
     .replace(/<meta name="twitter:title" content="[^"]*" \/>/, `<meta name="twitter:title" content="${metadata.socialTitle}" />`)
     .replace(/<meta name="twitter:description" content="[^"]*" \/>/, `<meta name="twitter:description" content="${metadata.description}" />`)
+    .replace(/<meta name="twitter:image" content="[^"]*" \/>/, `<meta name="twitter:image" content="${metadata.image}" />`)
+    .replace(/<meta name="twitter:image:alt" content="[^"]*" \/>/, `<meta name="twitter:image:alt" content="${metadata.imageAlt}" />`)
     .replace(/("name": ")[^"]*(",)/, `$1${metadata.structuredName}$2`)
     .replace(/("url": ")[^"]*(",)/, `$1${metadata.canonical}$2`)
     .replace(/("description": ")[^"]*(",)/, `$1${metadata.structuredDescription}$2`);
