@@ -181,10 +181,13 @@
         container.replaceChildren();
         google.accounts.id.renderButton(container, {
           type: 'standard',
-          theme: 'filled_black',
-          size: 'large',
+          // Google automatically turns a large returning-user button into a
+          // personalized control that exposes the account name and email.
+          // Medium buttons remain the simple, generic sign-in control.
+          theme: 'outline',
+          size: 'medium',
           text: 'signin_with',
-          shape: 'pill',
+          shape: 'rectangular',
           logo_alignment: 'left',
           width,
           locale
