@@ -10,8 +10,11 @@
   }
 
   var SESSION_KEY = 'promptgen_analytics_session_v1';
+  var AUTH_INTENT_KEY = 'promptgen_analytics_auth_intent_v1';
+  var AUTH_INTENT_MAX_AGE_MS = 30 * 60 * 1000;
   var authToken = null;
   var memorySessionId = null;
+  var memoryAuthIntent = null;
 
   function uuid() {
     if (window.crypto && typeof window.crypto.randomUUID === 'function') {
@@ -50,8 +53,54 @@
     return path;
   }
 
+  function rememberAuthIntent(properties) {
+    var intent = {
+      startedAt: Date.now(),
+      surface: typeof properties?.surface === 'string' ? properties.surface : null,
+      provider: typeof properties?.provider === 'string' ? properties.provider : null
+    };
+    memoryAuthIntent = intent;
+    try {
+      window.sessionStorage.setItem(AUTH_INTENT_KEY, JSON.stringify(intent));
+    } catch (_) {
+      // The in-memory fallback still protects this document from duplicate events.
+    }
+  }
+
+  function consumeAuthIntent(fallbackProperties) {
+    var intent = memoryAuthIntent;
+    memoryAuthIntent = null;
+
+    try {
+      var stored = window.sessionStorage.getItem(AUTH_INTENT_KEY);
+      window.sessionStorage.removeItem(AUTH_INTENT_KEY);
+      if (stored) intent = JSON.parse(stored);
+    } catch (_) {
+      // Invalid or unavailable session storage fails closed below.
+    }
+
+    if (!intent || typeof intent.startedAt !== 'number') return null;
+    var age = Date.now() - intent.startedAt;
+    if (age < 0 || age > AUTH_INTENT_MAX_AGE_MS) return null;
+
+    fallbackProperties = fallbackProperties || {};
+    return {
+      surface: typeof intent.surface === 'string' ? intent.surface : fallbackProperties.surface,
+      provider: typeof intent.provider === 'string' ? intent.provider : fallbackProperties.provider
+    };
+  }
+
   function track(eventName, properties, options) {
     options = options || {};
+    properties = properties || {};
+
+    if (eventName === 'signup_started') {
+      rememberAuthIntent(properties);
+    } else if (eventName === 'auth_completed') {
+      properties = consumeAuthIntent(properties);
+      if (!properties) return Promise.resolve(false);
+    }
+
     var token = options.token || authToken;
     var headers = { 'content-type': 'application/json' };
     if (token) headers.authorization = 'Bearer ' + token;
@@ -66,7 +115,7 @@
         eventName: eventName,
         sessionId: sessionId(),
         pagePath: pagePath(),
-        properties: properties || {}
+        properties: properties
       })
     }).then(function (response) {
       return response.ok;
