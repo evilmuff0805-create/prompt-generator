@@ -8,8 +8,14 @@ jest.mock('../../lib/storyboard-processor', () => ({
   processStoryboardJob: jest.fn()
 }));
 
+jest.mock('../../lib/incident-reporter', () => ({
+  reportIncident: jest.fn(),
+  resolveIncident: jest.fn()
+}));
+
 const jobStore = require('../../lib/storyboard-job-store');
 const { processStoryboardJob } = require('../../lib/storyboard-processor');
+const { resolveIncident } = require('../../lib/incident-reporter');
 const { StoryboardWorker, envInt } = require('../../lib/storyboard-worker');
 
 describe('StoryboardWorker', () => {
@@ -19,6 +25,7 @@ describe('StoryboardWorker', () => {
     process.env.STORYBOARD_WORKER_LEASE_SECONDS = '180';
     process.env.STORYBOARD_WORKER_POLL_MS = '60000';
     delete process.env.STORYBOARD_DURABLE_WORKER_ENABLED;
+    resolveIncident.mockResolvedValue({ checked: true, resolved: false });
   });
 
   afterEach(() => {
@@ -50,7 +57,44 @@ describe('StoryboardWorker', () => {
       jobs[0],
       { leaseSeconds: 180 }
     );
+    expect(resolveIncident).toHaveBeenCalledWith(
+      'storyboard-worker:WORKER_TICK_FAILED:claim-loop'
+    );
 
+    await worker.stop(1);
+  });
+
+  test('checks stale tick recovery once and retries only after a failed check', async () => {
+    jobStore.claimJobs.mockResolvedValue([]);
+    resolveIncident
+      .mockResolvedValueOnce({ checked: false, resolved: false })
+      .mockResolvedValueOnce({ checked: true, resolved: false });
+
+    const worker = new StoryboardWorker();
+    worker.running = true;
+
+    await worker._tick();
+    await worker._tick();
+    await worker._tick();
+
+    expect(resolveIncident).toHaveBeenCalledTimes(2);
+    await worker.stop(1);
+  });
+
+  test('re-opens the recovery check after a claim-loop failure', async () => {
+    jobStore.claimJobs
+      .mockResolvedValueOnce([])
+      .mockRejectedValueOnce(new Error('temporary claim failure'))
+      .mockResolvedValueOnce([]);
+
+    const worker = new StoryboardWorker();
+    worker.running = true;
+
+    await worker._tick();
+    await expect(worker._tick()).rejects.toThrow('temporary claim failure');
+    await worker._tick();
+
+    expect(resolveIncident).toHaveBeenCalledTimes(2);
     await worker.stop(1);
   });
 
