@@ -104,4 +104,32 @@ describe('incident reporter', () => {
       notified: false
     });
   });
+
+  test('resolves a recovered incident through the service-role RPC', async () => {
+    const client = {
+      rpc: jest.fn().mockResolvedValue({ data: true, error: null })
+    };
+    reporter._setAdminClientForTests(client);
+
+    await expect(reporter.resolveIncident('worker:FAILED:claim')).resolves.toEqual({
+      checked: true,
+      resolved: true,
+      fingerprint: 'worker:FAILED:claim'
+    });
+    expect(client.rpc).toHaveBeenCalledWith('resolve_ops_incident', {
+      p_fingerprint: 'worker:FAILED:claim'
+    });
+  });
+
+  test('keeps product work fail-open when incident resolution is unavailable', async () => {
+    reporter._setAdminClientForTests({
+      rpc: jest.fn().mockResolvedValue({ data: null, error: { message: 'unavailable' } })
+    });
+
+    await expect(reporter.resolveIncident('worker:FAILED:claim')).resolves.toEqual({
+      checked: false,
+      resolved: false,
+      fingerprint: 'worker:FAILED:claim'
+    });
+  });
 });

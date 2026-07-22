@@ -57,6 +57,8 @@ Application events are emitted as one-line JSON with:
 
 Critical operational failures are deduplicated into `ops_incidents` through the service-role-only `record_ops_incident` RPC. A Supabase Cron job runs `scan_ops_health()` every five minutes and detects stuck Storyboard jobs, missing refunds, and overdue cleanup.
 
+A recovered Storyboard claim loop closes its matching open incident through the service-role-only `resolve_ops_incident` RPC. The worker checks once after startup and again after a claim-loop failure, so recovery does not add a query to every poll and the original incident row remains available for audit.
+
 Set `OPS_ALERT_WEBHOOK_URL` to forward the first open critical occurrence. Supported formats are `generic`, `slack`, and `discord`. The incident remains in Supabase even when webhook delivery fails.
 
 ### Cleanup
