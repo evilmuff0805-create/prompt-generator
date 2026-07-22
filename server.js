@@ -204,17 +204,18 @@ app.use((req, res, next) => {
   // while protecting the production custom domain and its future subdomains.
   res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
   res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.setHeader('Cross-Origin-Opener-Policy', 'same-origin-allow-popups');
   res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
   res.setHeader(
     'Content-Security-Policy',
     "default-src 'self'; " +
-    "script-src 'self' https://cdn.jsdelivr.net https://cdn.paddle.com https://*.paddle.com https://static.cloudflareinsights.com; " +
-    "style-src 'self' 'unsafe-inline' https://cdn.paddle.com https://*.paddle.com https://fonts.googleapis.com; " +
+    "script-src 'self' https://accounts.google.com/gsi/client https://cdn.jsdelivr.net https://cdn.paddle.com https://*.paddle.com https://static.cloudflareinsights.com; " +
+    "style-src 'self' 'unsafe-inline' https://accounts.google.com/gsi/style https://cdn.paddle.com https://*.paddle.com https://fonts.googleapis.com; " +
     "font-src 'self' https://fonts.gstatic.com https://cdn.paddle.com https://*.paddle.com; " +
     "img-src 'self' data: blob: https://*.paddle.com https://cdn.paddle.com https://*.supabase.co https://*.googleusercontent.com; " +
     "media-src 'self' blob:; " +
-    "connect-src 'self' https://*.supabase.co https://*.paddle.com https://cdn.paddle.com; " +
-    "frame-src https://*.paddle.com; " +
+    "connect-src 'self' https://accounts.google.com/gsi/ https://*.supabase.co https://*.paddle.com https://cdn.paddle.com; " +
+    "frame-src https://accounts.google.com/gsi/ https://*.paddle.com; " +
     "frame-ancestors 'none';"
   );
   next();

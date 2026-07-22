@@ -4,27 +4,30 @@ const { test, expect } = require('@playwright/test');
 
 test.describe('OAuth and plan access contracts', () => {
   test('main page exposes the Google sign-in entry point without starting OAuth', async ({ page }) => {
+    await page.route('https://accounts.google.com/**', route => route.abort());
     await page.goto('/');
     await page.locator('#loginNavBtn').click();
 
     const modal = page.locator('#loginModal');
     await expect(modal).toHaveAttribute('aria-hidden', 'false');
     await expect(modal.locator('#googleLoginBtn')).toBeVisible();
-    await expect(modal.locator('#googleLoginBtn')).toContainText('Sign in with Google');
+    await expect(modal.locator('#googleLoginBtn .google-auth-button__fallback')).toContainText('Sign in with Google');
   });
 
   test('Endframe remains a free, local-only tool behind sign-in', async ({ page }) => {
+    await page.route('https://accounts.google.com/**', route => route.abort());
     const response = await page.goto('/frame');
     expect(response.status()).toBe(200);
 
     await expect(page.getByRole('heading', { name: 'Endframe Extractor' })).toBeVisible();
     await expect(page.locator('#frameAuthGate')).toContainText('completely free');
     await expect(page.locator('#frameAuthGate')).toContainText('no credits needed');
-    await expect(page.locator('#frameAuthGateSignIn')).toContainText('Sign in with Google');
+    await expect(page.locator('#frameAuthGateSignIn .google-auth-button__fallback')).toContainText('Sign in with Google');
     await expect(page.getByText('No upload — processes locally in your browser')).toBeAttached();
   });
 
   test('Storyboard public config and paid-plan UI use the same cost contract', async ({ page, request }) => {
+    await page.route('https://accounts.google.com/**', route => route.abort());
     const configResponse = await request.get('/api/storyboard/config');
     expect(configResponse.status()).toBe(200);
     const config = await configResponse.json();
@@ -41,7 +44,7 @@ test.describe('OAuth and plan access contracts', () => {
     await expect(page.locator('#planGate')).toContainText('Pro Plan Required');
     await expect(page.locator('#planGate [data-i18n="storyboard.plan.description"]'))
       .toContainText(String(config.storyboardCost));
-    await expect(page.locator('#loginBtn')).toContainText('Sign In with Google');
+    await expect(page.locator('#loginBtn .google-auth-button__fallback')).toContainText('Sign In with Google');
   });
 
   test('Storyboard mutation and history APIs reject anonymous access', async ({ request }) => {

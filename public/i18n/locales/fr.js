@@ -352,6 +352,7 @@
     'auth.credits.title': 'Crédits insuffisants',
     'auth.credits.description': 'Tous vos crédits ont été utilisés. Ajoutez-en ou passez à une offre supérieure.',
     'auth.inAppBrowserWarning': 'Ouvrez cette page dans Chrome ou Safari. La connexion Google n’est pas prise en charge dans les navigateurs intégrés.',
+    'auth.googleUnavailable': 'La connexion Google est temporairement indisponible. Réessayez.',
     'account.credits.remaining': 'Crédits : {remaining}',
     'account.credits.remainingOfTotal': 'Crédits : {remaining} / {total}',
     'account.dailyUsage': 'Aujourd’hui : {used}/{total} utilisé',

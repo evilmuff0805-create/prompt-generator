@@ -47,17 +47,11 @@
       await renderAuthState();
     });
 
-    async function startStoryboardSignIn() {
-      window.PromptGenAnalytics?.track('signup_started', {
-        surface: 'storyboard',
-        provider: 'google'
-      });
-      await StoryboardAPI.signInWithGoogle();
-    }
+    StoryboardAPI.mountGoogleSignIn({
+      buttonIds: ['loginBtn', 'googleLoginBtn'],
+      surface: 'storyboard'
+    });
 
-    // Login button
-    document.getElementById('loginBtn')?.addEventListener('click', startStoryboardSignIn);
-    document.getElementById('googleLoginBtn')?.addEventListener('click', startStoryboardSignIn);
     document.getElementById('modalClose')?.addEventListener('click', () => {
       document.getElementById('loginModal').setAttribute('aria-hidden', 'true');
     });
