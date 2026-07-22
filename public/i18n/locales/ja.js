@@ -352,6 +352,7 @@
     'auth.credits.title': 'クレジット不足',
     'auth.credits.description': 'クレジットを使い切りました。追加するか、プランをアップグレードしてください。',
     'auth.inAppBrowserWarning': 'ChromeまたはSafariでこのページを開いてください。アプリ内ブラウザではGoogleログインを利用できません。',
+    'auth.googleUnavailable': 'Googleログインを一時的に利用できません。もう一度お試しください。',
     'account.credits.remaining': 'クレジット：{remaining}',
     'account.credits.remainingOfTotal': 'クレジット：{remaining} / {total}',
     'account.dailyUsage': '本日 {used}/{total} 回使用',

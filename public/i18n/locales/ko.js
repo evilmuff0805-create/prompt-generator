@@ -354,6 +354,7 @@
     'auth.credits.title': '크레딧 부족',
     'auth.credits.description': '크레딧을 모두 사용했습니다. 크레딧을 추가하거나 플랜을 업그레이드하세요.',
     'auth.inAppBrowserWarning': 'Chrome 또는 Safari에서 이 페이지를 열어 주세요. 인앱 브라우저에서는 Google 로그인을 지원하지 않습니다.',
+    'auth.googleUnavailable': 'Google 로그인을 일시적으로 사용할 수 없습니다. 다시 시도해 주세요.',
     'account.credits.remaining': '크레딧: {remaining}',
     'account.credits.remainingOfTotal': '크레딧: {remaining} / {total}',
     'account.dailyUsage': '오늘 {used}/{total}회 사용',

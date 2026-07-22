@@ -20,10 +20,10 @@ async function getCurrentUser() {
   return session?.user || null;
 }
 
-async function signInWithGoogle() {
-  await _sbClient.auth.signInWithOAuth({
-    provider: 'google',
-    options: { redirectTo: window.location.origin + '/storyboard' }
+function mountGoogleSignIn(options = {}) {
+  return window.PromptGenGoogleAuth?.mount({
+    ...options,
+    client: _sbClient
   });
 }
 
@@ -134,7 +134,7 @@ async function getUserProfile() {
 }
 
 window.StoryboardAPI = {
-  getAuthToken, getCurrentUser, signInWithGoogle, signOut, onAuthStateChange,
+  getAuthToken, getCurrentUser, mountGoogleSignIn, signOut, onAuthStateChange,
   generateStoryboard, getStatus, getStoryboard, listStoryboards, deleteStoryboard,
   getStoryboardShareStatus, createStoryboardShare, revokeStoryboardShare,
   uploadReference, getUserProfile, getConfig

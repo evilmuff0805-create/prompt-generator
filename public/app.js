@@ -706,19 +706,11 @@ function isInAppBrowser() {
 }
 
 /* ── Google Sign-In ── */
-async function signInWithGoogle() {
-  if (isInAppBrowser()) return; // blocked; warning already shown in modal
-  window.PromptGenAnalytics?.track('signup_started', {
-    surface: 'home',
-    provider: 'google'
-  });
-  await sbClient.auth.signInWithOAuth({
-    provider: 'google',
-    options: { redirectTo: window.location.origin }
-  });
-}
-
-document.getElementById('googleLoginBtn').addEventListener('click', signInWithGoogle);
+window.PromptGenGoogleAuth?.mount({
+  client: sbClient,
+  buttonIds: ['googleLoginBtn', 'authRequiredGoogleBtn'],
+  surface: 'home'
+});
 
 /* ══════════════════════════════════════
    AUTH REQUIRED MODAL
@@ -739,10 +731,6 @@ function closeAuthRequiredModal() {
 
 authRequiredClose.addEventListener('click', closeAuthRequiredModal);
 authRequiredModal.addEventListener('click', e => { if (e.target === authRequiredModal) closeAuthRequiredModal(); });
-authRequiredGoogleBtn.addEventListener('click', () => {
-  closeAuthRequiredModal();
-  signInWithGoogle();
-});
 
 /* ── In-App Browser Warning Injection ── */
 (function () {
@@ -754,11 +742,11 @@ authRequiredGoogleBtn.addEventListener('click', () => {
     notice.className = 'inapp-warning';
     notice.setAttribute('data-i18n', 'auth.inAppBrowserWarning');
     notice.textContent = uiText('auth.inAppBrowserWarning');
-    const btn = modal.querySelector('.btn--google');
+    const btn = modal.querySelector('.google-auth-button');
     if (btn) {
       btn.parentNode.insertBefore(notice, btn);
-      btn.disabled = true;
       btn.setAttribute('aria-disabled', 'true');
+      btn.classList.add('google-auth-button--disabled');
     }
   }
 

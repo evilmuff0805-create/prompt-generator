@@ -352,6 +352,7 @@
     'auth.credits.title': 'Недостаточно кредитов',
     'auth.credits.description': 'Все кредиты использованы. Добавьте кредиты или повысьте тариф.',
     'auth.inAppBrowserWarning': 'Откройте страницу в Chrome или Safari. Встроенные браузеры не поддерживают вход через Google.',
+    'auth.googleUnavailable': 'Вход через Google временно недоступен. Повторите попытку.',
     'account.credits.remaining': 'Кредиты: {remaining}',
     'account.credits.remainingOfTotal': 'Кредиты: {remaining} / {total}',
     'account.dailyUsage': 'Сегодня использовано {used}/{total}',

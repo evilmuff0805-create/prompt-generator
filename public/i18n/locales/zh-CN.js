@@ -352,6 +352,7 @@
     'auth.credits.title': '积分不足',
     'auth.credits.description': '积分已用完。请添加积分或升级方案。',
     'auth.inAppBrowserWarning': '请使用 Chrome 或 Safari 打开此页面。应用内浏览器不支持 Google 登录。',
+    'auth.googleUnavailable': 'Google 登录暂时不可用。请重试。',
     'account.credits.remaining': '积分：{remaining}',
     'account.credits.remainingOfTotal': '积分：{remaining} / {total}',
     'account.dailyUsage': '今天已使用 {used}/{total} 次',

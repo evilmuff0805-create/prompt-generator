@@ -24,6 +24,7 @@ test.beforeEach(async ({ page }) => {
           getSession: async () => ({ data: { session: fakeSession } }),
           onAuthStateChange: () => ({ data: { subscription: { unsubscribe() {} } } }),
           signInWithOAuth: async () => ({ error: null }),
+          signInWithIdToken: async () => ({ error: null }),
           signOut: async () => ({ error: null }),
         },
       }),

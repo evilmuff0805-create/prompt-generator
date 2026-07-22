@@ -242,7 +242,15 @@ test.describe('보안 헤더', () => {
 
   test('Content-Security-Policy 헤더가 있어야 한다', async ({ request }) => {
     const res = await request.get('/');
-    expect(res.headers()['content-security-policy']).toBeTruthy();
+    const policy = res.headers()['content-security-policy'];
+    expect(policy).toBeTruthy();
+    expect(policy).toContain('https://accounts.google.com/gsi/client');
+    expect(policy).toContain('https://accounts.google.com/gsi/');
+  });
+
+  test('Google 로그인 팝업을 위한 COOP 헤더가 있어야 한다', async ({ request }) => {
+    const res = await request.get('/');
+    expect(res.headers()['cross-origin-opener-policy']).toBe('same-origin-allow-popups');
   });
 
   test('HSTS 헤더가 장기 max-age와 하위 도메인 보호를 포함해야 한다', async ({ request }) => {

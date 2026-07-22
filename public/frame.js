@@ -72,20 +72,16 @@ const sbClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
     }
   }
 
-  // Sign in with Google — redirect back to /frame
-  function signIn() {
-    window.PromptGenAnalytics?.track('signup_started', {
-      surface: 'endframe',
-      provider: 'google'
-    });
-    sbClient.auth.signInWithOAuth({
-      provider: 'google',
-      options: { redirectTo: window.location.origin + '/frame' }
-    });
-  }
+  window.PromptGenGoogleAuth?.mount({
+    client: sbClient,
+    buttonIds: ['frameAuthGateSignIn'],
+    surface: 'endframe'
+  });
 
-  if (authGateSignIn) authGateSignIn.addEventListener('click', signIn);
-  if (loginNavBtn)    loginNavBtn.addEventListener('click', function (e) { e.preventDefault(); signIn(); });
+  if (loginNavBtn) loginNavBtn.addEventListener('click', function (e) {
+    e.preventDefault();
+    showAuthGate();
+  });
 
   // Init auth state
   (async function () {

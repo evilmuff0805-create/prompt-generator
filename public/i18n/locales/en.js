@@ -372,6 +372,7 @@
     'auth.credits.title': 'Insufficient Credits',
     'auth.credits.description': 'All credits have been used up. Add more credits or upgrade your plan.',
     'auth.inAppBrowserWarning': 'Please open this page in Chrome or Safari. Google login is not supported in in-app browsers.',
+    'auth.googleUnavailable': 'Google sign-in is temporarily unavailable. Please try again.',
     'account.credits.remaining': 'Credits: {remaining}',
     'account.credits.remainingOfTotal': 'Credits: {remaining} / {total}',
     'account.dailyUsage': 'Today {used}/{total} used',
