@@ -12,7 +12,7 @@ Never add these values to event properties:
 - full URLs, query strings, fragments, or raw referrers
 - Paddle transaction/customer identifiers
 
-The browser stores only one random session UUID in `sessionStorage`. It is removed with the tab session and is not a persistent cross-session identifier. `Do Not Track: 1` disables browser event collection.
+The browser stores a random session UUID and a short-lived OAuth intent marker in `sessionStorage`. The marker contains only the sign-in surface, provider, and start time; it expires after 30 minutes and is consumed on the first completion attempt. Both values end with the tab session and are not persistent cross-session identifiers. `Do Not Track: 1` disables browser event collection.
 
 ## Taxonomy
 
@@ -20,7 +20,7 @@ Client navigation and intent:
 
 - `page_viewed`
 - `signup_started`
-- `auth_completed` — a successful sign-in, including returning users
+- `auth_completed` — one successful completion for an explicit sign-in intent in the same tab, including returning users; existing-session confirmation events are ignored
 - `analysis_started`
 - `storyboard_started`
 - `checkout_started`
