@@ -77,6 +77,13 @@ describe('PromptGen Google direct sign-in', () => {
     expect(googleConfig.nonce).toMatch(/^[a-f0-9]{64}$/);
     expect(googleConfig.use_fedcm_for_prompt).toBe(true);
     expect(rendered).toHaveLength(1);
+    expect(rendered[0].config).toMatchObject({
+      type: 'standard',
+      theme: 'outline',
+      size: 'medium',
+      text: 'signin_with',
+      shape: 'rectangular'
+    });
 
     await googleConfig.callback({ credential: 'google-id-token' });
     expect(signInWithIdToken).toHaveBeenCalledWith({
