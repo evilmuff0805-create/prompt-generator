@@ -54,7 +54,7 @@ function getPlanTotalCredits(plan) {
 }
 
 function getAnalysisCreditCost() {
-  return Number(productCatalog?.analysisCreditCost) || 10;
+  return Number(productCatalog?.analysisCreditCost) || 2;
 }
 
 function formatUsd(value) {
@@ -84,7 +84,10 @@ function hydrateProductCatalog(catalog) {
       }));
       setCatalogText(card, 'storyboards', uiText('pricing.feature.storyboards', {
         count: window.PromptGenI18n?.formatNumber(plan.storyboards) || plan.storyboards,
-        credits: window.PromptGenI18n?.formatNumber(catalog.storyboardCreditCost) || catalog.storyboardCreditCost
+        credits: window.PromptGenI18n?.formatNumber(catalog.storyboardCreditCost) || catalog.storyboardCreditCost,
+        referenceCredits: window.PromptGenI18n?.formatNumber(catalog.storyboardCreditPolicy?.perReferenceCost || 5)
+          || catalog.storyboardCreditPolicy?.perReferenceCost
+          || 5
       }));
       setCatalogText(card, 'analyses', uiText('pricing.feature.analyses', {
         count: window.PromptGenI18n?.formatNumber(plan.imageAnalyses) || plan.imageAnalyses,
@@ -139,7 +142,8 @@ const state = {
   result: null,
   bracketValues: {},
   activeChip: null,
-  analyzing: false
+  analyzing: false,
+  analysisOperationId: null
 };
 
 let currentUserPlan = null;
@@ -221,6 +225,7 @@ function handleFileSelect(file) {
   }
   hideError();
   state.file = file;
+  state.analysisOperationId = crypto.randomUUID();
   const url = URL.createObjectURL(file);
   previewImg.src = url;
   previewContainer.classList.add('visible');
@@ -230,6 +235,7 @@ function handleFileSelect(file) {
 
 function clearFile() {
   state.file = null;
+  state.analysisOperationId = null;
   fileInput.value = '';
   previewImg.src = '';
   previewContainer.classList.remove('visible');
@@ -266,7 +272,10 @@ analyzeBtn?.addEventListener('click', async () => {
     const res = await fetch('/api/analyze', {
       method: 'POST',
       body: formData,
-      headers: { 'Authorization': `Bearer ${session.access_token}` }
+      headers: {
+        'Authorization': `Bearer ${session.access_token}`,
+        'X-Analysis-Operation-Id': state.analysisOperationId || crypto.randomUUID()
+      }
     });
 
     if (res.status === 401) {
@@ -295,6 +304,7 @@ analyzeBtn?.addEventListener('click', async () => {
     });
 
     renderResults(data);
+    state.analysisOperationId = null;
 
     // Refresh usage display
     await refreshUserProfile(session);

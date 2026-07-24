@@ -107,7 +107,7 @@ describe('@google/genai request contract', () => {
       config: {
         systemInstruction: expect.stringContaining('expert AI image prompt engineer'),
         temperature: 0.3,
-        maxOutputTokens: 16000
+        maxOutputTokens: 5000
       }
     });
 
@@ -115,7 +115,7 @@ describe('@google/genai request contract', () => {
     expect(suggestionsRequest).toEqual({
       model: 'gemini-3.1-flash-lite',
       contents: expect.stringContaining('generate 3–5 alternative replacement values'),
-      config: { temperature: 0.8, maxOutputTokens: 12000 }
+      config: { temperature: 0.8, maxOutputTokens: 2200 }
     });
 
     const serializedRequests = JSON.stringify(mockGenerateContent.mock.calls);
@@ -299,7 +299,7 @@ describe('@google/genai request contract', () => {
     const analysisConfig = mockGenerateContent.mock.calls[0][0].config;
     expect(analysisConfig).toMatchObject({
       temperature: 0.3,
-      maxOutputTokens: 16000,
+      maxOutputTokens: 5000,
       responseMimeType: 'application/json',
       responseJsonSchema: {
         type: 'object',
@@ -312,7 +312,7 @@ describe('@google/genai request contract', () => {
     const suggestionsConfig = mockGenerateContent.mock.calls[1][0].config;
     expect(suggestionsConfig).toMatchObject({
       temperature: 0.8,
-      maxOutputTokens: 12000,
+      maxOutputTokens: 2200,
       responseMimeType: 'application/json',
       responseJsonSchema: {
         type: 'object',

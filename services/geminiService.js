@@ -658,7 +658,9 @@ Elements:
 ${bracketList}`;
 
   try {
-    const config = { temperature: 0.8, maxOutputTokens: 12000 };
+    // Cost guard for the 2-credit policy. Thirty compact suggestion groups fit
+    // comfortably inside this structured-output ceiling.
+    const config = { temperature: 0.8, maxOutputTokens: 2200 };
     if (structuredOutput) {
       config.responseMimeType = 'application/json';
       config.responseJsonSchema = createSuggestionsResponseJsonSchema(activeBrackets.length);
@@ -825,7 +827,9 @@ async function analyzeImage(base64Image, mimeType, options = {}) {
           ? `${SYSTEM_PROMPT}${STRUCTURED_OUTPUT_INSTRUCTION}`
           : SYSTEM_PROMPT,
         temperature: 0.3,
-        maxOutputTokens: 16000
+        // The response schema is compact; this ceiling preserves detail while
+        // preventing pathological output from consuming the full margin.
+        maxOutputTokens: 5000
       };
       if (structuredOutput) {
         config.responseMimeType = 'application/json';

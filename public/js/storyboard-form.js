@@ -6,6 +6,27 @@
   let selectedStyle = 'Pixar 3D';
   let selectedCuts = 9;
   let referenceImageIds = [];
+  let creditPolicy = { baseCost: 30, perReferenceCost: 5, maxReferences: 4 };
+
+  function updateCostBadge() {
+    const badge = document.getElementById('storyboardCostBadge');
+    if (!badge) return;
+    const referenceCount = referenceImageIds.length;
+    const total = creditPolicy.baseCost + (referenceCount * creditPolicy.perReferenceCost);
+    badge.textContent = referenceCount > 0
+      ? uiText('storyboard.cost.withReferences', {
+          total,
+          base: creditPolicy.baseCost,
+          references: referenceCount,
+          referenceCredits: creditPolicy.perReferenceCost
+        })
+      : uiText('storyboard.cost.credits', { credits: total });
+  }
+
+  function setCreditPolicy(nextPolicy = {}) {
+    creditPolicy = { ...creditPolicy, ...nextPolicy };
+    updateCostBadge();
+  }
 
   function initForm({ onSubmit }) {
     const form = document.getElementById('storyboardForm');
@@ -66,8 +87,11 @@
     StoryboardUpload.initUpload({
       onRefsChange: (ids) => {
         referenceImageIds = ids;
+        updateCostBadge();
       }
     });
+    updateCostBadge();
+    document.addEventListener('promptgen:localechange', updateCostBadge);
 
     // Form submit
     form.addEventListener('submit', async (e) => {
@@ -99,5 +123,5 @@
     }
   }
 
-  window.StoryboardForm = { initForm };
+  window.StoryboardForm = { initForm, setCreditPolicy };
 })();

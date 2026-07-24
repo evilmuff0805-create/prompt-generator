@@ -5,23 +5,32 @@
   let currentUser = null;
   let _rendering = false;
   let _pendingRender = false;
-  // Storyboard credit cost for display. Safe default matches the backend env
-  // fallback; overwritten by /api/storyboard/config so env changes need no deploy.
-  let storyboardCost = 120;
+  // Safe static fallback; overwritten by /api/storyboard/config.
+  let storyboardCreditPolicy = {
+    baseCost: 30,
+    perReferenceCost: 5,
+    maxReferences: 4,
+    minCost: 30,
+    maxCost: 50
+  };
   let productCatalog = null;
   let lastProfile = null;
 
   async function loadConfig() {
     const cfg = await StoryboardAPI.getConfig();
     if (cfg && typeof cfg.storyboardCost === 'number') {
-      storyboardCost = cfg.storyboardCost;
+      storyboardCreditPolicy = {
+        ...storyboardCreditPolicy,
+        ...(cfg.storyboardCreditPolicy || cfg.catalog?.storyboardCreditPolicy || {}),
+        baseCost: cfg.storyboardCreditPolicy?.baseCost
+          || cfg.catalog?.storyboardCreditPolicy?.baseCost
+          || cfg.storyboardCost
+      };
       productCatalog = cfg.catalog || null;
-      document.querySelectorAll('[data-i18n-vars*="credits:"]').forEach(el => {
-        el.setAttribute('data-i18n-vars', `credits:${storyboardCost}`);
-      });
+      StoryboardForm.setCreditPolicy(storyboardCreditPolicy);
       window.PromptGenI18n?.apply(document);
     }
-    // On failure the static "120" defaults stay — no blanks, no NaN.
+    // On failure the static 30 + 5/reference fallback remains usable.
   }
 
   async function init() {
@@ -167,13 +176,15 @@
       referenceCount: formData.referenceImageIds.length
     });
 
+    const actualCost = storyboardCreditPolicy.baseCost
+      + (formData.referenceImageIds.length * storyboardCreditPolicy.perReferenceCost);
     const result = await StoryboardAPI.generateStoryboard(formData);
     if (!result.success) console.error('[storyboard] generate error:', JSON.stringify(result));
 
     if (!result.success) {
       const messages = {
         PLAN_NOT_ALLOWED: uiText('storyboard.error.plan'),
-        INSUFFICIENT_CREDITS: uiText('storyboard.error.credits', { credits: storyboardCost }),
+        INSUFFICIENT_CREDITS: uiText('storyboard.error.credits', { credits: actualCost }),
         RATE_LIMITED: uiText('storyboard.error.rateLimit'),
         TOO_MANY_CONCURRENT_JOBS: uiText('storyboard.error.concurrent'),
         MODERATION_REJECTED: uiText('storyboard.error.moderation'),

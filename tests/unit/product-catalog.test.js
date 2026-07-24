@@ -4,8 +4,12 @@ const fs = require('fs');
 const path = require('path');
 const {
   ANALYSIS_CREDIT_COST,
+  STORYBOARD_BASE_CREDIT_COST,
+  STORYBOARD_REFERENCE_CREDIT_COST,
+  STORYBOARD_MAX_REFERENCES,
   PLAN_CREDITS,
   getStoryboardCreditCost,
+  calculateStoryboardCreditCost,
   getPlanCredits,
   isPaidPlan,
   getPaddlePriceId,
@@ -23,19 +27,37 @@ describe('public product catalog', () => {
   test('default prices, credits, costs, and maximum usage counts stay internally consistent', () => {
     const catalog = getPublicProductCatalog({});
 
-    expect(ANALYSIS_CREDIT_COST).toBe(10);
-    expect(getStoryboardCreditCost({})).toBe(120);
+    expect(ANALYSIS_CREDIT_COST).toBe(2);
+    expect(getStoryboardCreditCost({})).toBe(30);
+    expect(catalog.version).toBe(2);
+    expect(catalog.storyboardCreditPolicy).toEqual({
+      baseCost: 30,
+      perReferenceCost: 5,
+      maxReferences: 4,
+      minCost: 30,
+      maxCost: 50
+    });
     expect(catalog.creditPolicy).toEqual({ renewal: 'reset_to_plan_allotment', rollover: false });
     expect(catalog.plans.pro).toMatchObject({
-      name: 'Pro', monthlyPriceUsd: 9.99, credits: 1000,
-      imageAnalyses: 100, storyboards: 8, singleUser: true
+      name: 'Pro', monthlyPriceUsd: 9.99, credits: 600,
+      imageAnalyses: 300, storyboards: 20, singleUser: true
     });
     expect(catalog.plans.enterprise).toMatchObject({
       name: 'Enterprise',
       description: 'For high-volume individual creators',
-      monthlyPriceUsd: 19.99, credits: 4000,
-      imageAnalyses: 400, storyboards: 33, singleUser: true
+      monthlyPriceUsd: 19.99, credits: 1500,
+      imageAnalyses: 750, storyboards: 50, singleUser: true
     });
+  });
+
+  test('storyboard pricing is deterministic for zero through four references', () => {
+    expect(STORYBOARD_BASE_CREDIT_COST).toBe(30);
+    expect(STORYBOARD_REFERENCE_CREDIT_COST).toBe(5);
+    expect(STORYBOARD_MAX_REFERENCES).toBe(4);
+    expect([0, 1, 2, 3, 4].map(calculateStoryboardCreditCost)).toEqual([30, 35, 40, 45, 50]);
+    expect(() => calculateStoryboardCreditCost(-1)).toThrow('referenceCount');
+    expect(() => calculateStoryboardCreditCost(5)).toThrow('referenceCount');
+    expect(() => calculateStoryboardCreditCost(1.5)).toThrow('referenceCount');
   });
 
   test('Paddle public checkout configuration comes from server environment values', () => {
@@ -54,14 +76,15 @@ describe('public product catalog', () => {
       priceIds: { pro: 'pri_pro_live', enterprise: 'pri_enterprise_live' }
     });
     expect(catalog.plans.pro.monthlyPriceUsd).toBe(12.5);
-    expect(catalog.plans.pro.storyboards).toBe(8);
-    expect(catalog.plans.enterprise.storyboards).toBe(32);
+    expect(catalog.plans.pro.storyboards).toBe(20);
+    expect(catalog.plans.enterprise.storyboards).toBe(50);
+    expect(catalog.storyboardCreditCost).toBe(30);
     expect(getPaddlePriceId('pro', env)).toBe('pri_pro_live');
   });
 
   test('paid alias and paid-plan gates map to the Pro allotment without changing persisted plan IDs', () => {
-    expect(PLAN_CREDITS).toMatchObject({ pro: 1000, paid: 1000, enterprise: 4000 });
-    expect(getPlanCredits('paid')).toBe(1000);
+    expect(PLAN_CREDITS).toMatchObject({ pro: 600, paid: 600, enterprise: 1500 });
+    expect(getPlanCredits('paid')).toBe(600);
     expect(isPaidPlan('pro')).toBe(true);
     expect(isPaidPlan('enterprise')).toBe(true);
     expect(isPaidPlan('paid')).toBe(true);
@@ -92,12 +115,14 @@ describe('public product catalog', () => {
 
     const salesCopy = JSON.stringify(metadata);
     expect(salesCopy).not.toMatch(/teams and businesses|api access|custom models|team dashboard|priority (support|processing)/i);
-    expect(metadata.pro.productDescription).toContain('up to 8 storyboards or 100 image analyses');
+    expect(metadata.pro.productDescription).toContain('up to 20 base-cost storyboards');
+    expect(metadata.pro.productDescription).toContain('300 image analyses');
+    expect(metadata.pro.productDescription).toContain('+5 per reference image');
     expect(metadata.enterprise.productDescription).toContain('Single-user plan');
 
     const alternateCost = getPaddleCatalogMetadata({ STORYBOARD_CREDIT_COST: '125' });
-    expect(alternateCost.enterprise.productDescription).toContain('up to 32 storyboards');
-    expect(alternateCost.enterprise.internalDescription).toContain('up to 32 storyboards');
+    expect(alternateCost.enterprise.productDescription).toContain('up to 50 base-cost storyboards');
+    expect(alternateCost.enterprise.internalDescription).toContain('up to 50 base-cost storyboards');
   });
 });
 
@@ -122,7 +147,7 @@ describe('public sales-copy regression gate', () => {
     expect(indexHtml).toContain(`$${catalog.plans.pro.monthlyPriceUsd.toFixed(2)}`);
     expect(indexHtml).toContain(`$${catalog.plans.enterprise.monthlyPriceUsd.toFixed(2)}`);
     expect(indexHtml).toContain(`${catalog.plans.pro.credits.toLocaleString('en-US')} credits reset each billing month`);
-    expect(indexHtml).toContain(`Up to ${catalog.plans.enterprise.storyboards} storyboards`);
+    expect(indexHtml).toContain(`Up to ${catalog.plans.enterprise.storyboards} base-cost storyboards`);
     expect(indexHtml).toContain('Single-user plan');
     expect(indexHtml).toContain('Credits reset to the plan allotment at renewal and do not roll over.');
     expect(indexHtml).not.toMatch(/For teams and businesses/i);
@@ -130,7 +155,7 @@ describe('public sales-copy regression gate', () => {
   });
 
   test('terms and refund copy describe monthly subscriptions, reset/no-rollover, and Paddle as Merchant of Record', () => {
-    expect(termsHtml).toContain('Monthly single-user subscription with 1,000 credits per billing cycle');
+    expect(termsHtml).toContain('Monthly single-user subscription with 600 credits per billing cycle');
     expect(termsHtml).toContain('unused credits do not roll over');
     expect(termsHtml).toContain('PromptGen does not itself generate the final video');
     expect(refundHtml).toContain('monthly subscriptions, not one-time credit bundles');

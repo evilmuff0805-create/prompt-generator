@@ -13,7 +13,11 @@ const { moderateContent } = require('../lib/moderation');
 const jobStore = require('../lib/storyboard-job-store');
 const storyboardWorker = require('../lib/storyboard-worker');
 const { recordServerEvent } = require('../lib/product-analytics');
-const { getStoryboardCreditCost, getPublicProductCatalog } = require('../lib/product-catalog');
+const {
+  STORYBOARD_MAX_REFERENCES,
+  calculateStoryboardCreditCost,
+  getPublicProductCatalog
+} = require('../lib/product-catalog');
 
 // Multer: memory storage, 10MB limit
 function createStoryboardUpload(options = {}) {
@@ -62,11 +66,10 @@ function getAdminClient() {
   });
 }
 
-// Single source of truth for the storyboard credit cost. The same value drives
-// the actual deduction (/generate) AND the UI display (/config), so changing
-// STORYBOARD_CREDIT_COST in the environment updates both together.
-function getStoryboardCost() {
-  return getStoryboardCreditCost();
+// Single source of truth for storyboard pricing. The same calculator drives
+// the durable deduction (/generate) and the public UI config (/config).
+function getStoryboardCost(referenceCount = 0) {
+  return calculateStoryboardCreditCost(referenceCount);
 }
 
 function validateInput(body) {
@@ -86,8 +89,8 @@ function validateInput(body) {
     errors.push('cutCount must be 4 or 9');
   }
   if (referenceImageIds !== undefined) {
-    if (!Array.isArray(referenceImageIds) || referenceImageIds.length > 4) {
-      errors.push('referenceImageIds must be an array of at most 4 IDs');
+    if (!Array.isArray(referenceImageIds) || referenceImageIds.length > STORYBOARD_MAX_REFERENCES) {
+      errors.push(`referenceImageIds must be an array of at most ${STORYBOARD_MAX_REFERENCES} IDs`);
     }
   }
 
@@ -128,6 +131,7 @@ router.get('/config', (req, res) => {
   res.json({
     success: true,
     storyboardCost: catalog.storyboardCreditCost,
+    storyboardCreditPolicy: catalog.storyboardCreditPolicy,
     catalog
   });
 });
@@ -199,7 +203,7 @@ router.post('/generate', requireAuth, async (req, res) => {
 
     // 7. Atomically insert the durable job and deduct credits. The RPC also
     // serializes per-user submissions and enforces the active-job limit.
-    const cost = getStoryboardCost();
+    const cost = getStoryboardCost(referenceImageIds.length);
     const storyboardId = `sb_${randomUUID().replace(/-/g, '')}`;
     const maxConcurrent = parseInt(process.env.STORYBOARD_MAX_CONCURRENT_JOBS || '5', 10);
     const maxAttempts = parseInt(process.env.STORYBOARD_MAX_ATTEMPTS || '3', 10);
