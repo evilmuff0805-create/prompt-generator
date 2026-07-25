@@ -20,8 +20,22 @@ jobs:
         uses: actions/setup-node@v7
         with:
           node-version: 24
-      - name: Refresh package lock without lifecycle scripts
-        run: npm install --package-lock-only --ignore-scripts
+      - name: Refresh patched transitive lock entries without lifecycle scripts
+        run: npm update brace-expansion gaxios --package-lock-only --ignore-scripts
+      - name: Verify resolved dependency versions
+        run: |
+          node - <<'NODE'
+          const lock = require('./package-lock.json');
+          const packages = lock.packages || {};
+          const braces = Object.entries(packages)
+            .filter(([path]) => path === 'node_modules/brace-expansion' || path.endsWith('/node_modules/brace-expansion'))
+            .map(([path, pkg]) => ({ path, version: pkg.version }));
+          const gaxios = packages['node_modules/gaxios']?.version;
+          if (braces.length !== 1 || braces[0].version !== '5.0.8' || gaxios !== '7.3.0') {
+            throw new Error(`Unexpected dependency graph: ${JSON.stringify({ braces, gaxios })}`);
+          }
+          console.log(JSON.stringify({ braces, gaxios }));
+          NODE
       - name: Verify strict dependency audit
         run: npm audit --audit-level=high
       - name: Commit lockfile when changed
