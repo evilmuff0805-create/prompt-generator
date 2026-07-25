@@ -26,7 +26,29 @@ describe('Gemini response JSON Schemas', () => {
         .properties.constraints
         .properties.must_keep
         .minItems
+    ).toBe(6);
+    expect(
+      ANALYSIS_RESPONSE_JSON_SCHEMA
+        .properties.analysis
+        .properties.constraints
+        .properties.avoid
+        .minItems
     ).toBe(5);
+    const analysis = ANALYSIS_RESPONSE_JSON_SCHEMA.properties.analysis.properties;
+    expect(analysis.subject.required).toContain('orientation_and_gaze');
+    expect(analysis.scene.required).toEqual(expect.arrayContaining(['object_layout', 'depth_layers']));
+    expect(analysis.scene.properties.depth_layers).toMatchObject({ minItems: 3, maxItems: 3 });
+    expect(analysis.composition.required).toEqual(expect.arrayContaining([
+      'viewpoint',
+      'subject_placement',
+      'negative_space',
+      'spatial_relationships'
+    ]));
+    expect(analysis.composition.properties.spatial_relationships.minItems).toBe(2);
+    expect(analysis.style_modifiers.required).toEqual(expect.arrayContaining([
+      'color_distribution',
+      'tonal_contrast'
+    ]));
   });
 
   test('binds suggestion counts and indexes to the active bracket batch', () => {
