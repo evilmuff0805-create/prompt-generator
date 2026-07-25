@@ -510,9 +510,9 @@
             <p class="pricing-card__desc" data-catalog-field="description">For individual creators</p>
           </div>
           <ul class="pricing-card__features">
-            <li class="feat-yes" data-catalog-field="credits">✓ 1,000 credits reset each billing month</li>
-            <li class="feat-yes" data-catalog-field="storyboards">✓ Up to 8 storyboards (120 credits each)</li>
-            <li class="feat-yes" data-catalog-field="analyses">✓ Up to 100 image analyses (10 credits each)</li>
+            <li class="feat-yes" data-catalog-field="credits">✓ 600 credits reset each billing month</li>
+            <li class="feat-yes" data-catalog-field="storyboards">✓ Up to 20 base-cost storyboards (30 base; +5/reference)</li>
+            <li class="feat-yes" data-catalog-field="analyses">✓ Up to 300 image analyses (2 credits each)</li>
             <li class="feat-yes" data-i18n="pricing.feature.bracketEditing">✓ Bracket editing</li>
             <li class="feat-yes" data-i18n="pricing.feature.copy">✓ Copy to clipboard</li>
             <li class="feat-yes" data-i18n="pricing.feature.suggestions">✓ Suggestion chips</li>
@@ -528,9 +528,9 @@
             <p class="pricing-card__desc" data-catalog-field="description">For high-volume individual creators</p>
           </div>
           <ul class="pricing-card__features">
-            <li class="feat-yes" data-catalog-field="credits">✓ 4,000 credits reset each billing month</li>
-            <li class="feat-yes" data-catalog-field="storyboards">✓ Up to 33 storyboards (120 credits each)</li>
-            <li class="feat-yes" data-catalog-field="analyses">✓ Up to 400 image analyses (10 credits each)</li>
+            <li class="feat-yes" data-catalog-field="credits">✓ 1,500 credits reset each billing month</li>
+            <li class="feat-yes" data-catalog-field="storyboards">✓ Up to 50 base-cost storyboards (30 base; +5/reference)</li>
+            <li class="feat-yes" data-catalog-field="analyses">✓ Up to 750 image analyses (2 credits each)</li>
             <li class="feat-yes" data-i18n="pricing.feature.sameTools">✓ Same creation tools as Pro</li>
             <li class="feat-yes" data-i18n="pricing.feature.singleUser">✓ Single-user plan</li>
           </ul>
@@ -621,7 +621,7 @@
               <span class="faq-item__icon" aria-hidden="true"></span>
             </summary>
             <div class="faq-item__answer">
-              <p data-i18n="faq.credits.answer">Free includes one Image to Prompt analysis per day, and Endframe Extractor is free after sign-in. Storyboard is available on paid plans and uses 120 credits per generation.</p>
+              <p data-i18n="faq.credits.answer">Free includes one Image to Prompt analysis per day, and Endframe Extractor is free after sign-in. Paid image analyses use 2 credits. Storyboards start at 30 credits, plus 5 credits per reference image (up to 4).</p>
             </div>
           </details>
 
@@ -772,6 +772,15 @@
         <div id="cpUpdatingSpinner" style="display:flex;justify-content:center;margin:0.5rem 0 1rem"><div class="spinner"></div></div>
         <p class="modal__sub" id="changePlanUpdatingMsg" data-i18n="plan.change.applying">Applying your plan change…</p>
         <button class="btn btn--primary btn--full" id="changePlanRefreshBtn" style="display:none" data-i18n="plan.change.refresh">Refresh now</button>
+      </div>
+
+      <!-- Resubscribe state: shown only for Paddle's confirmed canceled-subscription error -->
+      <div id="cpStateResubscribe" style="display:none">
+        <p class="modal__sub" id="changePlanResubscribeMsg"></p>
+        <div class="modal__btn-row">
+          <button class="btn btn--secondary" id="changePlanResubscribeCancelBtn" data-i18n="plan.change.cancel">Cancel</button>
+          <button class="btn btn--primary" id="changePlanResubscribeBtn"></button>
+        </div>
       </div>
 
       <!-- Error state -->

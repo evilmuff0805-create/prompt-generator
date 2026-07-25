@@ -54,7 +54,7 @@ function getPlanTotalCredits(plan) {
 }
 
 function getAnalysisCreditCost() {
-  return Number(productCatalog?.analysisCreditCost) || 10;
+  return Number(productCatalog?.analysisCreditCost) || 2;
 }
 
 function formatUsd(value) {
@@ -84,7 +84,10 @@ function hydrateProductCatalog(catalog) {
       }));
       setCatalogText(card, 'storyboards', uiText('pricing.feature.storyboards', {
         count: window.PromptGenI18n?.formatNumber(plan.storyboards) || plan.storyboards,
-        credits: window.PromptGenI18n?.formatNumber(catalog.storyboardCreditCost) || catalog.storyboardCreditCost
+        credits: window.PromptGenI18n?.formatNumber(catalog.storyboardCreditCost) || catalog.storyboardCreditCost,
+        referenceCredits: window.PromptGenI18n?.formatNumber(catalog.storyboardCreditPolicy?.perReferenceCost || 5)
+          || catalog.storyboardCreditPolicy?.perReferenceCost
+          || 5
       }));
       setCatalogText(card, 'analyses', uiText('pricing.feature.analyses', {
         count: window.PromptGenI18n?.formatNumber(plan.imageAnalyses) || plan.imageAnalyses,
@@ -139,7 +142,8 @@ const state = {
   result: null,
   bracketValues: {},
   activeChip: null,
-  analyzing: false
+  analyzing: false,
+  analysisOperationId: null
 };
 
 let currentUserPlan = null;
@@ -221,6 +225,7 @@ function handleFileSelect(file) {
   }
   hideError();
   state.file = file;
+  state.analysisOperationId = crypto.randomUUID();
   const url = URL.createObjectURL(file);
   previewImg.src = url;
   previewContainer.classList.add('visible');
@@ -230,6 +235,7 @@ function handleFileSelect(file) {
 
 function clearFile() {
   state.file = null;
+  state.analysisOperationId = null;
   fileInput.value = '';
   previewImg.src = '';
   previewContainer.classList.remove('visible');
@@ -266,7 +272,10 @@ analyzeBtn?.addEventListener('click', async () => {
     const res = await fetch('/api/analyze', {
       method: 'POST',
       body: formData,
-      headers: { 'Authorization': `Bearer ${session.access_token}` }
+      headers: {
+        'Authorization': `Bearer ${session.access_token}`,
+        'X-Analysis-Operation-Id': state.analysisOperationId || crypto.randomUUID()
+      }
     });
 
     if (res.status === 401) {
@@ -295,6 +304,7 @@ analyzeBtn?.addEventListener('click', async () => {
     });
 
     renderResults(data);
+    state.analysisOperationId = null;
 
     // Refresh usage display
     await refreshUserProfile(session);
@@ -1200,19 +1210,23 @@ const changePlanConfirmBtn = document.getElementById('changePlanConfirmBtn');
 const changePlanUpdatingMsg = document.getElementById('changePlanUpdatingMsg');
 const changePlanRefreshBtn = document.getElementById('changePlanRefreshBtn');
 const cpUpdatingSpinner    = document.getElementById('cpUpdatingSpinner');
+const changePlanResubscribeMsg = document.getElementById('changePlanResubscribeMsg');
+const changePlanResubscribeBtn = document.getElementById('changePlanResubscribeBtn');
+const changePlanResubscribeCancelBtn = document.getElementById('changePlanResubscribeCancelBtn');
 const changePlanErrorMsg   = document.getElementById('changePlanErrorMsg');
 const changePlanDismissBtn = document.getElementById('changePlanDismissBtn');
 
 const cpStateLoading  = document.getElementById('cpStateLoading');
 const cpStateReady    = document.getElementById('cpStateReady');
 const cpStateUpdating = document.getElementById('cpStateUpdating');
+const cpStateResubscribe = document.getElementById('cpStateResubscribe');
 const cpStateError    = document.getElementById('cpStateError');
 
 let _cpTargetPlan = null;
 let _cpPollCancel = null;
 
 function cpShowState(state) {
-  [cpStateLoading, cpStateReady, cpStateUpdating, cpStateError].forEach(el => {
+  [cpStateLoading, cpStateReady, cpStateUpdating, cpStateResubscribe, cpStateError].forEach(el => {
     if (el) el.style.display = 'none';
   });
   if (state) state.style.display = '';
@@ -1265,7 +1279,13 @@ async function _cpLoadPreview(targetPlan, isUpgrade) {
       uiText('plan.change.error.loadDetails')
     );
 
-    if (!res.ok || !json.success) throw new Error(uiText('plan.change.error.loadDetails'));
+    if (!res.ok || !json.success) {
+      if (ChangePlanHelpers.shouldOfferNewSubscription(json.code)) {
+        _cpRenderResubscribe(targetPlan);
+        return;
+      }
+      throw new Error(uiText('plan.change.error.loadDetails'));
+    }
 
     _cpRenderReady(ChangePlanHelpers.parsePlanPreview(json.data), targetPlan, isUpgrade);
   } catch (err) {
@@ -1273,6 +1293,16 @@ async function _cpLoadPreview(targetPlan, isUpgrade) {
     changePlanErrorMsg.textContent = err.message || uiText('common.error.tryAgain');
     cpShowState(cpStateError);
   }
+}
+
+function _cpRenderResubscribe(targetPlan) {
+  const planLabel = getPlanLabel(targetPlan);
+  changePlanIcon.textContent = '↻';
+  changePlanTitle.textContent = uiText('plan.change.resubscribe.title');
+  changePlanResubscribeMsg.textContent = uiText('plan.change.resubscribe.description', { plan: planLabel });
+  changePlanResubscribeBtn.textContent = uiText('plan.change.resubscribe.action', { plan: planLabel });
+  changePlanResubscribeBtn.disabled = false;
+  cpShowState(cpStateResubscribe);
 }
 
 function _cpRenderReady(preview, targetPlan, isUpgrade) {
@@ -1339,7 +1369,13 @@ changePlanConfirmBtn?.addEventListener('click', async () => {
       uiText('plan.change.error.changeFailed')
     );
 
-    if (!res.ok || !json.success) throw new Error(uiText('plan.change.error.changeFailed'));
+    if (!res.ok || !json.success) {
+      if (ChangePlanHelpers.shouldOfferNewSubscription(json.code)) {
+        _cpRenderResubscribe(targetPlan);
+        return;
+      }
+      throw new Error(uiText('plan.change.error.changeFailed'));
+    }
 
     // PATCH accepted — webhook is async, poll until plan is reflected
     changePlanTitle.textContent = uiText('plan.change.updating');
@@ -1373,6 +1409,16 @@ changePlanConfirmBtn?.addEventListener('click', async () => {
 
 changePlanClose?.addEventListener('click', closeChangePlanModal);
 changePlanCancelBtn?.addEventListener('click', closeChangePlanModal);
+changePlanResubscribeCancelBtn?.addEventListener('click', closeChangePlanModal);
+changePlanResubscribeBtn?.addEventListener('click', async () => {
+  const targetPlan = _cpTargetPlan;
+  if (!['pro', 'enterprise'].includes(targetPlan)) return;
+
+  // Checkout is intentionally opened only after this explicit user action.
+  changePlanResubscribeBtn.disabled = true;
+  closeChangePlanModal();
+  await handleCheckout(targetPlan);
+});
 changePlanDismissBtn?.addEventListener('click', closeChangePlanModal);
 changePlanRefreshBtn?.addEventListener('click', () => window.location.reload());
 changePlanModal?.addEventListener('click', e => { if (e.target === changePlanModal) closeChangePlanModal(); });

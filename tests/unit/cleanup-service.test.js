@@ -16,6 +16,7 @@ function makeRepository(overrides = {}) {
     ]),
     deleteReferenceImage: jest.fn().mockResolvedValue(true),
     purgeWebhookEvents: jest.fn().mockResolvedValue(2),
+    refundStaleAnalysisOperations: jest.fn().mockResolvedValue(3),
     ...overrides
   };
 }
@@ -37,6 +38,7 @@ describe('storage-aware cleanup service', () => {
     expect(repository.hardDeleteStoryboards).not.toHaveBeenCalled();
     expect(repository.deleteReferenceImage).not.toHaveBeenCalled();
     expect(repository.purgeWebhookEvents).not.toHaveBeenCalled();
+    expect(repository.refundStaleAnalysisOperations).not.toHaveBeenCalled();
   });
 
   test('removes Storage before deleting metadata and reports exact counts', async () => {
@@ -61,7 +63,8 @@ describe('storage-aware cleanup service', () => {
       storyboards: 1,
       hardDelete: 1,
       referenceImages: 1,
-      webhookEvents: 2
+      webhookEvents: 2,
+      analysisReservationsRefunded: 3
     });
     expect(summary.failures).toEqual([]);
   });

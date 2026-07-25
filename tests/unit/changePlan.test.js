@@ -2,6 +2,7 @@
 
 const {
   parseApiJson,
+  shouldOfferNewSubscription,
   parsePlanPreview,
   calcCreditWarning,
   createPlanPoller,
@@ -34,6 +35,23 @@ describe('parseApiJson', () => {
       error: 'Inactive',
       code: 'NO_SUBSCRIPTION'
     });
+  });
+});
+
+describe('shouldOfferNewSubscription', () => {
+  test('Paddle가 취소를 확정한 경우에만 새 체크아웃을 허용', () => {
+    expect(shouldOfferNewSubscription('SUBSCRIPTION_CANCELED')).toBe(true);
+  });
+
+  test.each([
+    'NO_SUBSCRIPTION',
+    'NO_ACTIVE_SUBSCRIPTION',
+    'PADDLE_CHANGE_REJECTED',
+    'PADDLE_UNAVAILABLE',
+    'INVALID_RESPONSE',
+    undefined
+  ])('%s는 중복 구독 방지를 위해 새 체크아웃으로 보내지 않음', (code) => {
+    expect(shouldOfferNewSubscription(code)).toBe(false);
   });
 });
 
@@ -101,26 +119,26 @@ describe('calcCreditWarning', () => {
     const result = calcCreditWarning(2500, 'pro');
     expect(result.show).toBe(true);
     expect(result.from).toBe(2500);
-    expect(result.to).toBe(1000);   // Math.min(2500, 1000)
+    expect(result.to).toBe(600);   // Math.min(2500, 600)
   });
 
   test('크레딧이 목표 한도 이하 → show=false (안 줄어듦)', () => {
     const result = calcCreditWarning(400, 'pro');
     expect(result.show).toBe(false);
-    expect(result.to).toBe(400);    // Math.min(400, 1000) = 400
+    expect(result.to).toBe(400);    // Math.min(400, 600) = 400
   });
 
   test('크레딧이 정확히 한도와 같을 때 → show=false', () => {
-    const result = calcCreditWarning(1000, 'pro');
+    const result = calcCreditWarning(600, 'pro');
     expect(result.show).toBe(false);
-    expect(result.to).toBe(1000);
+    expect(result.to).toBe(600);
   });
 
-  test('paid는 pro와 동일한 한도(1000) 적용', () => {
-    expect(PLAN_CREDIT_LIMIT['paid']).toBe(1000);
+  test('paid는 pro와 동일한 한도(600) 적용', () => {
+    expect(PLAN_CREDIT_LIMIT['paid']).toBe(600);
     const result = calcCreditWarning(1500, 'paid');
     expect(result.show).toBe(true);
-    expect(result.to).toBe(1000);
+    expect(result.to).toBe(600);
   });
 
   test('알 수 없는 targetPlan → show=false, 크레딧 유지', () => {
@@ -129,7 +147,7 @@ describe('calcCreditWarning', () => {
     expect(result.to).toBe(999);
   });
 
-  test('enterprise 업그레이드 시 크레딧 경고 없음 (한도 4000이 현재보다 높음)', () => {
+  test('enterprise 업그레이드 시 크레딧 경고 없음 (한도 1500이 현재보다 높음)', () => {
     const result = calcCreditWarning(1000, 'enterprise');
     expect(result.show).toBe(false);
   });

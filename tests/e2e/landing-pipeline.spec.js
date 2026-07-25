@@ -207,7 +207,8 @@ test('FAQ questions and answers follow the selected locale', async ({ page }) =>
   await expect(faq.locator('#faqTitle')).toHaveText('만들기 전에 꼭 필요한 답을 확인하세요.');
   await expect(faq.locator('.faq-item').nth(2).locator('summary')).toContainText('크레딧은 어떻게 사용되나요?');
   await faq.locator('.faq-item').nth(2).locator('summary').click();
-  await expect(faq.locator('.faq-item').nth(2).locator('.faq-item__answer')).toContainText('생성 1회당 120크레딧');
+  await expect(faq.locator('.faq-item').nth(2).locator('.faq-item__answer')).toContainText('기본 30크레딧');
+  await expect(faq.locator('.faq-item').nth(2).locator('.faq-item__answer')).toContainText('참조 이미지 1장당 5크레딧');
   await expect(faq.locator('.faq-item').nth(5).locator('summary')).toContainText('어떤 인터페이스 언어를 지원하나요?');
 });
 

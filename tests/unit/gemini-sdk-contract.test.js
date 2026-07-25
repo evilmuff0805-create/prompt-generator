@@ -23,6 +23,7 @@ const ANALYSIS_JSON = {
     hair: { style: 'short', color: 'brown #5A3A22' },
     expression: 'focused',
     pose: 'riding forward',
+    orientation_and_gaze: 'front three-quarter view, body and gaze directed toward viewer-right',
     clothing: [
       { item: 'rain jacket', color: 'yellow #F4C430', fabric: 'nylon', fit: 'regular' }
     ],
@@ -33,24 +34,39 @@ const ANALYSIS_JSON = {
     time: 'evening',
     weather: 'rain',
     lighting: { type: 'street lights', direction: 'side', quality: 'soft' },
-    background_elements: ['reflections']
+    background_elements: ['reflections'],
+    object_layout: ['one cyclist — center frame — riding along the street'],
+    depth_layers: [
+      'foreground: wet road reflections',
+      'midground: cyclist',
+      'background: city street lights'
+    ]
   },
   technical: { camera_model: 'full-frame camera', lens: '35mm', aperture: 'f/2.8' },
   composition: {
     framing: 'medium shot',
     angle: 'eye level',
     focus_point: 'cyclist',
+    viewpoint: 'eye-level front three-quarter view at medium distance',
+    subject_placement: 'center cell, about 40% of frame height',
+    negative_space: 'viewer-left road area, about 20% of frame',
+    spatial_relationships: [
+      'cyclist is centered above the wet road reflection',
+      'street lights are behind the cyclist'
+    ],
     aspect_ratio: '16:9'
   },
   style_modifiers: {
     medium: 'photography',
     aesthetic: ['cinematic'],
     color_palette: 'cool blue with yellow #F4C430',
+    color_distribution: 'cool blue across the street with yellow centered on the cyclist',
+    tonal_contrast: 'bright jacket and reflections against dark blue midtones',
     post_processing: 'natural contrast'
   },
   constraints: {
-    must_keep: ['cyclist', 'yellow jacket', 'rain', 'wet street', 'evening'],
-    avoid: ['extra limbs', 'text', 'logos']
+    must_keep: ['cyclist', 'yellow jacket', 'rain', 'wet street', 'evening', 'center placement'],
+    avoid: ['extra limbs', 'text', 'logos', 'mirroring', 'recentering']
   }
 };
 
@@ -107,15 +123,18 @@ describe('@google/genai request contract', () => {
       config: {
         systemInstruction: expect.stringContaining('expert AI image prompt engineer'),
         temperature: 0.3,
-        maxOutputTokens: 16000
+        maxOutputTokens: 5000
       }
     });
+    expect(analysisRequest.config.systemInstruction).toContain('viewer-relative frame grid');
+    expect(analysisRequest.config.systemInstruction).toContain('Do not mirror or swap the layout');
+    expect(analysisRequest.config.systemInstruction).toContain('Do not turn localized warm light into a global warm recolor');
 
     const suggestionsRequest = mockGenerateContent.mock.calls[1][0];
     expect(suggestionsRequest).toEqual({
       model: 'gemini-3.1-flash-lite',
       contents: expect.stringContaining('generate 3–5 alternative replacement values'),
-      config: { temperature: 0.8, maxOutputTokens: 12000 }
+      config: { temperature: 0.8, maxOutputTokens: 2200 }
     });
 
     const serializedRequests = JSON.stringify(mockGenerateContent.mock.calls);
@@ -299,7 +318,7 @@ describe('@google/genai request contract', () => {
     const analysisConfig = mockGenerateContent.mock.calls[0][0].config;
     expect(analysisConfig).toMatchObject({
       temperature: 0.3,
-      maxOutputTokens: 16000,
+      maxOutputTokens: 5000,
       responseMimeType: 'application/json',
       responseJsonSchema: {
         type: 'object',
@@ -312,7 +331,7 @@ describe('@google/genai request contract', () => {
     const suggestionsConfig = mockGenerateContent.mock.calls[1][0].config;
     expect(suggestionsConfig).toMatchObject({
       temperature: 0.8,
-      maxOutputTokens: 12000,
+      maxOutputTokens: 2200,
       responseMimeType: 'application/json',
       responseJsonSchema: {
         type: 'object',

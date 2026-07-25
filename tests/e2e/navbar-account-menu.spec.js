@@ -6,12 +6,13 @@ const session = {
 };
 
 const catalog = {
-  analysisCreditCost: 10,
-  storyboardCreditCost: 120,
+  analysisCreditCost: 2,
+  storyboardCreditCost: 30,
+  storyboardCreditPolicy: { baseCost: 30, perReferenceCost: 5, maxReferences: 4, minCost: 30, maxCost: 50 },
   plans: {
     free: { id: 'free', name: 'Free', monthlyPriceUsd: 0, credits: 0, storyboards: null, imageAnalyses: null },
-    pro: { id: 'pro', name: 'Pro', monthlyPriceUsd: 9.99, credits: 1000, storyboards: 8, imageAnalyses: 100 },
-    enterprise: { id: 'enterprise', name: 'Enterprise', monthlyPriceUsd: 19.99, credits: 4000, storyboards: 33, imageAnalyses: 400 },
+    pro: { id: 'pro', name: 'Pro', monthlyPriceUsd: 9.99, credits: 600, storyboards: 20, imageAnalyses: 300 },
+    enterprise: { id: 'enterprise', name: 'Enterprise', monthlyPriceUsd: 19.99, credits: 1500, storyboards: 50, imageAnalyses: 750 },
   },
   paddle: { clientToken: 'e2e-client-token' },
 };

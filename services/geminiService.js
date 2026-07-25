@@ -18,7 +18,7 @@ const {
 // (thinking_level defaults to 'minimal' — no added cost/latency).
 const MODEL = process.env.GEMINI_MODEL || 'gemini-3.1-flash-lite';
 const API_TIMEOUT_MS = 30_000;
-const ANALYSIS_PROMPT_VERSION = process.env.GEMINI_ANALYSIS_PROMPT_VERSION || 'image-analysis-v1';
+const ANALYSIS_PROMPT_VERSION = process.env.GEMINI_ANALYSIS_PROMPT_VERSION || 'image-analysis-v2-spatial-fidelity';
 const SUGGESTIONS_PROMPT_VERSION = process.env.GEMINI_SUGGESTIONS_PROMPT_VERSION || 'image-suggestions-v1';
 const PARSE_TELEMETRY = Symbol('parseTelemetry');
 
@@ -152,14 +152,41 @@ function validateAnalysisSchema(jsonData) {
   if (!isObject(jsonData.subject) || !isText(jsonData.subject.description)) {
     errors.push('subject_description_missing');
   }
+  if (!isObject(jsonData.subject) || !isText(jsonData.subject.orientation_and_gaze)) {
+    errors.push('subject_orientation_and_gaze_missing');
+  }
   if (!isObject(jsonData.scene) || !isText(jsonData.scene.location)) {
     errors.push('scene_location_missing');
+  }
+  if (!isObject(jsonData.scene) || !Array.isArray(jsonData.scene.object_layout)) {
+    errors.push('object_layout_missing');
+  }
+  if (!isObject(jsonData.scene) || !Array.isArray(jsonData.scene.depth_layers)) {
+    errors.push('depth_layers_missing');
   }
   if (!isObject(jsonData.composition) || !isText(jsonData.composition.aspect_ratio)) {
     errors.push('aspect_ratio_missing');
   }
+  if (!isObject(jsonData.composition) || !isText(jsonData.composition.viewpoint)) {
+    errors.push('viewpoint_missing');
+  }
+  if (!isObject(jsonData.composition) || !isText(jsonData.composition.subject_placement)) {
+    errors.push('subject_placement_missing');
+  }
+  if (!isObject(jsonData.composition) || !isText(jsonData.composition.negative_space)) {
+    errors.push('negative_space_missing');
+  }
+  if (!isObject(jsonData.composition) || !Array.isArray(jsonData.composition.spatial_relationships)) {
+    errors.push('spatial_relationships_missing');
+  }
   if (!isObject(jsonData.style_modifiers) || !isText(jsonData.style_modifiers.medium)) {
     errors.push('style_medium_missing');
+  }
+  if (!isObject(jsonData.style_modifiers) || !isText(jsonData.style_modifiers.color_distribution)) {
+    errors.push('color_distribution_missing');
+  }
+  if (!isObject(jsonData.style_modifiers) || !isText(jsonData.style_modifiers.tonal_contrast)) {
+    errors.push('tonal_contrast_missing');
   }
   if (!isObject(jsonData.constraints) || !Array.isArray(jsonData.constraints.must_keep)) {
     errors.push('must_keep_missing');
@@ -181,12 +208,24 @@ function validateStructuredAnalysisSchema(jsonData) {
     errors.push('aspect_ratio_invalid');
   }
   if (!Array.isArray(jsonData?.constraints?.must_keep)
-    || jsonData.constraints.must_keep.length < 5) {
+    || jsonData.constraints.must_keep.length < 6) {
     errors.push('must_keep_count_invalid');
   }
   if (!Array.isArray(jsonData?.constraints?.avoid)
-    || jsonData.constraints.avoid.length < 3) {
+    || jsonData.constraints.avoid.length < 5) {
     errors.push('avoid_count_invalid');
+  }
+  if (!Array.isArray(jsonData?.scene?.object_layout)
+    || jsonData.scene.object_layout.length < 1) {
+    errors.push('object_layout_count_invalid');
+  }
+  if (!Array.isArray(jsonData?.scene?.depth_layers)
+    || jsonData.scene.depth_layers.length < 3) {
+    errors.push('depth_layers_count_invalid');
+  }
+  if (!Array.isArray(jsonData?.composition?.spatial_relationships)
+    || jsonData.composition.spatial_relationships.length < 2) {
+    errors.push('spatial_relationships_count_invalid');
   }
   return [...new Set(errors)];
 }
@@ -235,6 +274,7 @@ A detailed JSON object with the following structure:
     "hair": {"style": "...", "color": "..."},
     "expression": "...",
     "pose": "...",
+    "orientation_and_gaze": "viewer-relative body/head direction, camera-facing view, eye direction, and visible gaze target",
     "clothing": [
       {"item": "...", "color": "... #HEX", "fabric": "...", "fit": "...", "detail": "..."}
     ],
@@ -252,6 +292,14 @@ A detailed JSON object with the following structure:
       "quality": "..."
     },
     "background_elements": ["...", "..."],
+    "object_layout": [
+      "object name and count — viewer-relative position — relationship to the subject"
+    ],
+    "depth_layers": [
+      "foreground: ...",
+      "midground: ...",
+      "background: ..."
+    ],
     "key_element": {"description": "any unique/special element in the scene"}
   },
   "technical": {
@@ -265,12 +313,20 @@ A detailed JSON object with the following structure:
     "framing": "...",
     "angle": "...",
     "focus_point": "...",
+    "viewpoint": "camera elevation/azimuth/roll/distance using visible evidence",
+    "subject_placement": "viewer-relative grid position, approximate frame share, and subject scale",
+    "negative_space": "location and approximate share of intentionally open image area",
+    "spatial_relationships": [
+      "A is left/right/above/below/in front of B, with approximate relative distance"
+    ],
     "aspect_ratio": "1:1 | 16:9 | 9:16 | 4:3 | 3:4 | 4:5 | 5:4 | 3:2 | 2:3 | 21:9"
   },
   "style_modifiers": {
     "medium": "photography|3d_render|illustration|...",
     "aesthetic": ["...", "..."],
     "color_palette": "description of dominant colors with hex codes",
+    "color_distribution": "where cool/warm and dominant/accent colors appear across the frame",
+    "tonal_contrast": "regional shadow, midtone, highlight, saturation, and white-balance relationships",
     "post_processing": "..."
   },
   "constraints": {
@@ -285,11 +341,19 @@ A detailed JSON object with the following structure:
 3. Read any text exactly as shown (e.g., "Fumla" not "Formula")
 4. For the prose part, describe the overall visual impact and mood
 5. For the JSON part, be extremely specific and detailed
-6. Camera/lens settings should match the apparent depth of field and perspective
+6. Camera/lens settings should match the apparent depth of field and perspective. If an exact camera, lens, or exposure value is not visually determinable, say "unknown" or describe only the apparent field of view; never fabricate exact capture metadata
 7. If the image is not a photograph, adjust technical settings to match the medium (e.g., for illustration, use render_engine instead of camera)
-8. Include at least 5 items in must_keep constraints
-9. Include at least 3 items in avoid constraints
-10. Analyze the image's aspect ratio precisely. If the image is square, use 1:1. If wider than tall, determine the closest standard ratio (16:9, 3:2, 4:3, 21:9). If taller than wide, use the inverse (9:16, 2:3, 3:4). This must be included in the output.`;
+8. Include at least 6 items in must_keep constraints
+9. Include at least 5 items in avoid constraints
+10. Analyze the image's aspect ratio precisely. If the image is square, use 1:1. If wider than tall, determine the closest standard ratio (16:9, 3:2, 4:3, 21:9). If taller than wide, use the inverse (9:16, 2:3, 3:4). This must be included in the output.
+11. Treat spatial fidelity as a first-class requirement. Record the subject and major objects on a viewer-relative frame grid (far-left/left-third/center/right-third/far-right plus upper/middle/lower), adding approximate percentages only when visually supportable
+12. Never use ambiguous "left" or "right". Use "viewer-left/viewer-right" for image coordinates and "subject's anatomical left/right" only for the subject's body. Do not mirror or swap the layout
+13. Distinguish front, rear, profile, and rear/front three-quarter views. Describe body facing, head turn, visible eye direction, and gaze target separately; use "not visible" when the eyes or target cannot be seen
+14. Describe viewpoint from visible evidence: high/low elevation, oblique/overhead/eye-level azimuth, roll, and camera-to-subject distance. Do not collapse an oblique bird's-eye view into a centered rear view
+15. Inventory every compositionally important object with count, viewer-relative position, and relationship to the subject. Do not add substitute props or remove salient props
+16. Preserve foreground/midground/background layering, leading edges, major diagonals, and the side and approximate share of negative space
+17. Describe color regionally, including where cool/warm areas, shadows, highlights, accent colors, saturation, and white balance occur. Do not turn localized warm light into a global warm recolor
+18. The must_keep list must explicitly cover subject placement/scale, viewpoint, orientation/gaze, key object layout, negative space, and regional light/color. The avoid list must explicitly forbid recentering, mirroring left/right, changing the viewpoint, inventing/removing salient objects, and global recoloring when those errors apply.`;
 
 const STRUCTURED_OUTPUT_INSTRUCTION = `
 
@@ -386,6 +450,10 @@ function buildFormattedPrompt(prose, jsonData) {
     if (subject.pose)       line += `. Pose: ${b(subject.pose)}`;
     text += line + '\n\n';
 
+    if (subject.orientation_and_gaze) {
+      text += `ORIENTATION & GAZE: ${subject.orientation_and_gaze}\n\n`;
+    }
+
     // CLOTHING & STYLING
     if (subject.clothing?.length) {
       const items = subject.clothing.map(c => {
@@ -418,6 +486,14 @@ function buildFormattedPrompt(prose, jsonData) {
       text += `BACKGROUND: ${items.join(', ')}\n\n`;
     }
 
+    if (scene.object_layout?.length) {
+      text += `OBJECT LAYOUT: ${scene.object_layout.join('; ')}\n\n`;
+    }
+
+    if (scene.depth_layers?.length) {
+      text += `DEPTH LAYERS: ${scene.depth_layers.join('; ')}\n\n`;
+    }
+
     if (scene.lighting) {
       const parts = [
         scene.lighting.type      && b(scene.lighting.type),
@@ -447,6 +523,17 @@ function buildFormattedPrompt(prose, jsonData) {
       composition.focus_point && `focus on ${b(composition.focus_point)}`,
     ].filter(Boolean);
     text += `COMPOSITION: ${parts.join(', ')}\n\n`;
+
+    const spatialParts = [
+      composition.viewpoint && `Viewpoint: ${composition.viewpoint}`,
+      composition.subject_placement && `Subject placement: ${composition.subject_placement}`,
+      composition.negative_space && `Negative space: ${composition.negative_space}`,
+      composition.spatial_relationships?.length
+        && `Relationships: ${composition.spatial_relationships.join('; ')}`,
+    ].filter(Boolean);
+    if (spatialParts.length) {
+      text += `SPATIAL FIDELITY: ${spatialParts.join('. ')}\n\n`;
+    }
   }
 
   // STYLE
@@ -457,6 +544,16 @@ function buildFormattedPrompt(prose, jsonData) {
       style_modifiers.color_palette && b(style_modifiers.color_palette),
     ].filter(Boolean);
     text += `STYLE: ${parts.join(', ')}\n\n`;
+
+    const colorParts = [
+      style_modifiers.color_distribution
+        && `Distribution: ${style_modifiers.color_distribution}`,
+      style_modifiers.tonal_contrast
+        && `Tone: ${style_modifiers.tonal_contrast}`,
+    ].filter(Boolean);
+    if (colorParts.length) {
+      text += `COLOR & TONE: ${colorParts.join('. ')}\n\n`;
+    }
   }
 
   // ASPECT RATIO — 브라켓 없이 일반 텍스트
@@ -658,7 +755,9 @@ Elements:
 ${bracketList}`;
 
   try {
-    const config = { temperature: 0.8, maxOutputTokens: 12000 };
+    // Cost guard for the 2-credit policy. Thirty compact suggestion groups fit
+    // comfortably inside this structured-output ceiling.
+    const config = { temperature: 0.8, maxOutputTokens: 2200 };
     if (structuredOutput) {
       config.responseMimeType = 'application/json';
       config.responseJsonSchema = createSuggestionsResponseJsonSchema(activeBrackets.length);
@@ -825,7 +924,9 @@ async function analyzeImage(base64Image, mimeType, options = {}) {
           ? `${SYSTEM_PROMPT}${STRUCTURED_OUTPUT_INSTRUCTION}`
           : SYSTEM_PROMPT,
         temperature: 0.3,
-        maxOutputTokens: 16000
+        // The response schema is compact; this ceiling preserves detail while
+        // preventing pathological output from consuming the full margin.
+        maxOutputTokens: 5000
       };
       if (structuredOutput) {
         config.responseMimeType = 'application/json';

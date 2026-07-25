@@ -22,11 +22,11 @@ const ALL_HTML = [...APP_HTML, 'terms.html', 'privacy.html', 'refund.html'];
 const LEGAL_FILES = ['terms.html', 'privacy.html', 'refund.html'];
 const OPERATOR_DETAILS = ['codemeet', 'yerim suk', '470-32-01835', 'codemeet@naver.com'];
 const TERMS_UPDATED_DATE = Object.freeze({
-  ko: '2026년 7월 21일',
-  ja: '2026年7月21日',
-  'zh-CN': '2026年7月21日',
-  fr: '21 juillet 2026',
-  ru: '21 июля 2026 г.'
+  ko: '2026년 7월 24일',
+  ja: '2026年7月24日',
+  'zh-CN': '2026年7月24日',
+  fr: '24 juillet 2026',
+  ru: '24 июля 2026 г.'
 });
 const PRIVACY_UPDATED_DATE = Object.freeze({
   ko: '2026년 7월 21일',
@@ -36,11 +36,11 @@ const PRIVACY_UPDATED_DATE = Object.freeze({
   ru: '21 июля 2026 г.'
 });
 const REFUND_UPDATED_DATE = Object.freeze({
-  ko: '2026년 7월 18일',
-  ja: '2026年7月18日',
-  'zh-CN': '2026年7月18日',
-  fr: '18 juillet 2026',
-  ru: '18 июля 2026 г.'
+  ko: '2026년 7월 24일',
+  ja: '2026年7月24日',
+  'zh-CN': '2026年7月24日',
+  fr: '24 juillet 2026',
+  ru: '24 июля 2026 г.'
 });
 
 function catalog(locale) {
@@ -214,9 +214,9 @@ describe('page integration and legal parity', () => {
       expect(disclosure).toContain(detail);
     }
     expect(disclosure).toContain('href="mailto:codemeet@naver.com"');
-    expect(html).toContain(file === 'refund.html'
-      ? 'Last Updated: July 18, 2026'
-      : 'Last Updated: July 21, 2026');
+    expect(html).toContain(file === 'privacy.html'
+      ? 'Last Updated: July 21, 2026'
+      : 'Last Updated: July 24, 2026');
   });
 
   test.each(LEGAL_FILES)('%s deploy-versions every local stylesheet and script', file => {
@@ -248,11 +248,11 @@ describe('page integration and legal parity', () => {
       const terms = documents[locale].terms.html.replace(/[\s,]/g, '');
       const privacy = documents[locale].privacy.html.replace(/[\s,]/g, '');
       const refund = documents[locale].refund.html.replace(/[\s,]/g, '');
-      for (const fact of ['1000', '4000', '10', '120']) expect(terms).toContain(fact);
+      for (const fact of ['600', '1500', '2', '30', '50']) expect(terms).toContain(fact);
       for (const service of ['Paddle', 'Seedance', 'USD']) expect(terms).toContain(service);
       for (const fact of ['24', '30', '90', '180']) expect(privacy).toContain(fact);
       for (const service of ['Supabase', 'Gemini', 'OpenAI', 'Paddle', 'Railway', 'Cloudflare']) expect(privacy).toContain(service);
-      for (const fact of ['1000', '4000', '14']) expect(refund).toContain(fact);
+      for (const fact of ['600', '1500', '14']) expect(refund).toContain(fact);
       expect(refund).toContain('https://www.paddle.com/legal/refund-policy');
       for (const [documentType, html] of [['terms', terms], ['privacy', privacy], ['refund', refund]]) {
         const disclosure = operatorBlock(html);

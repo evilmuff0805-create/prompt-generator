@@ -2,11 +2,18 @@ const express = require('express');
 const multer = require('multer');
 const fs = require('fs');
 const path = require('path');
+const { randomUUID } = require('crypto');
 const { createClient } = require('@supabase/supabase-js');
 const { analyzeImage } = require('../services/geminiService');
 const { recordServerEvent } = require('../lib/product-analytics');
 const authMiddleware = require('../middleware/auth');
-const { ANALYSIS_CREDIT_COST, isPaidPlan } = require('../lib/product-catalog');
+const { ANALYSIS_CREDIT_COST } = require('../lib/product-catalog');
+const {
+  reserveAnalysisOperation,
+  completeAnalysisOperation,
+  refundAnalysisOperation,
+  sweepStaleAnalysisOperations
+} = require('../lib/analysis-credit-operations');
 
 const router = express.Router();
 
@@ -31,6 +38,7 @@ const storage = multer.diskStorage({
 });
 
 const ALLOWED_MIMES = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 // 파일 매직바이트 시그니처 (MIME 스푸핑 방지)
 const MAGIC_SIGNATURES = {
@@ -70,21 +78,41 @@ const upload = createAnalysisUpload();
 
 router.post('/analyze', authMiddleware, upload.single('image'), async (req, res, next) => {
   const filePath = req.file?.path;
+  let operationId = null;
+  let operationReserved = false;
+  let adminClient = null;
   try {
     if (!req.file) {
       return res.status(400).json({ success: false, error: 'No image file provided' });
     }
 
+    const requestedOperationId = req.get('X-Analysis-Operation-Id');
+    if (requestedOperationId && !UUID_PATTERN.test(requestedOperationId)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid analysis operation ID',
+        code: 'INVALID_OPERATION_ID'
+      });
+    }
+    operationId = requestedOperationId || randomUUID();
+
     const today = new Date().toISOString().split('T')[0];
 
-    const adminClient = makeAdminClient();
+    adminClient = makeAdminClient();
     if (!adminClient) {
       console.error('[analyze] SUPABASE_SERVICE_ROLE_KEY is not configured');
       return res.status(500).json({ success: false, error: 'Server configuration error' });
     }
 
+    // Reject spoofed content before reserving a credit or a free daily slot.
+    const imageBuffer = fs.readFileSync(filePath);
+    const mimeType = req.file.mimetype;
+    if (!verifyMagicBytes(imageBuffer, mimeType)) {
+      return res.status(400).json({ success: false, error: 'Invalid image file content' });
+    }
+
     // Fetch user profile
-    let { data: profile, error: profileError } = await req.supabase
+    let { data: profile, error: profileError } = await adminClient
       .from('profiles')
       .select('plan, credits, daily_used, last_reset_date')
       .eq('id', req.user.id)
@@ -110,90 +138,91 @@ router.post('/analyze', authMiddleware, upload.single('image'), async (req, res,
       return res.status(500).json({ success: false, error: 'Failed to fetch user profile' });
     }
 
-    // Reset daily usage if new day
-    let dailyUsed = profile.daily_used;
-    if (profile.last_reset_date !== today) {
-      const { error: resetError } = await adminClient
-        .from('profiles')
-        .update({ daily_used: 0, last_reset_date: today })
-        .eq('id', req.user.id);
-      if (resetError) {
-        console.error('[analyze] daily reset update failed:', resetError.message, '| user:', req.user.id);
-        return res.status(500).json({ success: false, error: 'Failed to reset daily usage' });
+    // Opportunistically recover reservations orphaned by a previous process
+    // crash. Failure is logged but does not block the current request.
+    try {
+      await sweepStaleAnalysisOperations(adminClient);
+    } catch (sweepError) {
+      console.error('[analyze] stale reservation sweep failed:', sweepError.message);
+    }
+
+    let reservation;
+    try {
+      reservation = await reserveAnalysisOperation(adminClient, {
+        operationId,
+        userId: req.user.id,
+        creditCost: ANALYSIS_CREDIT_COST
+      });
+    } catch (reserveError) {
+      if (reserveError.code === 'DAILY_LIMIT') {
+        return res.status(403).json({
+          success: false,
+          error: '무료 플랜의 일일 생성 한도에 도달했습니다.',
+          code: 'DAILY_LIMIT'
+        });
       }
-      dailyUsed = 0;
+      if (reserveError.code === 'INSUFFICIENT_CREDITS') {
+        return res.status(403).json({
+          success: false,
+          error: 'Not enough credits',
+          code: 'NO_CREDITS'
+        });
+      }
+      throw reserveError;
     }
 
-    // Check limits
-    const paidPlan = isPaidPlan(profile.plan);
-
-    if (!paidPlan && dailyUsed >= 1) {
-      return res.status(403).json({
-        success: false,
-        error: '무료 플랜의 일일 생성 한도에 도달했습니다.',
-        code: 'DAILY_LIMIT'
+    if (reservation?.status === 'completed' && reservation.result) {
+      return res.json({
+        success: true,
+        ...reservation.result,
+        analysisOperationId: operationId,
+        cached: true
       });
     }
 
-    if (paidPlan && (profile.credits || 0) < ANALYSIS_CREDIT_COST) {
-      return res.status(403).json({
+    if (reservation?.status === 'reserved' && reservation.isNew === false) {
+      return res.status(409).json({
         success: false,
-        error: 'Not enough credits',
-        code: 'NO_CREDITS'
+        error: 'This analysis is already in progress',
+        code: 'ANALYSIS_IN_PROGRESS',
+        analysisOperationId: operationId
       });
     }
 
-    // 파일 매직바이트 검증 (MIME 스푸핑 방지)
-    const imageBuffer = fs.readFileSync(filePath);
-    const mimeType = req.file.mimetype;
-    if (!verifyMagicBytes(imageBuffer, mimeType)) {
-      return res.status(400).json({ success: false, error: 'Invalid image file content' });
-    }
-
+    operationReserved = true;
     const base64Image = imageBuffer.toString('base64');
-
     const result = await analyzeImage(base64Image, mimeType);
 
-    // 원자적 크레딧 차감 (레이스 컨디션 방지)
-    if (paidPlan) {
-      const { data: remaining, error: rpcError } = await adminClient
-        .rpc('deduct_credits', { p_user_id: req.user.id, p_amount: ANALYSIS_CREDIT_COST });
-      if (rpcError) {
-        console.error('[analyze] deduct_credits RPC error:', rpcError.message);
-        return res.status(500).json({ success: false, error: 'Failed to deduct credits' });
-      }
-      if (remaining === -1) {
-        return res.status(403).json({ success: false, error: 'Not enough credits', code: 'NO_CREDITS' });
-      }
-    } else {
-      // Free-plan daily counter. A silent failure here would bypass the daily
-      // limit unnoticed — log it (do not block: the analysis already succeeded).
-      const { error: usedError } = await adminClient
-        .from('profiles')
-        .update({ daily_used: dailyUsed + 1 })
-        .eq('id', req.user.id);
-      if (usedError) {
-        console.error('[analyze] daily_used increment failed:', usedError.message, '| user:', req.user.id);
-      }
-    }
+    await completeAnalysisOperation(adminClient, {
+      operationId,
+      userId: req.user.id,
+      result
+    });
+    operationReserved = false;
 
-    // Log usage — aggregation only. Never block the user's response on this,
-    // but a silent failure means undercounted stats (credit-forensics lesson).
-    const { error: usageLogError } = await req.supabase
+    // Idempotent history writes: a transport retry of a completed operation
+    // cannot create duplicate prompt or usage rows.
+    const { error: usageLogError } = await adminClient
       .from('usage_logs')
-      .insert({ user_id: req.user.id });
+      .upsert(
+        { user_id: req.user.id, analysis_operation_id: operationId },
+        { onConflict: 'analysis_operation_id', ignoreDuplicates: true }
+      );
     if (usageLogError) {
       console.error('[analyze] usage_logs insert failed:', usageLogError.message, '| user:', req.user.id);
     }
 
-    // 프롬프트 히스토리 저장 — same policy: log failures, don't block.
-    const { error: promptError } = await req.supabase
+    const { error: promptError } = await adminClient
       .from('prompts')
-      .insert({
-        user_id: req.user.id,
-        prompt:  result.prompt || '',
-        analysis: result.analysis || {}
-      });
+      .upsert(
+        {
+          user_id: req.user.id,
+          prompt: result.prompt || '',
+          analysis: result.analysis || {},
+          analysis_operation_id: operationId
+        },
+        { onConflict: 'analysis_operation_id', ignoreDuplicates: true }
+      );
     if (promptError) {
       console.error('[analyze] prompts history insert failed:', promptError.message, '| user:', req.user.id);
     }
@@ -203,12 +232,30 @@ router.post('/analyze', authMiddleware, upload.single('image'), async (req, res,
       userId: req.user.id,
       properties: {
         plan: profile.plan || 'free',
-        creditsCharged: paidPlan ? ANALYSIS_CREDIT_COST : 0
+        creditsCharged: Number(reservation?.chargedAmount) || 0,
+        creditPolicyVersion: 2
       }
     });
 
-    res.json({ success: true, ...result });
+    res.json({
+      success: true,
+      ...result,
+      analysisOperationId: operationId,
+      cached: false
+    });
   } catch (err) {
+    if (operationReserved && adminClient && operationId) {
+      try {
+        const refund = await refundAnalysisOperation(adminClient, {
+          operationId,
+          userId: req.user.id,
+          reason: err?.code || err?.name || 'analysis_failed'
+        });
+        console.warn('[analyze] reserved operation refunded:', operationId, '| applied:', refund?.refunded === true);
+      } catch (refundError) {
+        console.error('[analyze] CRITICAL refund failed:', operationId, refundError.message);
+      }
+    }
     next(err);
   } finally {
     if (filePath) {

@@ -113,7 +113,7 @@ describe('Landing and Image to Prompt routing contract', () => {
     expect(html).toContain('data-i18n="faq.credits.answer"');
     expect(html).toContain('data-i18n="faq.retention.answer"');
     expect(html).toContain('data-i18n="faq.languages.answer"');
-    expect(html).toContain('uses 120 credits per generation');
+    expect(html).toContain('Storyboards start at 30 credits, plus 5 credits per reference image');
     expect(html).toContain('Reference images are removed within 24 hours');
     expect(html).toContain('remain available in your history for 90 days');
     expect(html).toContain('Final video rendering happens separately in Seedance');

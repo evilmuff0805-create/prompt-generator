@@ -74,7 +74,7 @@ describe('Paddle payment mutations use atomic database boundaries', () => {
       p_transaction_id: 'txn_atomic_1',
       p_user_id: USER_ID,
       p_plan: 'pro',
-      p_amount: 1000,
+      p_amount: 600,
       p_skip_credit_mutation: false
     });
     expect(recordServerEvent).toHaveBeenCalledTimes(1);
@@ -173,7 +173,7 @@ describe('Paddle payment mutations use atomic database boundaries', () => {
     expect(client.rpc).toHaveBeenCalledWith('apply_purchase_refund', {
       p_transaction_id: 'txn_upgrade_refund_atomic',
       p_previous_plan: 'pro',
-      p_previous_allotment: 1000,
+      p_previous_allotment: 600,
       p_skip_credit_mutation: false
     });
   });

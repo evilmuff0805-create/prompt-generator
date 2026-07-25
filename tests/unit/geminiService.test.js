@@ -21,6 +21,7 @@ const SAMPLE_JSON = {
     hair: { style: 'short messy', color: 'dark brown #4E342E' },
     expression: 'Wide-eyed, joyful, and excited',
     pose: 'Standing, holding a megaphone',
+    orientation_and_gaze: 'front three-quarter view, body facing viewer-left, eyes looking at the megaphone',
     clothing: [
       { item: 'puffer jacket', color: 'red #C0392B', fabric: 'nylon', fit: 'oversized', detail: 'zipped' }
     ],
@@ -31,18 +32,36 @@ const SAMPLE_JSON = {
     time: 'evening',
     weather: 'clear',
     lighting: { type: 'warm spotlight', direction: 'front', quality: 'soft' },
-    background_elements: ['bokeh lights', 'movie posters']
+    background_elements: ['bokeh lights', 'movie posters'],
+    object_layout: [
+      'one character — center-lower frame — in front of the marquee',
+      'one megaphone — center-right — held beside the character face'
+    ],
+    depth_layers: [
+      'foreground: character and megaphone',
+      'midground: cinema entrance',
+      'background: marquee lights and posters'
+    ]
   },
   composition: {
     framing: 'medium shot',
     angle: 'eye-level',
     focus_point: 'character face',
+    viewpoint: 'eye-level frontal oblique view, no visible roll, medium distance',
+    subject_placement: 'center-lower cell, about 35% of frame height',
+    negative_space: 'upper-left and upper-right around the marquee, about 25% of frame',
+    spatial_relationships: [
+      'megaphone is viewer-right of the character face',
+      'movie posters sit behind the character'
+    ],
     aspect_ratio: '16:9'
   },
   style_modifiers: {
     medium: '3D render',
     aesthetic: ['cinematic', 'playful'],
     color_palette: 'warm and vibrant',
+    color_distribution: 'warm amber lights in the upper background, red jacket at center',
+    tonal_contrast: 'bright marquee highlights against deep evening midtones',
     post_processing: 'Octane render'
   },
   constraints: {
@@ -101,6 +120,68 @@ describe('buildFormattedPrompt', () => {
     const originals = brackets.map(b => b.original);
     const unique = new Set(originals);
     expect(originals.length).toBe(unique.size);
+  });
+
+  test('재현에 필요한 공간·시선·오브제·색상 정보를 고정 섹션으로 보존해야 한다', () => {
+    const { formattedPrompt } = buildFormattedPrompt('prose', SAMPLE_JSON);
+
+    expect(formattedPrompt).toContain('ORIENTATION & GAZE: front three-quarter view');
+    expect(formattedPrompt).toContain('OBJECT LAYOUT: one character — center-lower frame');
+    expect(formattedPrompt).toContain('DEPTH LAYERS: foreground: character and megaphone');
+    expect(formattedPrompt).toContain('SPATIAL FIDELITY: Viewpoint: eye-level frontal oblique view');
+    expect(formattedPrompt).toContain('Subject placement: center-lower cell');
+    expect(formattedPrompt).toContain('Negative space: upper-left and upper-right');
+    expect(formattedPrompt).toContain('COLOR & TONE: Distribution: warm amber lights');
+  });
+
+  test('test00 유형의 비대칭 절벽 작업실 구도를 중앙 구도로 단순화하지 않아야 한다', () => {
+    const cliffWorkspace = {
+      ...SAMPLE_JSON,
+      subject: {
+        ...SAMPLE_JSON.subject,
+        orientation_and_gaze:
+          'rear three-quarter view; body faces viewer-upper-left; head and visible gaze remain on the laptop'
+      },
+      scene: {
+        ...SAMPLE_JSON.scene,
+        object_layout: [
+          'one woman and desk — viewer-right lower third — seated on a diagonal wooden platform',
+          'one laptop — viewer-right lower third — directly in front of the woman',
+          'small plants, cup, notebook, woven rug, upholstered chair, boulders and stone path — preserve count and relative positions'
+        ],
+        depth_layers: [
+          'foreground: cliff garden, boulders, stone path and wooden platform',
+          'midground: woman, chair, diagonal desk, laptop and small props',
+          'background: vast cool gray-blue storm cloud field across viewer-left'
+        ]
+      },
+      composition: {
+        ...SAMPLE_JSON.composition,
+        viewpoint: 'extreme high oblique bird’s-eye view from viewer-upper-left toward viewer-lower-right',
+        subject_placement: 'small subject cluster in viewer-right lower third, leaving most of the frame open',
+        negative_space: 'cool dark cloud mass occupies roughly 60% of viewer-left',
+        spatial_relationships: [
+          'woman is behind and viewer-lower-right of the laptop',
+          'desk runs diagonally from viewer-lower-left to viewer-upper-right within the right third'
+        ]
+      },
+      style_modifiers: {
+        ...SAMPLE_JSON.style_modifiers,
+        color_distribution:
+          'cool slate gray-blue clouds dominate viewer-left; saturated green garden fills viewer-right; localized amber sunlight enters from viewer-upper-right',
+        tonal_contrast:
+          'deep cool cloud shadows on viewer-left against restrained warm rim highlights on the right, not a global golden grade'
+      }
+    };
+
+    const { formattedPrompt } = buildFormattedPrompt('prose', cliffWorkspace);
+
+    expect(formattedPrompt).toContain('rear three-quarter view');
+    expect(formattedPrompt).toContain('viewer-right lower third');
+    expect(formattedPrompt).toContain('extreme high oblique bird’s-eye view');
+    expect(formattedPrompt).toContain('roughly 60% of viewer-left');
+    expect(formattedPrompt).toContain('small plants, cup, notebook, woven rug, upholstered chair');
+    expect(formattedPrompt).toContain('not a global golden grade');
   });
 });
 
@@ -192,6 +273,38 @@ describe('Gemini schema telemetry', () => {
     expect(validateAnalysisSchema(degraded)).toEqual([
       'aspect_ratio_missing',
       'avoid_missing'
+    ]);
+  });
+
+  test('reports missing spatial-fidelity fields without rejecting the parsed legacy response', () => {
+    const degraded = {
+      ...SAMPLE_JSON,
+      subject: { ...SAMPLE_JSON.subject, orientation_and_gaze: '' },
+      scene: { ...SAMPLE_JSON.scene, object_layout: undefined, depth_layers: undefined },
+      composition: {
+        ...SAMPLE_JSON.composition,
+        viewpoint: '',
+        subject_placement: '',
+        negative_space: '',
+        spatial_relationships: undefined
+      },
+      style_modifiers: {
+        ...SAMPLE_JSON.style_modifiers,
+        color_distribution: '',
+        tonal_contrast: ''
+      }
+    };
+
+    expect(validateAnalysisSchema(degraded)).toEqual([
+      'subject_orientation_and_gaze_missing',
+      'object_layout_missing',
+      'depth_layers_missing',
+      'viewpoint_missing',
+      'subject_placement_missing',
+      'negative_space_missing',
+      'spatial_relationships_missing',
+      'color_distribution_missing',
+      'tonal_contrast_missing'
     ]);
   });
 

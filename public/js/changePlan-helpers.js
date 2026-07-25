@@ -10,7 +10,7 @@
   }
 }(typeof globalThis !== 'undefined' ? globalThis : this, function () {
 
-  const PLAN_CREDIT_LIMIT = { free: 0, pro: 1000, paid: 1000, enterprise: 4000 };
+  const PLAN_CREDIT_LIMIT = { free: 0, pro: 600, paid: 600, enterprise: 1500 };
   const DEFAULT_API_ERROR = 'The billing service returned an invalid response. Please try again later.';
 
   /**
@@ -34,6 +34,15 @@
     } catch (_) {
       return fallback;
     }
+  }
+
+  /**
+   * Only a confirmed, permanently canceled Paddle subscription may be routed
+   * to a brand-new checkout. Missing IDs and generic provider errors may still
+   * represent an active subscription and must not risk creating a duplicate.
+   */
+  function shouldOfferNewSubscription(code) {
+    return code === 'SUBSCRIPTION_CANCELED';
   }
 
   /**
@@ -95,6 +104,7 @@
 
   return {
     parseApiJson,
+    shouldOfferNewSubscription,
     parsePlanPreview,
     calcCreditWarning,
     createPlanPoller,

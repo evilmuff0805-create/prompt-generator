@@ -216,19 +216,19 @@ describe('recordPlanUpgradePurchase', () => {
       transaction_id:   TXN_ID,
       user_id:          USER_ID,
       plan:             'enterprise',
-      credits_granted:  4000,
+      credits_granted:  1500,
       status:           'completed',
       subscription_id:  SUB_ID,
       transaction_type: 'plan_upgrade'
     });
   });
 
-  test('credits는 plan에 따라 올바르게 설정돼야 한다 (pro=1000)', async () => {
+  test('credits는 plan에 따라 올바르게 설정돼야 한다 (pro=600)', async () => {
     const supabase = makeSupabaseMock();
     await recordPlanUpgradePurchase(supabase, { transactionId: TXN_ID, userId: USER_ID, plan: 'pro', subscriptionId: SUB_ID });
 
     const insertCall = supabase.from.mock.results[0].value.insert.mock.calls[0][0];
-    expect(insertCall.credits_granted).toBe(1000);
+    expect(insertCall.credits_granted).toBe(600);
   });
 
   test('중복 transaction_id(23505)이면 조용히 스킵해야 한다', async () => {
@@ -398,25 +398,25 @@ describe('syncPlanFromSubscription', () => {
 describe('applyPlanChange', () => {
   const USER_ID = 'user-uuid-123';
 
-  test('업그레이드: apply_plan_change RPC를 enterprise allotment(4000)으로 호출해야 한다', async () => {
+  test('업그레이드: apply_plan_change RPC를 enterprise allotment(1500)으로 호출해야 한다', async () => {
     const supabase = makeSupabaseMock();
     await applyPlanChange(supabase, USER_ID, 'enterprise');
 
     expect(supabase._rpcFn).toHaveBeenCalledWith('apply_plan_change', {
       p_user_id: USER_ID,
       p_new_plan: 'enterprise',
-      p_new_allotment: 4000
+      p_new_allotment: 1500
     });
   });
 
-  test('다운그레이드: apply_plan_change RPC를 pro allotment(1000)으로 호출해야 한다', async () => {
+  test('다운그레이드: apply_plan_change RPC를 pro allotment(600)으로 호출해야 한다', async () => {
     const supabase = makeSupabaseMock();
     await applyPlanChange(supabase, USER_ID, 'pro');
 
     expect(supabase._rpcFn).toHaveBeenCalledWith('apply_plan_change', {
       p_user_id: USER_ID,
       p_new_plan: 'pro',
-      p_new_allotment: 1000
+      p_new_allotment: 600
     });
   });
 
@@ -503,7 +503,7 @@ describe('subscription.updated status 가드', () => {
     expect(supabase._rpcFn).toHaveBeenCalledWith('apply_plan_change', {
       p_user_id: USER_ID,
       p_new_plan: 'enterprise',
-      p_new_allotment: 4000
+      p_new_allotment: 1500
     });
   });
 
@@ -515,7 +515,7 @@ describe('subscription.updated status 가드', () => {
     expect(supabase._rpcFn).toHaveBeenCalledWith('apply_plan_change', {
       p_user_id: USER_ID,
       p_new_plan: 'pro',
-      p_new_allotment: 1000
+      p_new_allotment: 600
     });
   });
 });

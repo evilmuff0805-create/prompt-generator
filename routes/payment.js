@@ -40,6 +40,19 @@ function buildSubscriptionUpdateBody(priceId) {
   };
 }
 
+/* ── Read a Paddle error code without exposing provider details ── */
+// Paddle returns structured JSON for rejected subscription updates. We only
+// inspect the stable machine code; callers still receive our sanitized errors.
+function extractPaddleErrorCode(body) {
+  if (typeof body !== 'string' || !body.trim()) return null;
+  try {
+    const parsed = JSON.parse(body);
+    return typeof parsed?.error?.code === 'string' ? parsed.error.code : null;
+  } catch (_) {
+    return null;
+  }
+}
+
 function makeUserClient(token) {
   return createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY, {
     global: { headers: { Authorization: `Bearer ${token}` } },
@@ -231,19 +244,32 @@ async function handleChangePlan(req, res) {
 
   if (!paddleRes.ok) {
     const errBody = await paddleRes.text().catch(() => '');
+    const paddleErrorCode = extractPaddleErrorCode(errBody);
     if (paddleRes.status === 403) {
       console.error('[payment/change-plan] [CRITICAL] Paddle 403 — API key likely missing subscription.write scope. body=' + errBody);
     } else {
       console.error('[payment/change-plan] Paddle update error status=' + paddleRes.status + ' body=' + errBody);
     }
+
+    // Paddle cancellations are permanent. This exact provider code is the only
+    // rejected-change case that may safely offer a brand-new checkout. Keeping
+    // all other 4xx responses generic prevents duplicate active subscriptions.
+    if (paddleErrorCode === 'subscription_update_when_canceled') {
+      return res.status(409).json({
+        success: false,
+        error: 'Your previous subscription is canceled. Start a new subscription to continue.',
+        code: 'SUBSCRIPTION_CANCELED'
+      });
+    }
+
     // Money-related: do not leak Paddle internals; our DB is left untouched
-    // (plan stays in sync via webhook). Give an actionable but provider-agnostic
-    // message for rejected changes, including canceled subscriptions.
+    // (plan stays in sync via webhook). All other rejected changes remain
+    // provider-agnostic and must not route the user into a new checkout.
     const rejected = [400, 404, 409, 422].includes(paddleRes.status);
     return res.status(502).json({
       success: false,
       error: rejected
-        ? 'This subscription cannot be changed right now. Check that it is active, or start a new subscription.'
+        ? 'This subscription cannot be changed right now. Please manage the existing subscription or try again later.'
         : 'Could not change your plan. Please try again later.',
       code: rejected ? 'PADDLE_CHANGE_REJECTED' : 'PADDLE_UNAVAILABLE'
     });
@@ -269,4 +295,5 @@ module.exports = router;
 module.exports.extractPortalUrl = extractPortalUrl;
 module.exports.planToPriceId = planToPriceId;
 module.exports.buildSubscriptionUpdateBody = buildSubscriptionUpdateBody;
+module.exports.extractPaddleErrorCode = extractPaddleErrorCode;
 module.exports.handleChangePlan = handleChangePlan;
