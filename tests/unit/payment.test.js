@@ -8,6 +8,7 @@ const {
   extractPortalUrl,
   planToPriceId,
   buildSubscriptionUpdateBody,
+  extractPaddleErrorCode,
   handleChangePlan
 } = require('../../routes/payment');
 
@@ -193,6 +194,24 @@ describe('planToPriceId', () => {
     delete process.env.PADDLE_PRO_PRICE_ID;
     expect(planToPriceId('pro')).toBeNull();
   });
+});
+
+describe('extractPaddleErrorCode', () => {
+  test('Paddle의 구조화된 오류 코드만 추출해야 한다', () => {
+    expect(extractPaddleErrorCode(JSON.stringify({
+      error: {
+        code: 'subscription_update_when_canceled',
+        detail: 'provider detail must stay server-side'
+      }
+    }))).toBe('subscription_update_when_canceled');
+  });
+
+  test.each(['', 'not-json', '{"error":null}', '{"error":{"code":123}}'])(
+    '비정상 응답은 안전하게 null을 반환해야 한다: %s',
+    (body) => {
+      expect(extractPaddleErrorCode(body)).toBeNull();
+    }
+  );
 });
 
 describe('buildSubscriptionUpdateBody', () => {
@@ -386,8 +405,31 @@ describe('handleChangePlan (POST /api/payment/change-plan)', () => {
 
   // ── 실패/안전 처리 ──
 
+  test('취소된 구독은 409 SUBSCRIPTION_CANCELED로만 분류하고 DB를 변경하지 않아야 한다', async () => {
+    fetchMock.mockReturnValue(paddleErr(400, JSON.stringify({
+      error: {
+        code: 'subscription_update_when_canceled',
+        detail: 'cannot update subscription, as subscription is canceled'
+      }
+    })));
+    const req = makeReq({ body: { plan: 'enterprise', preview: true }, profile: { plan: 'pro', paddle_subscription_id: SUB_ID } });
+    const res = makeRes();
+    await handleChangePlan(req, res);
+
+    expect(res.statusCode).toBe(409);
+    expect(res.body).toEqual({
+      success: false,
+      error: 'Your previous subscription is canceled. Start a new subscription to continue.',
+      code: 'SUBSCRIPTION_CANCELED'
+    });
+    expect(JSON.stringify(res.body)).not.toContain('cannot update subscription');
+    const fromResult = req.supabase.from.mock.results[0].value;
+    expect(fromResult.update).toBeUndefined();
+    expect(fromResult.insert).toBeUndefined();
+  });
+
   test('Paddle 4xx/5xx 시 502 안전 메시지, Paddle 원문 미노출', async () => {
-    fetchMock.mockReturnValue(paddleErr(400, '{"error":"some_paddle_detail"}'));
+    fetchMock.mockReturnValue(paddleErr(400, '{"error":{"code":"some_other_error","detail":"some_paddle_detail"}}'));
     const req = makeReq({ body: { plan: 'enterprise' }, profile: { plan: 'pro', paddle_subscription_id: SUB_ID } });
     const res = makeRes();
     await handleChangePlan(req, res);
@@ -395,7 +437,7 @@ describe('handleChangePlan (POST /api/payment/change-plan)', () => {
     expect(res.statusCode).toBe(502);
     expect(res.body.success).toBe(false);
     expect(res.body.code).toBe('PADDLE_CHANGE_REJECTED');
-    expect(res.body.error).toContain('Check that it is active');
+    expect(res.body.error).toContain('manage the existing subscription');
     expect(JSON.stringify(res.body)).not.toContain('some_paddle_detail');
   });
 

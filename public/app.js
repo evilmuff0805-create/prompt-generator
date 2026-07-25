@@ -1210,19 +1210,23 @@ const changePlanConfirmBtn = document.getElementById('changePlanConfirmBtn');
 const changePlanUpdatingMsg = document.getElementById('changePlanUpdatingMsg');
 const changePlanRefreshBtn = document.getElementById('changePlanRefreshBtn');
 const cpUpdatingSpinner    = document.getElementById('cpUpdatingSpinner');
+const changePlanResubscribeMsg = document.getElementById('changePlanResubscribeMsg');
+const changePlanResubscribeBtn = document.getElementById('changePlanResubscribeBtn');
+const changePlanResubscribeCancelBtn = document.getElementById('changePlanResubscribeCancelBtn');
 const changePlanErrorMsg   = document.getElementById('changePlanErrorMsg');
 const changePlanDismissBtn = document.getElementById('changePlanDismissBtn');
 
 const cpStateLoading  = document.getElementById('cpStateLoading');
 const cpStateReady    = document.getElementById('cpStateReady');
 const cpStateUpdating = document.getElementById('cpStateUpdating');
+const cpStateResubscribe = document.getElementById('cpStateResubscribe');
 const cpStateError    = document.getElementById('cpStateError');
 
 let _cpTargetPlan = null;
 let _cpPollCancel = null;
 
 function cpShowState(state) {
-  [cpStateLoading, cpStateReady, cpStateUpdating, cpStateError].forEach(el => {
+  [cpStateLoading, cpStateReady, cpStateUpdating, cpStateResubscribe, cpStateError].forEach(el => {
     if (el) el.style.display = 'none';
   });
   if (state) state.style.display = '';
@@ -1275,7 +1279,13 @@ async function _cpLoadPreview(targetPlan, isUpgrade) {
       uiText('plan.change.error.loadDetails')
     );
 
-    if (!res.ok || !json.success) throw new Error(uiText('plan.change.error.loadDetails'));
+    if (!res.ok || !json.success) {
+      if (ChangePlanHelpers.shouldOfferNewSubscription(json.code)) {
+        _cpRenderResubscribe(targetPlan);
+        return;
+      }
+      throw new Error(uiText('plan.change.error.loadDetails'));
+    }
 
     _cpRenderReady(ChangePlanHelpers.parsePlanPreview(json.data), targetPlan, isUpgrade);
   } catch (err) {
@@ -1283,6 +1293,16 @@ async function _cpLoadPreview(targetPlan, isUpgrade) {
     changePlanErrorMsg.textContent = err.message || uiText('common.error.tryAgain');
     cpShowState(cpStateError);
   }
+}
+
+function _cpRenderResubscribe(targetPlan) {
+  const planLabel = getPlanLabel(targetPlan);
+  changePlanIcon.textContent = '↻';
+  changePlanTitle.textContent = uiText('plan.change.resubscribe.title');
+  changePlanResubscribeMsg.textContent = uiText('plan.change.resubscribe.description', { plan: planLabel });
+  changePlanResubscribeBtn.textContent = uiText('plan.change.resubscribe.action', { plan: planLabel });
+  changePlanResubscribeBtn.disabled = false;
+  cpShowState(cpStateResubscribe);
 }
 
 function _cpRenderReady(preview, targetPlan, isUpgrade) {
@@ -1349,7 +1369,13 @@ changePlanConfirmBtn?.addEventListener('click', async () => {
       uiText('plan.change.error.changeFailed')
     );
 
-    if (!res.ok || !json.success) throw new Error(uiText('plan.change.error.changeFailed'));
+    if (!res.ok || !json.success) {
+      if (ChangePlanHelpers.shouldOfferNewSubscription(json.code)) {
+        _cpRenderResubscribe(targetPlan);
+        return;
+      }
+      throw new Error(uiText('plan.change.error.changeFailed'));
+    }
 
     // PATCH accepted — webhook is async, poll until plan is reflected
     changePlanTitle.textContent = uiText('plan.change.updating');
@@ -1383,6 +1409,16 @@ changePlanConfirmBtn?.addEventListener('click', async () => {
 
 changePlanClose?.addEventListener('click', closeChangePlanModal);
 changePlanCancelBtn?.addEventListener('click', closeChangePlanModal);
+changePlanResubscribeCancelBtn?.addEventListener('click', closeChangePlanModal);
+changePlanResubscribeBtn?.addEventListener('click', async () => {
+  const targetPlan = _cpTargetPlan;
+  if (!['pro', 'enterprise'].includes(targetPlan)) return;
+
+  // Checkout is intentionally opened only after this explicit user action.
+  changePlanResubscribeBtn.disabled = true;
+  closeChangePlanModal();
+  await handleCheckout(targetPlan);
+});
 changePlanDismissBtn?.addEventListener('click', closeChangePlanModal);
 changePlanRefreshBtn?.addEventListener('click', () => window.location.reload());
 changePlanModal?.addEventListener('click', e => { if (e.target === changePlanModal) closeChangePlanModal(); });

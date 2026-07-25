@@ -37,6 +37,15 @@
   }
 
   /**
+   * Only a confirmed, permanently canceled Paddle subscription may be routed
+   * to a brand-new checkout. Missing IDs and generic provider errors may still
+   * represent an active subscription and must not risk creating a duplicate.
+   */
+  function shouldOfferNewSubscription(code) {
+    return code === 'SUBSCRIPTION_CANCELED';
+  }
+
+  /**
    * Extracts display-ready charge info from a change-plan preview response body.
    * All monetary values returned in dollars (input is cents as string).
    * Returns null if data is falsy.
@@ -95,6 +104,7 @@
 
   return {
     parseApiJson,
+    shouldOfferNewSubscription,
     parsePlanPreview,
     calcCreditWarning,
     createPlanPoller,

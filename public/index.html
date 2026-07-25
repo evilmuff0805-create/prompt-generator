@@ -774,6 +774,15 @@
         <button class="btn btn--primary btn--full" id="changePlanRefreshBtn" style="display:none" data-i18n="plan.change.refresh">Refresh now</button>
       </div>
 
+      <!-- Resubscribe state: shown only for Paddle's confirmed canceled-subscription error -->
+      <div id="cpStateResubscribe" style="display:none">
+        <p class="modal__sub" id="changePlanResubscribeMsg"></p>
+        <div class="modal__btn-row">
+          <button class="btn btn--secondary" id="changePlanResubscribeCancelBtn" data-i18n="plan.change.cancel">Cancel</button>
+          <button class="btn btn--primary" id="changePlanResubscribeBtn"></button>
+        </div>
+      </div>
+
       <!-- Error state -->
       <div id="cpStateError" style="display:none">
         <p class="modal__sub" id="changePlanErrorMsg"></p>

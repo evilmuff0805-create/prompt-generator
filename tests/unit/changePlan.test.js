@@ -2,6 +2,7 @@
 
 const {
   parseApiJson,
+  shouldOfferNewSubscription,
   parsePlanPreview,
   calcCreditWarning,
   createPlanPoller,
@@ -34,6 +35,23 @@ describe('parseApiJson', () => {
       error: 'Inactive',
       code: 'NO_SUBSCRIPTION'
     });
+  });
+});
+
+describe('shouldOfferNewSubscription', () => {
+  test('Paddle가 취소를 확정한 경우에만 새 체크아웃을 허용', () => {
+    expect(shouldOfferNewSubscription('SUBSCRIPTION_CANCELED')).toBe(true);
+  });
+
+  test.each([
+    'NO_SUBSCRIPTION',
+    'NO_ACTIVE_SUBSCRIPTION',
+    'PADDLE_CHANGE_REJECTED',
+    'PADDLE_UNAVAILABLE',
+    'INVALID_RESPONSE',
+    undefined
+  ])('%s는 중복 구독 방지를 위해 새 체크아웃으로 보내지 않음', (code) => {
+    expect(shouldOfferNewSubscription(code)).toBe(false);
   });
 });
 
