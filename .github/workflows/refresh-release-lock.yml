@@ -1,0 +1,37 @@
+name: Refresh release lockfile
+
+on:
+  push:
+    branches:
+      - agent/release-20260725-credit-image-security
+
+permissions:
+  contents: write
+
+jobs:
+  refresh-lockfile:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout release branch
+        uses: actions/checkout@v6
+      - name: Use Node.js 24
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - name: Refresh package lock without lifecycle scripts
+        run: npm install --package-lock-only --ignore-scripts
+      - name: Verify strict dependency audit
+        run: npm audit --audit-level=high
+      - name: Commit lockfile when changed
+        run: |
+          if git diff --quiet -- package-lock.json; then
+            echo "package-lock.json is already current"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package-lock.json
+          git commit -m "Refresh patched dependency lockfile"
+          git push
