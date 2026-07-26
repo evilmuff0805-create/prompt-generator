@@ -8,6 +8,14 @@ const _sbClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
   auth: { storage: window.sessionStorage, persistSession: true, autoRefreshToken: true }
 });
 
+window.PromptGenGetAuthContext = async function () {
+  const { data: { session } } = await _sbClient.auth.getSession();
+  return session ? {
+    token: session.access_token,
+    userId: session.user?.id || null
+  } : null;
+};
+
 async function getAuthToken() {
   const { data: { session } } = await _sbClient.auth.getSession();
   return session?.access_token || null;
@@ -32,7 +40,12 @@ async function signOut() {
 }
 
 function onAuthStateChange(callback) {
-  return _sbClient.auth.onAuthStateChange(callback);
+  return _sbClient.auth.onAuthStateChange((event, session) => {
+    window.dispatchEvent(new CustomEvent('promptgen:auth-context-change', {
+      detail: { signedIn: Boolean(session) }
+    }));
+    callback(event, session);
+  });
 }
 
 async function apiFetch(path, options = {}) {

@@ -168,6 +168,7 @@
 
   async function handleGenerate(formData) {
     const errorBanner = document.getElementById('errorBanner');
+    window.PromptGenStoryboardProgress?.startSubmission();
     const token = await StoryboardAPI.getAuthToken();
     window.PromptGenAnalytics?.setAuthToken(token);
     window.PromptGenAnalytics?.track('storyboard_started', {
@@ -178,10 +179,19 @@
 
     const actualCost = storyboardCreditPolicy.baseCost
       + (formData.referenceImageIds.length * storyboardCreditPolicy.perReferenceCost);
-    const result = await StoryboardAPI.generateStoryboard(formData);
+    let result;
+    try {
+      result = await StoryboardAPI.generateStoryboard(formData);
+    } catch {
+      window.PromptGenStoryboardProgress?.finishSubmission();
+      errorBanner.textContent = uiText('storyboard.error.generation');
+      errorBanner.style.display = 'block';
+      return;
+    }
     if (!result.success) console.error('[storyboard] generate error:', JSON.stringify(result));
 
     if (!result.success) {
+      window.PromptGenStoryboardProgress?.finishSubmission();
       const messages = {
         PLAN_NOT_ALLOWED: uiText('storyboard.error.plan'),
         INSUFFICIENT_CREDITS: uiText('storyboard.error.credits', { credits: actualCost }),
@@ -197,7 +207,9 @@
       return;
     }
 
-    // Redirect to result page
+    // Persist the server-accepted durable job before navigation. The shared
+    // progress surface can now follow it from Image to Prompt or Endframe.
+    await window.PromptGenStoryboardProgress?.acceptJob(result.storyboard.id);
     window.location.href = `/storyboard/${result.storyboard.id}`;
   }
 

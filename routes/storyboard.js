@@ -376,6 +376,45 @@ router.post('/upload-reference', requireAuth, upload.single('image'), async (req
   }
 });
 
+// GET /active — lightweight, authenticated global progress discovery.
+// This returns no scenario, prompt, reference, or Storage data; it only lets
+// the signed-in owner resume a pending/processing job from another tool page.
+router.get('/active', requireAuth, async (req, res) => {
+  const userId = req.user.id;
+
+  try {
+    const admin = getAdminClient();
+    const { data, error } = await admin
+      .from('storyboards')
+      .select('id, status, progress, current_step, created_at, updated_at')
+      .eq('user_id', userId)
+      .is('deleted_at', null)
+      .in('status', ['pending', 'processing'])
+      .order('created_at', { ascending: false })
+      .limit(5);
+
+    if (error) {
+      console.error('[storyboard /active] error:', error.message);
+      return res.status(500).json({ code: 'INTERNAL_ERROR' });
+    }
+
+    return res.json({
+      success: true,
+      items: (data || []).map(item => ({
+        id: item.id,
+        status: item.status,
+        progress: item.progress || 0,
+        currentStep: item.current_step,
+        createdAt: item.created_at,
+        updatedAt: item.updated_at
+      }))
+    });
+  } catch (err) {
+    console.error('[storyboard /active] error:', err.message);
+    return res.status(500).json({ code: 'INTERNAL_ERROR' });
+  }
+});
+
 // GET /list — MUST be before /:id
 router.get('/list', requireAuth, async (req, res) => {
   const userId = req.user.id;
