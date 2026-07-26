@@ -7,7 +7,7 @@ describe('PromptGen Google direct sign-in', () => {
 
   beforeEach(() => {
     jest.resetModules();
-    for (const key of ['document', 'google', 'PromptGenI18n', 'PromptGenAnalytics']) {
+    for (const key of ['document', 'google', 'PromptGenI18n', 'PromptGenAnalytics', 'addEventListener']) {
       originalGlobals[key] = global[key];
     }
   });
@@ -92,6 +92,45 @@ describe('PromptGen Google direct sign-in', () => {
       nonce: expect.stringMatching(/^[a-f0-9]{64}$/)
     });
     expect(signInWithIdToken.mock.calls[0][0].nonce).not.toBe(googleConfig.nonce);
+  });
+
+  test('mounts while the document is still loading instead of waiting for window load', async () => {
+    const container = {
+      dataset: { googleWidth: '320' },
+      parentElement: { querySelector: () => null },
+      ownerDocument: null,
+      replaceChildren: jest.fn()
+    };
+    const documentStub = {
+      readyState: 'loading',
+      documentElement: { lang: 'en' },
+      getElementById: id => id === 'googleLoginBtn' ? container : null,
+      addEventListener: jest.fn(),
+      removeEventListener: jest.fn()
+    };
+    container.ownerDocument = documentStub;
+
+    global.document = documentStub;
+    global.addEventListener = jest.fn();
+    global.google = {
+      accounts: {
+        id: {
+          initialize: jest.fn(),
+          renderButton: jest.fn()
+        }
+      }
+    };
+
+    const auth = require('../../public/google-auth');
+    const result = await auth.mount({
+      client: { auth: { signInWithIdToken: jest.fn() } },
+      buttonIds: ['googleLoginBtn'],
+      surface: 'home'
+    });
+
+    expect(result.mounted).toBe(true);
+    expect(global.addEventListener).not.toHaveBeenCalledWith('load', expect.any(Function), expect.anything());
+    expect(global.google.accounts.id.renderButton).toHaveBeenCalledTimes(1);
   });
 
   test('blocks known in-app browsers before requesting Google identity UI', () => {
