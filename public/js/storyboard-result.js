@@ -99,6 +99,7 @@
 
     const sb = data.storyboard;
     currentStoryboard = sb;
+    window.PromptGenStoryboardProgress?.markViewed(storyboardId);
     document.getElementById('processingState').style.display = 'none';
     document.getElementById('errorState').style.display = 'none';
     document.getElementById('resultState').style.display = '';

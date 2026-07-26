@@ -5,6 +5,14 @@ const sbClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
   auth: { storage: window.sessionStorage, persistSession: true, autoRefreshToken: true }
 });
 
+window.PromptGenGetAuthContext = async function () {
+  const { data: { session } } = await sbClient.auth.getSession();
+  return session ? {
+    token: session.access_token,
+    userId: session.user?.id || null
+  } : null;
+};
+
 (function () {
   'use strict';
 
@@ -93,6 +101,9 @@ const sbClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
 
   sbClient.auth.onAuthStateChange(function (event, session) {
     updateNavAuth(session);
+    window.dispatchEvent(new CustomEvent('promptgen:auth-context-change', {
+      detail: { signedIn: Boolean(session) }
+    }));
     window.PromptGenAnalytics?.setAuthToken(session?.access_token || null);
     if (event === 'SIGNED_IN') {
       window.PromptGenAnalytics?.track('auth_completed', {
