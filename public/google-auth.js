@@ -62,13 +62,6 @@
     return googleLibraryPromise;
   }
 
-  function waitForPageLoad(documentRef = root?.document) {
-    if (!documentRef || documentRef.readyState === 'complete' || typeof root?.addEventListener !== 'function') {
-      return Promise.resolve();
-    }
-    return new Promise(resolve => root.addEventListener('load', resolve, { once: true }));
-  }
-
   function getLocale() {
     const locale = root?.PromptGenI18n?.getLocale?.() || root?.document?.documentElement?.lang || 'en';
     return SUPPORTED_LOCALES.has(locale) ? locale : 'en';
@@ -135,11 +128,12 @@
     let currentNonce;
     let google;
     try {
-      // A third-party identity script must never delay PromptGen's own load
-      // event. The static, localized fallback remains visible until GIS is ready.
-      await waitForPageLoad(documentRef);
-      currentNonce = await generateNonce();
-      google = await loadGoogleLibrary(documentRef);
+      // The GIS script is injected asynchronously, so it can start downloading
+      // as soon as the sign-in controls mount without blocking PromptGen render.
+      [currentNonce, google] = await Promise.all([
+        generateNonce(),
+        loadGoogleLibrary(documentRef)
+      ]);
     } catch (error) {
       showError(containers, error);
       onError?.(error);

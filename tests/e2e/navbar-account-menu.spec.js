@@ -23,7 +23,10 @@ test.beforeEach(async ({ page }) => {
       createClient: () => ({
         auth: {
           getSession: async () => ({ data: { session: fakeSession } }),
-          onAuthStateChange: () => ({ data: { subscription: { unsubscribe() {} } } }),
+          onAuthStateChange: callback => {
+            queueMicrotask(() => callback('INITIAL_SESSION', fakeSession));
+            return { data: { subscription: { unsubscribe() {} } } };
+          },
           signInWithOAuth: async () => ({ error: null }),
           signInWithIdToken: async () => ({ error: null }),
           signOut: async () => ({ error: null }),

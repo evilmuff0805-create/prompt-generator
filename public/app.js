@@ -148,6 +148,10 @@ const state = {
 
 let currentUserPlan = null;
 let currentUserCredits = 0;
+let activeAuthUserId = null;
+let authSessionGeneration = 0;
+let profileRefreshPromise = null;
+let profileRefreshUserId = null;
 
 function updateAnalyzeButtonState() {
   if (!analyzeBtn) return;
@@ -853,49 +857,75 @@ if (accountMenuTrigger && accountMenu) {
 }
 
 async function refreshUserProfile(session) {
-  if (!session) return;
-  try {
-    await loadProductCatalog().catch(() => null);
-    const resp = await fetch('/api/user/profile', {
-      headers: { 'Authorization': `Bearer ${session.access_token}` }
-    });
-    const data = await resp.json();
-    if (data.success) {
-      userNameEl.textContent = data.user.full_name || data.user.email;
-      if (userAvatarEl) userAvatarEl.style.display = 'flex';
-      const planKey = data.plan || 'free';
-      planBadgeEl.textContent = getPlanLabel(planKey);
-      const badgeClass = planKey === 'enterprise' ? 'enterprise' : (planKey === 'free' ? 'free' : 'pro');
-      planBadgeEl.className = `plan-badge plan-badge--${badgeClass}`;
-      currentUserPlan = planKey;
-      currentUserCredits = data.credits || 0;
-      if (['pro', 'enterprise', 'paid'].includes(planKey)) {
-        const total = getPlanTotalCredits(planKey);
-        usageDisplayEl.textContent = total == null
-          ? uiText('account.credits.remaining', {
-              remaining: window.PromptGenI18n?.formatNumber(currentUserCredits) || currentUserCredits
-            })
-          : uiText('account.credits.remainingOfTotal', {
-              remaining: window.PromptGenI18n?.formatNumber(currentUserCredits) || currentUserCredits,
-              total: window.PromptGenI18n?.formatNumber(total) || total
-            });
-        if (manageSubBtn) manageSubBtn.style.display = '';
-      } else {
-        usageDisplayEl.textContent = uiText('account.dailyUsage', { used: data.daily_used, total: 1 });
-        if (manageSubBtn) manageSubBtn.style.display = 'none';
-      }
-      updateAnalyzeButtonState();
-      updatePricingButtons();
-    }
-  } catch (e) {
-    // ignore profile fetch errors
+  const userId = session?.user?.id;
+  if (!userId) return null;
+  if (profileRefreshPromise && profileRefreshUserId === userId) {
+    return profileRefreshPromise;
   }
+
+  const requestGeneration = authSessionGeneration;
+  const request = (async () => {
+    try {
+      const [resp] = await Promise.all([
+        fetch('/api/user/profile', {
+          headers: { 'Authorization': `Bearer ${session.access_token}` }
+        }),
+        loadProductCatalog().catch(() => null)
+      ]);
+      const data = await resp.json();
+      if (data.success && activeAuthUserId === userId && authSessionGeneration === requestGeneration) {
+        userNameEl.textContent = data.user.full_name || data.user.email;
+        if (userAvatarEl) userAvatarEl.style.display = 'flex';
+        const planKey = data.plan || 'free';
+        planBadgeEl.textContent = getPlanLabel(planKey);
+        const badgeClass = planKey === 'enterprise' ? 'enterprise' : (planKey === 'free' ? 'free' : 'pro');
+        planBadgeEl.className = `plan-badge plan-badge--${badgeClass}`;
+        currentUserPlan = planKey;
+        currentUserCredits = data.credits || 0;
+        if (['pro', 'enterprise', 'paid'].includes(planKey)) {
+          const total = getPlanTotalCredits(planKey);
+          usageDisplayEl.textContent = total == null
+            ? uiText('account.credits.remaining', {
+                remaining: window.PromptGenI18n?.formatNumber(currentUserCredits) || currentUserCredits
+              })
+            : uiText('account.credits.remainingOfTotal', {
+                remaining: window.PromptGenI18n?.formatNumber(currentUserCredits) || currentUserCredits,
+                total: window.PromptGenI18n?.formatNumber(total) || total
+              });
+          if (manageSubBtn) manageSubBtn.style.display = '';
+        } else {
+          usageDisplayEl.textContent = uiText('account.dailyUsage', { used: data.daily_used, total: 1 });
+          if (manageSubBtn) manageSubBtn.style.display = 'none';
+        }
+        updateAnalyzeButtonState();
+        updatePricingButtons();
+      }
+      return data;
+    } catch (e) {
+      // Keep authentication usable even if profile hydration is temporarily unavailable.
+      return null;
+    }
+  })();
+
+  let trackedRequest;
+  trackedRequest = request.finally(() => {
+    if (profileRefreshPromise === trackedRequest) {
+      profileRefreshPromise = null;
+      profileRefreshUserId = null;
+    }
+  });
+  profileRefreshUserId = userId;
+  profileRefreshPromise = trackedRequest;
+  return trackedRequest;
 }
 
 function updateNavUI(session) {
   if (session) {
     loginNavBtn.style.display = 'none';
     userProfileEl.style.display = 'flex';
+    const meta = session.user?.user_metadata || {};
+    userNameEl.textContent = meta.full_name || meta.name || session.user?.email || '';
+    if (userAvatarEl) userAvatarEl.style.display = 'flex';
   } else {
     setAccountMenuOpen(false);
     loginNavBtn.style.display = '';
@@ -903,12 +933,25 @@ function updateNavUI(session) {
   }
 }
 
-sbClient.auth.onAuthStateChange(async (event, session) => {
+sbClient.auth.onAuthStateChange((event, session) => {
+  const nextUserId = session?.user?.id || null;
+  if (nextUserId !== activeAuthUserId) {
+    activeAuthUserId = nextUserId;
+    authSessionGeneration += 1;
+    currentUserPlan = null;
+    currentUserCredits = 0;
+    usageDisplayEl.textContent = '';
+    if (manageSubBtn) manageSubBtn.style.display = 'none';
+    if (session) {
+      planBadgeEl.textContent = uiText('common.state.loading');
+      planBadgeEl.className = 'plan-badge plan-badge--free';
+    }
+    updateAnalyzeButtonState();
+    updatePricingButtons();
+  }
+
   updateNavUI(session);
   window.PromptGenAnalytics?.setAuthToken(session?.access_token || null);
-  if (session) {
-    await refreshUserProfile(session);
-  }
   if (event === 'SIGNED_IN') {
     window.PromptGenAnalytics?.track('auth_completed', {
       surface: 'home',
@@ -917,17 +960,13 @@ sbClient.auth.onAuthStateChange(async (event, session) => {
     closeModal();
     closeAuthRequiredModal();
   }
-});
-
-// Init on page load
-(async () => {
-  const { data: { session } } = await sbClient.auth.getSession();
-  updateNavUI(session);
-  window.PromptGenAnalytics?.setAuthToken(session?.access_token || null);
   if (session) {
-    await refreshUserProfile(session);
+    void refreshUserProfile(session);
+  } else {
+    profileRefreshPromise = null;
+    profileRefreshUserId = null;
   }
-})();
+});
 
 /* ══════════════════════════════════════
    HISTORY
