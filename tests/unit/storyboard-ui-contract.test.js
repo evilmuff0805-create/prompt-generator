@@ -67,6 +67,16 @@ describe('Storyboard Functional Liquid Glass contract', () => {
     expect(css).toContain('overflow-wrap: anywhere');
   });
 
+  test('result locale changes re-render cached data without racing API requests', () => {
+    const source = readPublic(path.join('js', 'storyboard-result.js'));
+    const localeHandler = source.slice(source.indexOf("document.addEventListener('promptgen:localechange'"));
+
+    expect(source).toContain('function renderLocalizedResult(sb)');
+    expect(localeHandler).toContain('renderLocalizedResult(currentStoryboard)');
+    expect(localeHandler).toContain('renderSharePanel()');
+    expect(localeHandler).not.toContain('loadResult()');
+  });
+
   test('Storyboard routes render asset placeholders instead of sending raw templates', () => {
     const source = fs.readFileSync(path.join(ROOT, 'server.js'), 'utf8');
     for (const file of STORYBOARD_PAGES.filter(file => file !== 'storyboard-share.html')) {
