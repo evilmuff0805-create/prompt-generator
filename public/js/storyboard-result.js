@@ -90,6 +90,25 @@
     document.getElementById('errorMsg').textContent = msg;
   }
 
+  function renderLocalizedResult(sb) {
+    const meta = document.getElementById('resultMeta');
+    const date = window.PromptGenI18n?.formatDate(new Date(sb.createdAt), { year: 'numeric', month: 'long', day: 'numeric' })
+      || new Date(sb.createdAt).toLocaleDateString();
+    meta.innerHTML = `
+      <span class="storyboard-meta-badge">${escapeHtml(uiText(`storyboard.style.${styleKey(sb.style)}`))}</span>
+      <span class="storyboard-meta-badge">${escapeHtml(uiText('storyboard.shots.count', { count: sb.cutCount }))}</span>
+      ${(sb.genres || []).map(g => `<span class="storyboard-meta-badge">${escapeHtml(genreLabel(g))}</span>`).join('')}
+      <span class="storyboard-meta-date">${date}</span>
+    `;
+
+    const img = document.getElementById('gridImage');
+    if (img && sb.gridUrl) {
+      img.alt = uiText('storyboardResult.gridAltStyle', {
+        style: uiText(`storyboard.style.${styleKey(sb.style)}`)
+      });
+    }
+  }
+
   async function loadResult() {
     const data = await StoryboardAPI.getStoryboard(storyboardId);
     if (!data.success) {
@@ -104,16 +123,7 @@
     document.getElementById('errorState').style.display = 'none';
     document.getElementById('resultState').style.display = '';
 
-    // Meta
-    const meta = document.getElementById('resultMeta');
-    const date = window.PromptGenI18n?.formatDate(new Date(sb.createdAt), { year: 'numeric', month: 'long', day: 'numeric' })
-      || new Date(sb.createdAt).toLocaleDateString();
-    meta.innerHTML = `
-      <span class="storyboard-meta-badge">${escapeHtml(uiText(`storyboard.style.${styleKey(sb.style)}`))}</span>
-      <span class="storyboard-meta-badge">${escapeHtml(uiText('storyboard.shots.count', { count: sb.cutCount }))}</span>
-      ${(sb.genres || []).map(g => `<span class="storyboard-meta-badge">${escapeHtml(genreLabel(g))}</span>`).join('')}
-      <span class="storyboard-meta-date">${date}</span>
-    `;
+    renderLocalizedResult(sb);
 
     // ① My Scenario — textContent (XSS-safe); hidden when absent (older rows)
     if (sb.scenario) {
@@ -125,7 +135,6 @@
     if (sb.gridUrl) {
       const img = document.getElementById('gridImage');
       img.src = sb.gridUrl;
-      img.alt = uiText('storyboardResult.gridAltStyle', { style: uiText(`storyboard.style.${styleKey(sb.style)}`) });
       const dlBtn = document.getElementById('downloadGridBtn');
       dlBtn.style.display = '';
       dlBtn.onclick = async (e) => {
@@ -342,6 +351,11 @@
       document.getElementById('refundNote').textContent = uiText('storyboardResult.refundedCredits', { credits: storyboardCost });
     }
     if (currentStatus && !currentStoryboard) showProcessing(currentStatus);
-    if (currentStoryboard) loadResult();
+    if (currentStoryboard) {
+      // Locale changes are display-only. Re-render from the already loaded
+      // storyboard so rapid toggles cannot race overlapping network requests.
+      renderLocalizedResult(currentStoryboard);
+      renderSharePanel();
+    }
   });
 })();
