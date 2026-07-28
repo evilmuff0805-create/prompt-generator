@@ -12,7 +12,12 @@ const {
   calculateStoryboardCreditCost,
   getPlanCredits,
   isPaidPlan,
+  isPro1099Enabled,
+  getProMonthlyPriceUsd,
   getPaddlePriceId,
+  getAcceptedPaddlePriceIds,
+  getPlanForPaddlePriceId,
+  validatePaddlePriceMappings,
   getPaddleCatalogMetadata,
   getPublicProductCatalog
 } = require('../../lib/product-catalog');
@@ -60,7 +65,7 @@ describe('public product catalog', () => {
     expect(() => calculateStoryboardCreditCost(1.5)).toThrow('referenceCount');
   });
 
-  test('Paddle public checkout configuration comes from server environment values', () => {
+  test('Paddle public checkout configuration uses stable IDs and flag-derived Pro pricing', () => {
     const env = {
       PADDLE_CLIENT_TOKEN: 'live_public_test_token',
       PADDLE_PRO_PRICE_ID: 'pri_pro_live',
@@ -72,14 +77,109 @@ describe('public product catalog', () => {
     const catalog = getPublicProductCatalog(env);
 
     expect(catalog.paddle).toEqual({
-      clientToken: 'live_public_test_token',
-      priceIds: { pro: 'pri_pro_live', enterprise: 'pri_enterprise_live' }
+      clientToken: 'live_public_test_token'
     });
-    expect(catalog.plans.pro.monthlyPriceUsd).toBe(12.5);
+    expect(catalog.paddle).not.toHaveProperty('priceIds');
+    expect(catalog.plans.pro.monthlyPriceUsd).toBe(9.99);
     expect(catalog.plans.pro.storyboards).toBe(20);
     expect(catalog.plans.enterprise.storyboards).toBe(50);
     expect(catalog.storyboardCreditCost).toBe(30);
     expect(getPaddlePriceId('pro', env)).toBe('pri_pro_live');
+  });
+
+  test('disabled cutover keeps USD 9.99 outbound while all configured Pro IDs remain inbound', () => {
+    const env = {
+      PRO_PRICE_1099_ENABLED: 'false',
+      PADDLE_PRO_PRICE_ID: ' pri_pro_999 ',
+      PADDLE_PRO_1099_PRICE_ID: 'pri_pro_1099',
+      PADDLE_PRO_LEGACY_PRICE_IDS: 'pri_pro_899, pri_pro_899',
+      PADDLE_ENTERPRISE_PRICE_ID: 'pri_enterprise_live'
+    };
+
+    expect(isPro1099Enabled(env)).toBe(false);
+    expect(getProMonthlyPriceUsd(env)).toBe(9.99);
+    expect(getPaddlePriceId('pro', env)).toBe('pri_pro_999');
+    expect(getAcceptedPaddlePriceIds('pro', env)).toEqual([
+      'pri_pro_999',
+      'pri_pro_1099',
+      'pri_pro_899'
+    ]);
+    expect(getPlanForPaddlePriceId('pri_pro_1099', env)).toBe('pro');
+    expect(getPlanForPaddlePriceId('pri_pro_999', env)).toBe('pro');
+    expect(getPlanForPaddlePriceId('pri_enterprise_live', env)).toBe('enterprise');
+    expect(getPlanForPaddlePriceId('pri_unknown', env)).toBeNull();
+
+    const catalog = getPublicProductCatalog(env);
+    expect(catalog.plans.pro.monthlyPriceUsd).toBe(9.99);
+    expect(catalog.paddle).not.toHaveProperty('priceIds');
+    expect(JSON.stringify(catalog)).not.toContain('pri_pro_999');
+    expect(JSON.stringify(catalog)).not.toContain('pri_pro_1099');
+    expect(JSON.stringify(catalog)).not.toContain('pri_pro_899');
+  });
+
+  test('enabled cutover sends only the new USD 10.99 ID outbound and retains USD 9.99 inbound', () => {
+    const env = {
+      PRO_PRICE_1099_ENABLED: ' TRUE ',
+      PADDLE_PRO_PRICE_ID: 'pri_pro_999',
+      PADDLE_PRO_1099_PRICE_ID: 'pri_pro_1099',
+      PADDLE_PRO_LEGACY_PRICE_IDS: 'pri_pro_899',
+      PADDLE_ENTERPRISE_PRICE_ID: 'pri_enterprise_live'
+    };
+
+    expect(isPro1099Enabled(env)).toBe(true);
+    expect(getProMonthlyPriceUsd(env)).toBe(10.99);
+    expect(getPaddlePriceId('pro', env)).toBe('pri_pro_1099');
+    expect(getAcceptedPaddlePriceIds('pro', env)).toEqual([
+      'pri_pro_1099',
+      'pri_pro_999',
+      'pri_pro_899'
+    ]);
+    expect(getPlanForPaddlePriceId('pri_pro_999', env)).toBe('pro');
+
+    const catalog = getPublicProductCatalog(env);
+    expect(catalog.plans.pro.monthlyPriceUsd).toBe(10.99);
+    expect(catalog.paddle).not.toHaveProperty('priceIds');
+    expect(JSON.stringify(catalog)).not.toContain('pri_pro_1099');
+    expect(JSON.stringify(catalog)).not.toContain('pri_pro_999');
+    expect(JSON.stringify(catalog)).not.toContain('pri_pro_899');
+  });
+
+  test('enabled cutover fails closed when either Pro ID is missing or IDs collide', () => {
+    expect(() => validatePaddlePriceMappings({
+      PRO_PRICE_1099_ENABLED: 'true',
+      PADDLE_PRO_PRICE_ID: 'pri_pro_999'
+    })).toThrow('PADDLE_PRO_1099_PRICE_ID');
+
+    expect(() => validatePaddlePriceMappings({
+      PRO_PRICE_1099_ENABLED: 'true',
+      PADDLE_PRO_1099_PRICE_ID: 'pri_pro_1099'
+    })).toThrow('PADDLE_PRO_PRICE_ID');
+
+    expect(() => validatePaddlePriceMappings({
+      PRO_PRICE_1099_ENABLED: 'true',
+      PADDLE_PRO_PRICE_ID: 'pri_pro_same',
+      PADDLE_PRO_1099_PRICE_ID: 'pri_pro_same'
+    })).toThrow('must be distinct');
+  });
+
+  test('a Paddle price ID cannot be accepted by two different plans', () => {
+    const env = {
+      PADDLE_PRO_PRICE_ID: 'pri_shared',
+      PADDLE_ENTERPRISE_PRICE_ID: 'pri_enterprise',
+      PADDLE_ENTERPRISE_LEGACY_PRICE_IDS: 'pri_shared'
+    };
+
+    expect(() => validatePaddlePriceMappings(env)).toThrow(/both pro and enterprise/);
+    expect(() => getPlanForPaddlePriceId('pri_shared', env)).toThrow(/both pro and enterprise/);
+    try {
+      validatePaddlePriceMappings(env);
+    } catch (error) {
+      expect(error).toMatchObject({
+        code: 'PADDLE_PRICE_ID_CONFLICT',
+        priceId: 'pri_shared',
+        plans: ['pro', 'enterprise']
+      });
+    }
   });
 
   test('paid alias and paid-plan gates map to the Pro allotment without changing persisted plan IDs', () => {
@@ -111,6 +211,17 @@ describe('public product catalog', () => {
       priceName: 'Enterprise Monthly',
       unitAmount: '1999',
       priceId: 'pri_enterprise_live'
+    });
+
+    const stagedMetadata = getPaddleCatalogMetadata({
+      PRO_PRICE_1099_ENABLED: 'true',
+      PADDLE_PRO_PRICE_ID: 'pri_pro_live',
+      PADDLE_PRO_1099_PRICE_ID: 'pri_pro_1099'
+    });
+    expect(stagedMetadata.pro).toMatchObject({
+      monthlyPriceUsd: 10.99,
+      unitAmount: '1099',
+      priceId: 'pri_pro_1099'
     });
 
     const salesCopy = JSON.stringify(metadata);
@@ -158,7 +269,8 @@ describe('public sales-copy regression gate', () => {
     expect(termsHtml).toContain('Monthly single-user subscription with 600 credits per billing cycle');
     expect(termsHtml).toContain('unused credits do not roll over');
     expect(termsHtml).toContain('PromptGen does not itself generate the final video');
-    expect(refundHtml).toContain('monthly subscriptions, not one-time credit bundles');
+    expect(refundHtml).toContain('One-time usage add-ons purchased by active paid subscribers');
+    expect(refundHtml).toContain('expire 365 days after purchase');
     expect(refundHtml).toContain('Paddle is the seller and Merchant of Record');
     expect(refundHtml).toContain('Nothing in this policy limits mandatory rights');
     expect(refundHtml).not.toMatch(/More than 7 days have passed/i);
@@ -169,7 +281,11 @@ describe('public sales-copy regression gate', () => {
     expect(browserApp).not.toMatch(/live_[a-zA-Z0-9]+/);
     expect(browserApp).toContain("fetch('/api/catalog')");
     expect(browserApp).toContain('hydrateProductCatalog(productCatalog)');
-    expect(browserApp).toContain('catalog?.paddle?.priceIds?.[plan]');
+    expect(browserApp).toContain("fetch('/api/payment/checkout'");
+    expect(browserApp).toContain('Paddle.Checkout.open({ transactionId: context.transactionId })');
+    expect(browserApp).not.toContain('catalog?.paddle?.priceIds');
+    expect(browserApp).not.toContain('customData:');
+    expect(browserApp).not.toContain('items: [{ priceId:');
   });
 
   test('landing code assets use the deployment version placeholder', () => {

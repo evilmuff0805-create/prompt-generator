@@ -12,6 +12,7 @@
     "cleanup": "node scripts/daily-cleanup.js",
     "cleanup:dry-run": "node scripts/daily-cleanup.js --dry-run",
     "audit:paddle-catalog": "node scripts/audit-paddle-catalog.js",
+    "audit:paddle-credit-packs": "node scripts/audit-credit-pack-catalog.js",
     "audit:credit-policy-v2": "node scripts/audit-credit-policy-v2.js",
     "smoke": "node scripts/smoke-test.js"
   },

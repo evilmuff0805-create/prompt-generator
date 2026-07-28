@@ -9,6 +9,7 @@ describe('incident reporter', () => {
   beforeEach(() => {
     process.env = { ...originalEnv };
     delete process.env.OPS_ALERT_WEBHOOK_URL;
+    delete process.env.OPS_ALERT_WEBHOOK_FORMAT;
     delete process.env.OPS_ALERT_REPEAT;
     process.env.OPS_ALERT_MIN_SEVERITY = 'critical';
     logger._setSinkForTests(() => {});
@@ -49,6 +50,32 @@ describe('incident reporter', () => {
     }));
   });
 
+  test.each([
+    ['generic', { severity: 'critical', eventCode: 'PAYMENT_REVIEW' }],
+    ['slack', { text: '[CRITICAL] PAYMENT_REVIEW' }],
+    ['discord', { content: '[CRITICAL] PAYMENT_REVIEW' }]
+  ])('builds a minimal %s webhook body without incident details', (format, expected) => {
+    const body = reporter.webhookBody(format, {
+      id: 7,
+      severity: 'critical',
+      source: 'paddle-webhook',
+      eventCode: 'PAYMENT_REVIEW',
+      message: 'Manual review for txn_private_012 and user-private-123',
+      fingerprint: 'paddle:PAYMENT_REVIEW:txn_private_012',
+      context: {
+        userId: 'user-private-123',
+        customerId: 'ctm_private_456',
+        subscriptionId: 'sub_private_789',
+        transactionId: 'txn_private_012'
+      },
+      occurrenceCount: 1,
+      occurredAt: '2026-07-29T00:00:00.000Z'
+    });
+
+    expect(body).toEqual(expected);
+    expect(JSON.stringify(body)).not.toContain('private');
+  });
+
   test('notifies only the first matching occurrence by default', async () => {
     process.env.OPS_ALERT_WEBHOOK_URL = 'https://alerts.example.test/hook';
     process.env.OPS_ALERT_WEBHOOK_FORMAT = 'slack';
@@ -79,8 +106,69 @@ describe('incident reporter', () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
-      text: '[CRITICAL] DUPLICATE: first'
+      text: '[CRITICAL] DUPLICATE'
     });
+  });
+
+  test('keeps full sanitized context internally but sends minimal generic alert metadata', async () => {
+    process.env.OPS_ALERT_WEBHOOK_URL = 'https://alerts.example.test/hook';
+    process.env.OPS_ALERT_WEBHOOK_FORMAT = 'generic';
+
+    const client = {
+      rpc: jest.fn().mockResolvedValue({
+        data: { id: 8, occurrenceCount: 1 },
+        error: null
+      })
+    };
+    const fetchMock = jest.fn().mockResolvedValue({ ok: true, status: 200 });
+    const logRecords = [];
+    reporter._setAdminClientForTests(client);
+    reporter._setFetchForTests(fetchMock);
+    logger._setSinkForTests((level, line) => {
+      logRecords.push(JSON.parse(line));
+    });
+
+    const sensitiveContext = {
+      userId: 'user-private-123',
+      customerId: 'ctm_private_456',
+      subscriptionId: 'sub_private_789',
+      transactionId: 'txn_private_012',
+      token: 'secret-token'
+    };
+    const message = 'Manual review for txn_private_012 and user-private-123';
+    const fingerprint = 'paddle:PAYMENT_REVIEW:txn_private_012';
+
+    await reporter.reportIncident({
+      severity: 'critical',
+      source: 'paddle-webhook',
+      eventCode: 'PAYMENT_REVIEW',
+      message,
+      fingerprint,
+      context: sensitiveContext
+    });
+
+    const sanitizedContext = {
+      ...sensitiveContext,
+      token: '[REDACTED]'
+    };
+    expect(client.rpc).toHaveBeenCalledWith('record_ops_incident', expect.objectContaining({
+      p_message: message,
+      p_fingerprint: fingerprint,
+      p_context: sanitizedContext
+    }));
+    expect(logRecords[0]).toMatchObject({
+      event: 'ops.incident.reported',
+      message,
+      fingerprint,
+      context: sanitizedContext
+    });
+
+    const externalBody = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(externalBody).toEqual({
+      severity: 'critical',
+      eventCode: 'PAYMENT_REVIEW'
+    });
+    expect(JSON.stringify(externalBody)).not.toContain('private');
   });
 
   test('never throws when persistence and notification both fail', async () => {

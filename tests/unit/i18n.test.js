@@ -42,6 +42,21 @@ const REFUND_UPDATED_DATE = Object.freeze({
   fr: '24 juillet 2026',
   ru: '24 июля 2026 г.'
 });
+const CREDIT_PACK_COPY_MARKERS = Object.freeze({
+  en: ['{days}', 'active paid subscription', 'stay locked', 'non-transferable'],
+  ko: ['{days}', '활성 유료 구독', '재구독 전까지 잠', '양도'],
+  ja: ['{days}', '有効な有料契約', '再契約までロック', '譲渡'],
+  'zh-CN': ['{days}', '有效的付费订阅', '锁定至重新订阅', '不可转让'],
+  fr: ['{days}', 'abonnement payant actif', 'bloqué jusqu’au réabonnement', 'non transférables'],
+  ru: ['{days}', 'активная платная подписка', 'блокируется до повторной подписки', 'нельзя передавать']
+});
+const CREDIT_PACK_LEGAL_MARKERS = Object.freeze({
+  ko: '사용량 추가 구매',
+  ja: '追加利用枠',
+  'zh-CN': '用量加购',
+  fr: 'achats uniques d’usage',
+  ru: 'разовые покупки объёма использования'
+});
 
 function catalog(locale) {
   return locale === 'en' ? english : require(`../../public/i18n/locales/${locale}`);
@@ -188,6 +203,13 @@ describe('locale catalog completeness', () => {
     ];
     expect(dynamicKeys.filter(key => !Object.hasOwn(english, key))).toEqual([]);
   });
+
+  test.each(LOCALES)('%s discloses credit expiry and post-cancellation locking near purchase', locale => {
+    const note = String(catalog(locale)['pricing.addons.note']);
+    for (const marker of CREDIT_PACK_COPY_MARKERS[locale]) {
+      expect(note).toContain(marker);
+    }
+  });
 });
 
 describe('page integration and legal parity', () => {
@@ -248,11 +270,13 @@ describe('page integration and legal parity', () => {
       const terms = documents[locale].terms.html.replace(/[\s,]/g, '');
       const privacy = documents[locale].privacy.html.replace(/[\s,]/g, '');
       const refund = documents[locale].refund.html.replace(/[\s,]/g, '');
-      for (const fact of ['600', '1500', '2', '30', '50']) expect(terms).toContain(fact);
+      for (const fact of ['600', '1500', '2', '30', '50', '365']) expect(terms).toContain(fact);
       for (const service of ['Paddle', 'Seedance', 'USD']) expect(terms).toContain(service);
       for (const fact of ['24', '30', '90', '180']) expect(privacy).toContain(fact);
       for (const service of ['Supabase', 'Gemini', 'OpenAI', 'Paddle', 'Railway', 'Cloudflare']) expect(privacy).toContain(service);
-      for (const fact of ['600', '1500', '14']) expect(refund).toContain(fact);
+      for (const fact of ['600', '1500', '14', '365']) expect(refund).toContain(fact);
+      expect(terms).toContain(CREDIT_PACK_LEGAL_MARKERS[locale].replace(/[\s,]/g, ''));
+      expect(refund).toContain(CREDIT_PACK_LEGAL_MARKERS[locale].replace(/[\s,]/g, ''));
       expect(refund).toContain('https://www.paddle.com/legal/refund-policy');
       for (const [documentType, html] of [['terms', terms], ['privacy', privacy], ['refund', refund]]) {
         const disclosure = operatorBlock(html);
@@ -270,5 +294,17 @@ describe('page integration and legal parity', () => {
       }
     }
     global.window = previousWindow;
+  });
+
+  test('English terms and refund policy include Paddle-sold one-time usage add-ons', () => {
+    const terms = fs.readFileSync(path.join(ROOT, 'public', 'terms.html'), 'utf8');
+    const refund = fs.readFileSync(path.join(ROOT, 'public', 'refund.html'), 'utf8');
+    for (const document of [terms, refund]) {
+      expect(document).toContain('one-time');
+      expect(document).toContain('usage add-ons');
+      expect(document).toContain('365 days');
+      expect(document).toContain('Paddle');
+    }
+    expect(terms).toContain('cannot be used until an active paid subscription is restored');
   });
 });

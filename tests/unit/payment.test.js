@@ -9,6 +9,7 @@ const {
   planToPriceId,
   buildSubscriptionUpdateBody,
   extractPaddleErrorCode,
+  sanitizeChangePlanPreview,
   handleChangePlan
 } = require('../../routes/payment');
 
@@ -237,6 +238,55 @@ describe('buildSubscriptionUpdateBody', () => {
   });
 });
 
+describe('sanitizeChangePlanPreview', () => {
+  test('브라우저에 표시할 합계와 통화만 허용해야 한다', () => {
+    expect(sanitizeChangePlanPreview({
+      currency_code: 'USD',
+      customer_id: 'ctm_private',
+      address: { country_code: 'US' },
+      immediate_transaction: {
+        id: 'txn_private',
+        details: {
+          totals: {
+            subtotal: '500',
+            tax: '50',
+            grand_total: '550'
+          }
+        }
+      },
+      recurring_transaction_details: {
+        totals: {
+          grand_total: '1999',
+          tax: '200'
+        }
+      }
+    })).toEqual({
+      currency_code: 'USD',
+      immediate_transaction: {
+        details: {
+          totals: {
+            grand_total: '550'
+          }
+        }
+      },
+      recurring_transaction_details: {
+        totals: {
+          grand_total: '1999'
+        }
+      }
+    });
+  });
+
+  test.each([
+    null,
+    {},
+    { currency_code: 'usd', immediate_transaction: { details: { totals: { grand_total: '100' } } } },
+    { currency_code: 'USD', immediate_transaction: { details: { totals: { grand_total: '-1' } } } }
+  ])('비정상 preview 계약은 거부해야 한다: %p', (value) => {
+    expect(sanitizeChangePlanPreview(value)).toBeNull();
+  });
+});
+
 describe('handleChangePlan (POST /api/payment/change-plan)', () => {
   const OLD_ENV = process.env;
   const USER_ID = 'user-uuid-1';
@@ -248,6 +298,8 @@ describe('handleChangePlan (POST /api/payment/change-plan)', () => {
     const res = {
       statusCode: 200,
       body: null,
+      headers: {},
+      set(name, value) { this.headers[name] = value; return this; },
       status(code) { this.statusCode = code; return this; },
       json(payload) { this.body = payload; return this; }
     };
@@ -300,18 +352,32 @@ describe('handleChangePlan (POST /api/payment/change-plan)', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  test('Guard 5: PADDLE_API_KEY 없으면 500, Paddle 미호출', async () => {
+  test('실제 변경은 durable request 장벽이 생길 때까지 409로 닫혀 있어야 한다', async () => {
+    const req = makeReq({
+      body: { plan: 'enterprise' },
+      profile: { plan: 'pro', paddle_subscription_id: SUB_ID }
+    });
+    const res = makeRes();
+    await handleChangePlan(req, res);
+    expect(res.statusCode).toBe(409);
+    expect(res.body.code).toBe('PLAN_CHANGE_MUTATION_DISABLED');
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(req.supabase.from).not.toHaveBeenCalled();
+    expect(res.headers['Cache-Control']).toBe('no-store');
+  });
+
+  test('preview에 PADDLE_API_KEY 없으면 500, Paddle 미호출', async () => {
     delete process.env.PADDLE_API_KEY;
-    const req = makeReq({ body: { plan: 'enterprise' } });
+    const req = makeReq({ body: { plan: 'enterprise', preview: true } });
     const res = makeRes();
     await handleChangePlan(req, res);
     expect(res.statusCode).toBe(500);
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  test('price ID env 미설정이면 500, Paddle 미호출', async () => {
+  test('preview price ID env 미설정이면 500, Paddle 미호출', async () => {
     delete process.env.PADDLE_ENTERPRISE_PRICE_ID;
-    const req = makeReq({ body: { plan: 'enterprise' }, profile: { plan: 'pro', paddle_subscription_id: SUB_ID } });
+    const req = makeReq({ body: { plan: 'enterprise', preview: true }, profile: { plan: 'pro', paddle_subscription_id: SUB_ID } });
     const res = makeRes();
     await handleChangePlan(req, res);
     expect(res.statusCode).toBe(500);
@@ -319,7 +385,7 @@ describe('handleChangePlan (POST /api/payment/change-plan)', () => {
   });
 
   test('Guard 4: free 유저는 400 NO_ACTIVE_SUBSCRIPTION, Paddle 미호출', async () => {
-    const req = makeReq({ body: { plan: 'pro' }, profile: { plan: 'free', paddle_subscription_id: null } });
+    const req = makeReq({ body: { plan: 'pro', preview: true }, profile: { plan: 'free', paddle_subscription_id: null } });
     const res = makeRes();
     await handleChangePlan(req, res);
     expect(res.statusCode).toBe(400);
@@ -328,7 +394,7 @@ describe('handleChangePlan (POST /api/payment/change-plan)', () => {
   });
 
   test('Guard 2: subscription_id 없으면 404 NO_SUBSCRIPTION, Paddle 미호출', async () => {
-    const req = makeReq({ body: { plan: 'enterprise' }, profile: { plan: 'pro', paddle_subscription_id: null } });
+    const req = makeReq({ body: { plan: 'enterprise', preview: true }, profile: { plan: 'pro', paddle_subscription_id: null } });
     const res = makeRes();
     await handleChangePlan(req, res);
     expect(res.statusCode).toBe(404);
@@ -337,7 +403,7 @@ describe('handleChangePlan (POST /api/payment/change-plan)', () => {
   });
 
   test('Guard 3: 목표 plan == 현재 plan이면 400 SAME_PLAN, Paddle 미호출', async () => {
-    const req = makeReq({ body: { plan: 'pro' }, profile: { plan: 'pro', paddle_subscription_id: SUB_ID } });
+    const req = makeReq({ body: { plan: 'pro', preview: true }, profile: { plan: 'pro', paddle_subscription_id: SUB_ID } });
     const res = makeRes();
     await handleChangePlan(req, res);
     expect(res.statusCode).toBe(400);
@@ -345,40 +411,28 @@ describe('handleChangePlan (POST /api/payment/change-plan)', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  // ── PATCH 호출 인자 검증 ──
+  // ── Read-only preview contract ──
 
-  test('업그레이드: PATCH /subscriptions/{id}에 올바른 body 전송', async () => {
-    fetchMock.mockReturnValue(paddleOk());
-    const req = makeReq({ body: { plan: 'enterprise' }, profile: { plan: 'pro', paddle_subscription_id: SUB_ID } });
-    const res = makeRes();
-    await handleChangePlan(req, res);
-
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    const [url, opts] = fetchMock.mock.calls[0];
-    expect(url).toBe(`https://api.paddle.com/subscriptions/${SUB_ID}`);
-    expect(opts.method).toBe('PATCH');
-    expect(opts.headers.Authorization).toBe('Bearer pdl_live_testkey');
-    expect(JSON.parse(opts.body)).toEqual({
-      items: [{ price_id: 'pri_ent_456', quantity: 1 }],
-      proration_billing_mode: 'prorated_immediately'
-    });
-    expect(res.statusCode).toBe(200);
-    expect(res.body).toEqual({ success: true, plan: 'enterprise' });
-  });
-
-  test('다운그레이드: enterprise→pro도 pro priceId로 PATCH', async () => {
-    fetchMock.mockReturnValue(paddleOk());
-    const req = makeReq({ body: { plan: 'pro' }, profile: { plan: 'enterprise', paddle_subscription_id: SUB_ID } });
-    const res = makeRes();
-    await handleChangePlan(req, res);
-
-    const [, opts] = fetchMock.mock.calls[0];
-    expect(JSON.parse(opts.body).items[0].price_id).toBe('pri_pro_123');
-    expect(res.statusCode).toBe(200);
-  });
-
-  test('preview:true면 /preview 경로로 호출하고 무청구 데이터 반환', async () => {
-    fetchMock.mockReturnValue(paddleOk({ immediate_transaction: { amount: '500' } }));
+  test('preview:true면 /preview 경로로만 호출하고 allowlist 데이터만 반환', async () => {
+    fetchMock.mockReturnValue(paddleOk({
+      currency_code: 'USD',
+      customer_id: 'ctm_private',
+      immediate_transaction: {
+        id: 'txn_private',
+        details: {
+          totals: {
+            grand_total: '550',
+            tax: '50'
+          }
+        }
+      },
+      recurring_transaction_details: {
+        totals: {
+          grand_total: '1999',
+          tax: '200'
+        }
+      }
+    }));
     const req = makeReq({ body: { plan: 'enterprise', preview: true }, profile: { plan: 'pro', paddle_subscription_id: SUB_ID } });
     const res = makeRes();
     await handleChangePlan(req, res);
@@ -386,21 +440,42 @@ describe('handleChangePlan (POST /api/payment/change-plan)', () => {
     const [url, opts] = fetchMock.mock.calls[0];
     expect(url).toBe(`https://api.paddle.com/subscriptions/${SUB_ID}/preview`);
     expect(opts.method).toBe('PATCH');
+    expect(opts.headers.Authorization).toBe('Bearer pdl_live_testkey');
+    expect(JSON.parse(opts.body)).toEqual({
+      items: [{ price_id: 'pri_ent_456', quantity: 1 }],
+      proration_billing_mode: 'prorated_immediately'
+    });
     expect(res.body.preview).toBe(true);
-    expect(res.body.data).toEqual({ immediate_transaction: { amount: '500' } });
+    expect(res.body.data).toEqual({
+      currency_code: 'USD',
+      immediate_transaction: {
+        details: {
+          totals: {
+            grand_total: '550'
+          }
+        }
+      },
+      recurring_transaction_details: {
+        totals: {
+          grand_total: '1999'
+        }
+      }
+    });
+    expect(JSON.stringify(res.body)).not.toContain('ctm_private');
+    expect(JSON.stringify(res.body)).not.toContain('txn_private');
   });
 
-  test('크레딧/plan을 DB에 절대 쓰지 않아야 한다 (webhook 전담)', async () => {
-    fetchMock.mockReturnValue(paddleOk());
-    const req = makeReq({ body: { plan: 'enterprise' }, profile: { plan: 'pro', paddle_subscription_id: SUB_ID } });
+  test('비정상 Paddle preview 계약은 502로 닫혀야 한다', async () => {
+    fetchMock.mockReturnValue(paddleOk({
+      currency_code: 'USD',
+      customer_id: 'ctm_private',
+      immediate_transaction: { details: { totals: { grand_total: '-1' } } }
+    }));
+    const req = makeReq({ body: { plan: 'enterprise', preview: true }, profile: { plan: 'pro', paddle_subscription_id: SUB_ID } });
     const res = makeRes();
     await handleChangePlan(req, res);
-
-    // profiles는 SELECT만 — update/upsert/insert 호출이 없어야 함
-    const fromResult = req.supabase.from.mock.results[0].value;
-    expect(fromResult.select).toHaveBeenCalled();
-    expect(fromResult.update).toBeUndefined();
-    expect(fromResult.insert).toBeUndefined();
+    expect(res.statusCode).toBe(502);
+    expect(res.body.code).toBe('INVALID_CHANGE_PREVIEW');
   });
 
   // ── 실패/안전 처리 ──
@@ -430,7 +505,7 @@ describe('handleChangePlan (POST /api/payment/change-plan)', () => {
 
   test('Paddle 4xx/5xx 시 502 안전 메시지, Paddle 원문 미노출', async () => {
     fetchMock.mockReturnValue(paddleErr(400, '{"error":{"code":"some_other_error","detail":"some_paddle_detail"}}'));
-    const req = makeReq({ body: { plan: 'enterprise' }, profile: { plan: 'pro', paddle_subscription_id: SUB_ID } });
+    const req = makeReq({ body: { plan: 'enterprise', preview: true }, profile: { plan: 'pro', paddle_subscription_id: SUB_ID } });
     const res = makeRes();
     await handleChangePlan(req, res);
 
@@ -443,7 +518,7 @@ describe('handleChangePlan (POST /api/payment/change-plan)', () => {
 
   test('Paddle 403(권한 부족) 시에도 502 안전 응답', async () => {
     fetchMock.mockReturnValue(paddleErr(403, 'forbidden'));
-    const req = makeReq({ body: { plan: 'enterprise' }, profile: { plan: 'pro', paddle_subscription_id: SUB_ID } });
+    const req = makeReq({ body: { plan: 'enterprise', preview: true }, profile: { plan: 'pro', paddle_subscription_id: SUB_ID } });
     const res = makeRes();
     await handleChangePlan(req, res);
     expect(res.statusCode).toBe(502);
@@ -452,14 +527,14 @@ describe('handleChangePlan (POST /api/payment/change-plan)', () => {
 
   test('네트워크 실패 시 502, DB 무변경', async () => {
     fetchMock.mockRejectedValue(new Error('ECONNREFUSED'));
-    const req = makeReq({ body: { plan: 'enterprise' }, profile: { plan: 'pro', paddle_subscription_id: SUB_ID } });
+    const req = makeReq({ body: { plan: 'enterprise', preview: true }, profile: { plan: 'pro', paddle_subscription_id: SUB_ID } });
     const res = makeRes();
     await handleChangePlan(req, res);
     expect(res.statusCode).toBe(502);
   });
 
   test('profile 조회 실패 시 500', async () => {
-    const req = makeReq({ body: { plan: 'enterprise' }, profileError: { message: 'db down' } });
+    const req = makeReq({ body: { plan: 'enterprise', preview: true }, profileError: { message: 'db down' } });
     const res = makeRes();
     await handleChangePlan(req, res);
     expect(res.statusCode).toBe(500);

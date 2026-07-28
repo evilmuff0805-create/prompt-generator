@@ -6,6 +6,7 @@ const path = require('path');
 const {
   REQUIRED_AT_STARTUP,
   REQUIRED_BY_FEATURE,
+  REQUIRED_BY_PAYMENT_FEATURE,
   OPTIONAL_DEFAULTS,
   isConfigured,
   validateStartupEnvironment
@@ -71,6 +72,136 @@ describe('environment contract', () => {
     });
   });
 
+  test('rejects cross-plan current or legacy Paddle price ID collisions', () => {
+    expect(() => validateStartupEnvironment({
+      ...completeEnv,
+      PADDLE_PRO_LEGACY_PRICE_IDS: completeEnv.PADDLE_ENTERPRISE_PRICE_ID
+    })).toThrow('configured for both pro and enterprise');
+  });
+
+  test('staged USD 10.99 Pro cutover fails closed until distinct old and new IDs exist', () => {
+    expect(() => validateStartupEnvironment({
+      ...completeEnv,
+      PRO_PRICE_1099_ENABLED: 'true'
+    })).toThrow('PADDLE_PRO_1099_PRICE_ID');
+
+    expect(() => validateStartupEnvironment({
+      ...completeEnv,
+      PRO_PRICE_1099_ENABLED: 'true',
+      PADDLE_PRO_1099_PRICE_ID: completeEnv.PADDLE_PRO_PRICE_ID
+    })).toThrow('must be distinct');
+
+    expect(() => validateStartupEnvironment({
+      ...completeEnv,
+      PRO_PRICE_1099_ENABLED: 'true',
+      PADDLE_PRO_1099_PRICE_ID: completeEnv.PADDLE_ENTERPRISE_PRICE_ID
+    })).toThrow('configured for both pro and enterprise');
+
+    expect(validateStartupEnvironment({
+      ...completeEnv,
+      PRO_PRICE_1099_ENABLED: 'true',
+      PADDLE_PRO_1099_PRICE_ID: 'pri_test_pro_1099'
+    }).missingFeatureVariables).toEqual([]);
+  });
+
+  test.each(REQUIRED_BY_PAYMENT_FEATURE.proPrice1099)(
+    'staged Pro cutover makes %s fatal even when strict feature validation is disabled',
+    (missingVariable) => {
+      const env = {
+        ...completeEnv,
+        PRO_PRICE_1099_ENABLED: 'true',
+        PADDLE_PRO_1099_PRICE_ID: 'pri_test_pro_1099',
+        ENV_VALIDATION_STRICT_FEATURES: 'false'
+      };
+      delete env[missingVariable];
+
+      try {
+        validateStartupEnvironment(env);
+        throw new Error('expected startup validation to fail');
+      } catch (error) {
+        expect(error.code).toBe('INVALID_ENVIRONMENT');
+        expect(error.missingVariables).toContain(missingVariable);
+      }
+    }
+  );
+
+  test.each(REQUIRED_BY_PAYMENT_FEATURE.creditLedgerV2)(
+    'credit ledger V2 makes %s fatal even when strict feature validation is disabled',
+    (missingVariable) => {
+      const env = {
+        ...completeEnv,
+        CREDIT_LEDGER_V2_ENABLED: 'true',
+        ENV_VALIDATION_STRICT_FEATURES: 'false'
+      };
+      delete env[missingVariable];
+
+      try {
+        validateStartupEnvironment(env);
+        throw new Error('expected startup validation to fail');
+      } catch (error) {
+        expect(error.code).toBe('INVALID_ENVIRONMENT');
+        expect(error.missingVariables).toContain(missingVariable);
+      }
+    }
+  );
+
+  test('ledger-only activation does not over-require checkout-only Paddle credentials', () => {
+    const env = {
+      ...completeEnv,
+      CREDIT_LEDGER_V2_ENABLED: 'true'
+    };
+    delete env.PADDLE_API_KEY;
+    delete env.SUPABASE_ANON_KEY;
+
+    expect(validateStartupEnvironment(env).missingFeatureVariables).toEqual([
+      'PADDLE_API_KEY',
+      'SUPABASE_ANON_KEY'
+    ]);
+  });
+
+  test.each(REQUIRED_BY_PAYMENT_FEATURE.creditPackPurchases)(
+    'credit-pack checkout makes %s fatal even when strict feature validation is disabled',
+    (missingVariable) => {
+      const env = {
+        ...completeEnv,
+        CREDIT_LEDGER_V2_ENABLED: 'true',
+        CREDIT_PACK_PURCHASES_ENABLED: 'true',
+        PADDLE_CREDIT_PACK_TAX_CATEGORY: 'saas',
+        PADDLE_CREDIT_PACK_TAX_CATEGORY_CONFIRMED: 'true',
+        ENV_VALIDATION_STRICT_FEATURES: 'false'
+      };
+      delete env[missingVariable];
+
+      try {
+        validateStartupEnvironment(env);
+        throw new Error('expected startup validation to fail');
+      } catch (error) {
+        expect(error.code).toBe('INVALID_ENVIRONMENT');
+        expect(error.missingVariables).toContain(missingVariable);
+      }
+    }
+  );
+
+  test('credit-pack purchases start with complete money-path configuration', () => {
+    expect(validateStartupEnvironment({
+      ...completeEnv,
+      CREDIT_LEDGER_V2_ENABLED: 'true',
+      CREDIT_PACK_PURCHASES_ENABLED: 'true',
+      PADDLE_CREDIT_PACK_TAX_CATEGORY: 'saas',
+      PADDLE_CREDIT_PACK_TAX_CATEGORY_CONFIRMED: 'true'
+    }).missingFeatureVariables).toEqual([]);
+  });
+
+  test('credit-pack purchases fail closed until Paddle tax category is confirmed', () => {
+    expect(() => validateStartupEnvironment({
+      ...completeEnv,
+      CREDIT_LEDGER_V2_ENABLED: 'true',
+      CREDIT_PACK_PURCHASES_ENABLED: 'true',
+      PADDLE_CREDIT_PACK_TAX_CATEGORY: 'saas',
+      PADDLE_CREDIT_PACK_TAX_CATEGORY_CONFIRMED: 'false'
+    })).toThrow('requires written confirmation');
+  });
+
   test('catalogs are unique and expose names/defaults rather than secret values', () => {
     expect(new Set(REQUIRED_AT_STARTUP).size).toBe(REQUIRED_AT_STARTUP.length);
     expect(isConfigured(' value ')).toBe(true);
@@ -81,6 +212,15 @@ describe('environment contract', () => {
     expect(OPTIONAL_DEFAULTS.GEMINI_IMAGE_METADATA_SHADOW_ENABLED).toBe('false');
     expect(OPTIONAL_DEFAULTS.GEMINI_IMAGE_METADATA_SHADOW_SAMPLE_RATE).toBe('0.05');
     expect(OPTIONAL_DEFAULTS.GEMINI_IMAGE_METADATA_SHADOW_MAX_CONCURRENCY).toBe('1');
+    expect(OPTIONAL_DEFAULTS.PADDLE_PRO_PRICE_USD).toBe('9.99');
+    expect(OPTIONAL_DEFAULTS.PRO_PRICE_1099_ENABLED).toBe('false');
+    expect(OPTIONAL_DEFAULTS.PADDLE_PRO_1099_PRICE_ID).toBe('');
+    expect(OPTIONAL_DEFAULTS.PADDLE_PRO_LEGACY_PRICE_IDS).toBe('');
+    expect(OPTIONAL_DEFAULTS.PADDLE_ENTERPRISE_LEGACY_PRICE_IDS).toBe('');
+    expect(OPTIONAL_DEFAULTS.CREDIT_LEDGER_V2_ENABLED).toBe('false');
+    expect(OPTIONAL_DEFAULTS.CREDIT_PACK_PURCHASES_ENABLED).toBe('false');
+    expect(OPTIONAL_DEFAULTS.PADDLE_CREDIT_PACK_TAX_CATEGORY).toBe('');
+    expect(OPTIONAL_DEFAULTS.PADDLE_CREDIT_PACK_TAX_CATEGORY_CONFIRMED).toBe('false');
     expect(OPTIONAL_DEFAULTS).not.toHaveProperty('SUPABASE_SERVICE_ROLE_KEY');
   });
 

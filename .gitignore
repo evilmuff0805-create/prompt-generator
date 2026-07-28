@@ -6,4 +6,5 @@ uploads/
 # Playwright test artifacts (outputDir = tests/screenshots)
 tests/screenshots/
 test-results/
+test-results-*/
 playwright-report/

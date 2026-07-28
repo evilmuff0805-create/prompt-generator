@@ -18,6 +18,7 @@ const { createClient } = require('@supabase/supabase-js');
 const rateLimit = require('express-rate-limit');
 const logger = require('./lib/logger');
 const { getPublicProductCatalog } = require('./lib/product-catalog');
+const { getPublicCreditPackCatalog } = require('./lib/credit-pack-catalog');
 const { redactShareTokenPath } = require('./lib/storyboard-sharing');
 const {
   getAssetVersion,
@@ -260,8 +261,16 @@ app.get('/api/health', (req, res) => {
 });
 
 app.get('/api/catalog', (req, res) => {
-  res.setHeader('Cache-Control', 'public, max-age=300');
-  res.json({ success: true, catalog: getPublicProductCatalog() });
+  // Billing flags and outbound price IDs are rollout controls. Never let a
+  // browser or intermediary reuse a pre-switch catalog during activation.
+  res.setHeader('Cache-Control', 'no-store');
+  res.json({
+    success: true,
+    catalog: {
+      ...getPublicProductCatalog(),
+      creditPacks: getPublicCreditPackCatalog()
+    }
+  });
 });
 
 /* ── Helper: get user-scoped Supabase client ── */

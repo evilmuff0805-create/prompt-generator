@@ -7,40 +7,15 @@
 const crypto = require('crypto');
 const {
   classifyTransactionOrigin,
+  priceIdToPlan,
   isActiveSubscription,
   isTestAccount,
   recordPlanUpgradePurchase,
   syncPlanFromSubscription,
   applyPlanChange,
-  saveSubscriptionIds
+  saveSubscriptionIds,
+  verifyPaddleSignature
 } = require('../../routes/paddle');
-
-// ── Copied from routes/paddle.js (pure functions, no side effects) ──
-
-function verifyPaddleSignature(secret, rawBody, signatureHeader) {
-  if (!signatureHeader) return false;
-  const parts = {};
-  signatureHeader.split(';').forEach(function (part) {
-    const idx = part.indexOf('=');
-    if (idx === -1) return;
-    parts[part.slice(0, idx)] = part.slice(idx + 1);
-  });
-  const ts = parts['ts'];
-  const h1 = parts['h1'];
-  if (!ts || !h1) return false;
-
-  const signedPayload = ts + ':' + rawBody;
-  const digest = crypto
-    .createHmac('sha256', secret)
-    .update(signedPayload)
-    .digest('hex');
-
-  try {
-    return crypto.timingSafeEqual(Buffer.from(digest), Buffer.from(h1));
-  } catch (_) {
-    return false;
-  }
-}
 
 function buildSignatureHeader(secret, rawBody, ts) {
   const signedPayload = ts + ':' + rawBody;
@@ -89,20 +64,21 @@ describe('verifyPaddleSignature', () => {
   const SECRET = 'test-paddle-webhook-secret-abc';
   const BODY = JSON.stringify({ event_type: 'transaction.completed', data: {} });
   const TS = '1700000000';
+  const NOW_MS = Number(TS) * 1000;
 
   test('올바른 서명은 검증에 통과해야 한다', () => {
     const header = buildSignatureHeader(SECRET, BODY, TS);
-    expect(verifyPaddleSignature(SECRET, BODY, header)).toBe(true);
+    expect(verifyPaddleSignature(SECRET, BODY, header, NOW_MS)).toBe(true);
   });
 
   test('잘못된 h1 값은 검증에 실패해야 한다', () => {
     const header = `ts=${TS};h1=deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef`;
-    expect(verifyPaddleSignature(SECRET, BODY, header)).toBe(false);
+    expect(verifyPaddleSignature(SECRET, BODY, header, NOW_MS)).toBe(false);
   });
 
   test('body가 변조되면 검증에 실패해야 한다', () => {
     const header = buildSignatureHeader(SECRET, BODY, TS);
-    expect(verifyPaddleSignature(SECRET, BODY + ' ', header)).toBe(false);
+    expect(verifyPaddleSignature(SECRET, BODY + ' ', header, NOW_MS)).toBe(false);
   });
 
   test('Paddle-Signature 헤더가 없으면 false를 반환해야 한다', () => {
@@ -113,6 +89,46 @@ describe('verifyPaddleSignature', () => {
   test('ts 또는 h1 필드가 없으면 false를 반환해야 한다', () => {
     expect(verifyPaddleSignature(SECRET, BODY, 'ts=1700000000')).toBe(false);
     expect(verifyPaddleSignature(SECRET, BODY, 'h1=abc123')).toBe(false);
+  });
+
+  test('서명 회전 중 여러 h1 중 하나가 일치하면 통과해야 한다', () => {
+    const valid = buildSignatureHeader(SECRET, BODY, TS).split(';')[1];
+    const invalid = 'h1=' + '0'.repeat(64);
+    expect(
+      verifyPaddleSignature(SECRET, BODY, `ts=${TS};${invalid};${valid}`, NOW_MS)
+    ).toBe(true);
+  });
+
+  test('기본 5초 허용 범위를 벗어난 과거·미래 서명은 거절해야 한다', () => {
+    const header = buildSignatureHeader(SECRET, BODY, TS);
+    expect(verifyPaddleSignature(SECRET, BODY, header, NOW_MS + 6000)).toBe(false);
+    expect(verifyPaddleSignature(SECRET, BODY, header, NOW_MS - 6000)).toBe(false);
+  });
+});
+
+describe('priceIdToPlan staged price compatibility', () => {
+  const originalEnv = process.env;
+
+  beforeEach(() => {
+    process.env = {
+      ...originalEnv,
+      PADDLE_PRO_PRICE_ID: 'pri_pro_current',
+      PADDLE_PRO_LEGACY_PRICE_IDS: 'pri_pro_legacy',
+      PADDLE_ENTERPRISE_PRICE_ID: 'pri_enterprise_current',
+      PADDLE_ENTERPRISE_LEGACY_PRICE_IDS: 'pri_enterprise_legacy'
+    };
+  });
+
+  afterAll(() => {
+    process.env = originalEnv;
+  });
+
+  test('maps both current and legacy IDs without exposing legacy IDs to checkout', () => {
+    expect(priceIdToPlan('pri_pro_current')).toBe('pro');
+    expect(priceIdToPlan('pri_pro_legacy')).toBe('pro');
+    expect(priceIdToPlan('pri_enterprise_current')).toBe('enterprise');
+    expect(priceIdToPlan('pri_enterprise_legacy')).toBe('enterprise');
+    expect(priceIdToPlan('pri_unknown')).toBeNull();
   });
 });
 
@@ -231,10 +247,63 @@ describe('recordPlanUpgradePurchase', () => {
     expect(insertCall.credits_granted).toBe(600);
   });
 
-  test('중복 transaction_id(23505)이면 조용히 스킵해야 한다', async () => {
-    const supabase = makeSupabaseMock({ insertError: { code: '23505', message: 'duplicate key' } });
+  test('중복 transaction_id(23505)는 저장된 불변 계약이 정확히 같을 때만 스킵해야 한다', async () => {
+    const supabase = makeSupabaseMock({
+      insertError: { code: '23505', message: 'duplicate key' },
+      selectData: {
+        transaction_id: TXN_ID,
+        user_id: USER_ID,
+        plan: 'enterprise',
+        credits_granted: 1500,
+        status: 'completed',
+        subscription_id: SUB_ID,
+        transaction_type: 'plan_upgrade'
+      }
+    });
     await expect(recordPlanUpgradePurchase(supabase, { transactionId: TXN_ID, userId: USER_ID, plan: 'enterprise', subscriptionId: SUB_ID }))
-      .resolves.toBeUndefined();
+      .resolves.toMatchObject({ transaction_id: TXN_ID });
+  });
+
+  test('중복 transaction_id의 기존 계약이 다르면 fail-closed 해야 한다', async () => {
+    const supabase = makeSupabaseMock({
+      insertError: { code: '23505', message: 'duplicate key' },
+      selectData: {
+        transaction_id: TXN_ID,
+        user_id: 'different-user',
+        plan: 'enterprise',
+        credits_granted: 1500,
+        status: 'completed',
+        subscription_id: SUB_ID,
+        transaction_type: 'plan_upgrade'
+      }
+    });
+
+    await expect(recordPlanUpgradePurchase(
+      supabase,
+      {
+        transactionId: TXN_ID,
+        userId: USER_ID,
+        plan: 'enterprise',
+        subscriptionId: SUB_ID
+      }
+    )).rejects.toThrow('duplicate contract conflict');
+  });
+
+  test('중복 transaction_id 조회가 실패하면 정상 중복으로 승인하지 않아야 한다', async () => {
+    const supabase = makeSupabaseMock({
+      insertError: { code: '23505', message: 'duplicate key' },
+      selectError: { message: 'lookup failed' }
+    });
+
+    await expect(recordPlanUpgradePurchase(
+      supabase,
+      {
+        transactionId: TXN_ID,
+        userId: USER_ID,
+        plan: 'enterprise',
+        subscriptionId: SUB_ID
+      }
+    )).rejects.toThrow('duplicate contract conflict');
   });
 
   test('크레딧 RPC(grant_credits)를 절대 호출하지 않아야 한다 — 크레딧 이중처리 방지', async () => {
@@ -330,12 +399,12 @@ describe('테스트 계정 화이트리스트 — mutation 스킵', () => {
 });
 
 describe('classifyTransactionOrigin', () => {
-  test("'checkout'은 grant로 분류해야 한다 (신규 구매)", () => {
-    expect(classifyTransactionOrigin('checkout')).toBe('grant');
+  test("'checkout'은 서버 바인딩 없는 직접 구매로 거부해야 한다", () => {
+    expect(classifyTransactionOrigin('checkout')).toBe('reject');
   });
 
-  test("'web'도 grant로 분류해야 한다 (Paddle.js 체크아웃 origin 모호성 대비)", () => {
-    expect(classifyTransactionOrigin('web')).toBe('grant');
+  test("'web'도 서버 바인딩 없는 직접 구매로 거부해야 한다", () => {
+    expect(classifyTransactionOrigin('web')).toBe('reject');
   });
 
   test("'subscription_recurring'은 grant로 분류해야 한다 (갱신)", () => {
