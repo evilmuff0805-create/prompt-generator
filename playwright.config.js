@@ -50,7 +50,9 @@ module.exports = defineConfig({
           CREDIT_LEDGER_V2_ENABLED: 'true',
           CREDIT_PACK_PURCHASES_ENABLED: 'true',
           CREDIT_PACK_EXPIRY_DAYS: '365',
+          // Test-only placeholder; not evidence of Paddle tax approval.
           PADDLE_CREDIT_PACK_TAX_CATEGORY: 'saas',
+          PADDLE_CREDIT_PACK_TAX_CATEGORY_CONFIRMED: 'true',
           STORYBOARD_DURABLE_WORKER_ENABLED: 'false',
           CLEANUP_SCHEDULER_ENABLED: 'false',
           OPS_ALERT_WEBHOOK_URL: '',

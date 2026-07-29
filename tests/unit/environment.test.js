@@ -224,6 +224,18 @@ describe('environment contract', () => {
     expect(OPTIONAL_DEFAULTS).not.toHaveProperty('SUPABASE_SERVICE_ROLE_KEY');
   });
 
+  test('Playwright credit-pack fixture explicitly confirms only its test tax placeholder', () => {
+    const config = fs.readFileSync(
+      path.join(__dirname, '..', '..', 'playwright.config.js'),
+      'utf8'
+    );
+
+    expect(config).toContain("CREDIT_PACK_PURCHASES_ENABLED: 'true'");
+    expect(config).toContain("PADDLE_CREDIT_PACK_TAX_CATEGORY: 'saas'");
+    expect(config).toContain("PADDLE_CREDIT_PACK_TAX_CATEGORY_CONFIRMED: 'true'");
+    expect(config).toContain('Test-only placeholder; not evidence of Paddle tax approval.');
+  });
+
   test('.env.example mirrors every enforced and defaulted variable name', () => {
     const example = fs.readFileSync(path.join(__dirname, '..', '..', '.env.example'), 'utf8');
     const documented = new Set(
