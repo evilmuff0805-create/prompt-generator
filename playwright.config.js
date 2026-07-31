@@ -53,6 +53,10 @@ module.exports = defineConfig({
           // Test-only placeholder; not evidence of Paddle tax approval.
           PADDLE_CREDIT_PACK_TAX_CATEGORY: 'saas',
           PADDLE_CREDIT_PACK_TAX_CATEGORY_CONFIRMED: 'true',
+          // Test fixture only; production still requires a Sandbox history read.
+          PADDLE_SUBSCRIPTION_HISTORY_CONFIRMED: 'true',
+          // Test fixture only; production still requires a complete paginated scan.
+          PADDLE_TRANSACTION_READ_CONFIRMED: 'true',
           STORYBOARD_DURABLE_WORKER_ENABLED: 'false',
           CLEANUP_SCHEDULER_ENABLED: 'false',
           OPS_ALERT_WEBHOOK_URL: '',

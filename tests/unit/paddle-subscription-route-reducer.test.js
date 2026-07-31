@@ -272,6 +272,48 @@ describe('Paddle subscription route reducer contract', () => {
     });
   });
 
+  test('equal-time conflicting snapshots are retained for reconciliation without retrying forever', async () => {
+    const incidentReporter = jest.fn().mockResolvedValue({ persisted: true });
+    const client = {
+      rpc: jest.fn().mockResolvedValue({
+        data: {
+          applied: false,
+          reason: 'reconciliation_required',
+          terminal: false,
+          lifecycleStatus: 'active'
+        },
+        error: null
+      })
+    };
+
+    await expect(applyPaddleSubscriptionSnapshot(client, {
+      subscriptionId: 'sub_equal_time_1',
+      userId: USER_ID,
+      customerId: 'ctm_equal_time_1',
+      status: 'active',
+      plan: 'pro',
+      providerEventId: 'evt_equal_time_conflict_1',
+      eventType: 'subscription.updated',
+      occurredAt: '2026-07-28T12:34:56.123456Z'
+    }, {
+      incidentReporter,
+      requestId: 'req-equal-time',
+      notificationId: 'ntf-equal-time'
+    })).resolves.toMatchObject({
+      reason: 'reconciliation_required'
+    });
+
+    expect(incidentReporter).toHaveBeenCalledWith(expect.objectContaining({
+      severity: 'critical',
+      eventCode: 'SUBSCRIPTION_SNAPSHOT_RECONCILIATION_REQUIRED',
+      context: expect.objectContaining({
+        subscriptionId: 'sub_equal_time_1',
+        providerEventId: 'evt_equal_time_conflict_1',
+        occurredAt: '2026-07-28T12:34:56.123456Z'
+      })
+    }));
+  });
+
   test('active snapshot maps the plan allotment while preserving occurred_at microseconds', async () => {
     const client = {
       rpc: jest.fn().mockResolvedValue({

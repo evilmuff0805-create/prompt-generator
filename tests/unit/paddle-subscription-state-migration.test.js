@@ -42,11 +42,11 @@ describe('Paddle subscription state migration safety contract', () => {
     expect(sql).toContain(
       'ALTER TABLE public.paddle_subscription_states ENABLE ROW LEVEL SECURITY;'
     );
-    expect(sql).toContain(
-      'REVOKE ALL ON TABLE public.paddle_subscription_states FROM PUBLIC, anon, authenticated;'
+    expect(normalizedSql).toContain(
+      'REVOKE ALL ON TABLE public.paddle_subscription_states FROM PUBLIC, anon, authenticated, service_role;'
     );
-    expect(sql).toContain(
-      'GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.paddle_subscription_states TO service_role;'
+    expect(normalizedSql).toContain(
+      'GRANT SELECT ON TABLE public.paddle_subscription_states TO service_role;'
     );
   });
 
@@ -122,23 +122,47 @@ describe('Paddle subscription state migration safety contract', () => {
     }
   });
 
-  test('deduplicates snapshots, rejects timestamp ties, and ignores older snapshots', () => {
-    expect(sql).toContain(
+  test('deduplicates snapshots, preserves timestamp ties for reconciliation, and ignores older snapshots', () => {
+    const snapshotStart = sql.indexOf(
+      'CREATE OR REPLACE FUNCTION public.apply_paddle_subscription_snapshot'
+    );
+    const paymentStart = sql.indexOf(
+      'CREATE OR REPLACE FUNCTION public.apply_ordered_subscription_payment'
+    );
+    const snapshotSql = sql.slice(snapshotStart, paymentStart);
+    const lifecycleInsert = snapshotSql.indexOf(
+      'INSERT INTO public.paddle_subscription_lifecycle_events'
+    );
+    const equalTimestampBranch = snapshotSql.indexOf(
+      'AND p_occurred_at = v_state.last_snapshot_occurred_at THEN'
+    );
+    const profileLockComment = snapshotSql.indexOf(
+      '-- Different Paddle subscription IDs have independent reducer rows'
+    );
+    const equalTimestampSql = snapshotSql.slice(
+      equalTimestampBranch,
+      profileLockComment
+    );
+
+    expect(snapshotSql).toContain(
       "p_event_type NOT IN ('subscription.updated', 'subscription.canceled')"
     );
-    expect(sql).toMatch(
+    expect(snapshotSql).toMatch(
       /v_status IN \('active', 'trialing'\)[\s\S]{0,220}p_allotment <= 0/
     );
-    expect(sql).toContain(
+    expect(snapshotSql).toContain(
       'IF v_state.last_snapshot_event_id = p_provider_event_id THEN'
     );
-    expect(sql).toContain("'reason', 'duplicate'");
-    expect(sql).toMatch(
+    expect(snapshotSql).toContain("'reason', 'duplicate'");
+    expect(snapshotSql).toMatch(
       /p_occurred_at < v_state\.last_snapshot_occurred_at[\s\S]{0,260}'reason', 'stale'/
     );
-    expect(sql).toMatch(
-      /p_occurred_at = v_state\.last_snapshot_occurred_at[\s\S]{0,180}PADDLE_SUBSCRIPTION_SNAPSHOT_RECONCILIATION_REQUIRED/
-    );
+    expect(lifecycleInsert).toBeGreaterThan(-1);
+    expect(equalTimestampBranch).toBeGreaterThan(lifecycleInsert);
+    expect(profileLockComment).toBeGreaterThan(equalTimestampBranch);
+    expect(equalTimestampSql).toContain("'applied', false");
+    expect(equalTimestampSql).toContain("'reason', 'reconciliation_required'");
+    expect(equalTimestampSql).not.toContain('RAISE EXCEPTION');
   });
 
   test('makes cancellation terminal and atomic with entitlement expiration', () => {

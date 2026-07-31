@@ -19,6 +19,9 @@ const rateLimit = require('express-rate-limit');
 const logger = require('./lib/logger');
 const { getPublicProductCatalog } = require('./lib/product-catalog');
 const { getPublicCreditPackCatalog } = require('./lib/credit-pack-catalog');
+const {
+  applyProductCatalogToStructuredData
+} = require('./lib/product-structured-data');
 const { redactShareTokenPath } = require('./lib/storyboard-sharing');
 const {
   getAssetVersion,
@@ -28,7 +31,10 @@ const {
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const indexHtmlTemplate = fs.readFileSync(path.join(__dirname, 'public', 'index.html'), 'utf8');
+const indexHtmlTemplate = applyProductCatalogToStructuredData(
+  fs.readFileSync(path.join(__dirname, 'public', 'index.html'), 'utf8'),
+  getPublicProductCatalog()
+);
 const versionedHtmlTemplates = new Map([
   ['index.html', indexHtmlTemplate],
   ['frame.html', fs.readFileSync(path.join(__dirname, 'public', 'frame.html'), 'utf8')],
@@ -135,7 +141,15 @@ const apiLimiter = rateLimit({
   max: 60,                   // 분당 60 요청
   standardHeaders: true,
   legacyHeaders: false,
-  message: { success: false, error: 'Too many requests, please try again later.' }
+  // This response is emitted before any API handler can run. Money-moving
+  // clients may therefore safely discard a pre-stored recovery token only
+  // when both this code and requestProcessed=false are present.
+  message: {
+    success: false,
+    error: 'Too many requests, please try again later.',
+    code: 'API_RATE_LIMITED',
+    requestProcessed: false
+  }
 });
 
 const analyzeLimiter = rateLimit({

@@ -72,8 +72,9 @@ CREATE INDEX paddle_event_watermarks_pending_lease_idx
   WHERE pending_event_id IS NOT NULL;
 
 ALTER TABLE public.paddle_event_watermarks ENABLE ROW LEVEL SECURITY;
-REVOKE ALL ON TABLE public.paddle_event_watermarks FROM PUBLIC, anon, authenticated;
-GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.paddle_event_watermarks TO service_role;
+REVOKE ALL ON TABLE public.paddle_event_watermarks
+  FROM PUBLIC, anon, authenticated, service_role;
+GRANT SELECT ON TABLE public.paddle_event_watermarks TO service_role;
 
 CREATE TABLE public.paddle_subscription_states (
   subscription_id text PRIMARY KEY,
@@ -154,8 +155,70 @@ CREATE INDEX paddle_subscription_states_customer_idx
   WHERE customer_id IS NOT NULL;
 
 ALTER TABLE public.paddle_subscription_states ENABLE ROW LEVEL SECURITY;
-REVOKE ALL ON TABLE public.paddle_subscription_states FROM PUBLIC, anon, authenticated;
-GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.paddle_subscription_states TO service_role;
+REVOKE ALL ON TABLE public.paddle_subscription_states
+  FROM PUBLIC, anon, authenticated, service_role;
+GRANT SELECT ON TABLE public.paddle_subscription_states TO service_role;
+
+-- Keep every signed lifecycle snapshot, including a stale snapshot that
+-- arrives after a newer one. The latest-state reducer alone cannot answer
+-- whether a subscription was paused, past due, or canceled at an earlier
+-- transaction.completed occurred_at.
+CREATE TABLE public.paddle_subscription_lifecycle_events (
+  provider_event_id text PRIMARY KEY,
+  subscription_id text NOT NULL,
+  user_id uuid REFERENCES public.profiles(id) ON DELETE SET NULL,
+  customer_id text,
+  lifecycle_status text NOT NULL,
+  event_type text NOT NULL,
+  occurred_at timestamptz NOT NULL,
+  received_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  CONSTRAINT paddle_subscription_lifecycle_events_event_id_check
+    CHECK (btrim(provider_event_id) <> '' AND length(provider_event_id) <= 255),
+  CONSTRAINT paddle_subscription_lifecycle_events_subscription_id_check
+    CHECK (btrim(subscription_id) <> '' AND length(subscription_id) <= 255),
+  CONSTRAINT paddle_subscription_lifecycle_events_customer_id_check
+    CHECK (
+      customer_id IS NULL
+      OR (btrim(customer_id) <> '' AND length(customer_id) <= 255)
+    ),
+  CONSTRAINT paddle_subscription_lifecycle_events_status_check
+    CHECK (
+      lifecycle_status IN (
+        'unknown',
+        'active',
+        'trialing',
+        'past_due',
+        'paused',
+        'canceled'
+      )
+    ),
+  CONSTRAINT paddle_subscription_lifecycle_events_type_check
+    CHECK (
+      event_type IN ('subscription.updated', 'subscription.canceled')
+    )
+);
+
+CREATE INDEX paddle_subscription_lifecycle_events_subscription_time_idx
+  ON public.paddle_subscription_lifecycle_events (
+    subscription_id,
+    occurred_at,
+    provider_event_id
+  );
+CREATE INDEX paddle_subscription_lifecycle_events_user_idx
+  ON public.paddle_subscription_lifecycle_events (user_id)
+  WHERE user_id IS NOT NULL;
+CREATE INDEX paddle_subscription_lifecycle_events_ineligible_idx
+  ON public.paddle_subscription_lifecycle_events (
+    subscription_id,
+    occurred_at
+  )
+  WHERE lifecycle_status IN ('past_due', 'paused', 'canceled');
+
+ALTER TABLE public.paddle_subscription_lifecycle_events ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON TABLE public.paddle_subscription_lifecycle_events
+  FROM PUBLIC, anon, authenticated, service_role;
+GRANT SELECT
+  ON TABLE public.paddle_subscription_lifecycle_events TO service_role;
 
 -- Bootstrap every subscription already linked to a profile with one shared
 -- timestamp. This is intentionally conservative: paid profiles remain active,
@@ -481,6 +544,7 @@ SET search_path = public, pg_temp
 AS $function$
 DECLARE
   v_state public.paddle_subscription_states%ROWTYPE;
+  v_lifecycle_event public.paddle_subscription_lifecycle_events%ROWTYPE;
   v_profile public.profiles%ROWTYPE;
   v_now timestamptz := clock_timestamp();
   v_customer_id text := NULLIF(btrim(p_customer_id), '');
@@ -569,6 +633,41 @@ BEGIN
     v_state.customer_id := v_customer_id;
   END IF;
 
+  INSERT INTO public.paddle_subscription_lifecycle_events (
+    provider_event_id,
+    subscription_id,
+    user_id,
+    customer_id,
+    lifecycle_status,
+    event_type,
+    occurred_at
+  ) VALUES (
+    btrim(p_provider_event_id),
+    btrim(p_subscription_id),
+    p_user_id,
+    v_customer_id,
+    v_status,
+    p_event_type,
+    p_occurred_at
+  )
+  ON CONFLICT (provider_event_id) DO NOTHING;
+
+  SELECT *
+    INTO v_lifecycle_event
+    FROM public.paddle_subscription_lifecycle_events
+   WHERE provider_event_id = btrim(p_provider_event_id);
+
+  IF NOT FOUND
+     OR v_lifecycle_event.subscription_id IS DISTINCT FROM btrim(p_subscription_id)
+     OR v_lifecycle_event.user_id IS DISTINCT FROM p_user_id
+     OR v_lifecycle_event.customer_id IS DISTINCT FROM v_customer_id
+     OR v_lifecycle_event.lifecycle_status IS DISTINCT FROM v_status
+     OR v_lifecycle_event.event_type IS DISTINCT FROM p_event_type
+     OR v_lifecycle_event.occurred_at IS DISTINCT FROM p_occurred_at THEN
+    RAISE EXCEPTION 'PADDLE_SUBSCRIPTION_EVENT_ID_CONFLICT'
+      USING ERRCODE = '23505';
+  END IF;
+
   IF v_state.last_snapshot_event_id = p_provider_event_id THEN
     IF v_state.last_snapshot_event_type IS DISTINCT FROM p_event_type
        OR v_state.last_snapshot_occurred_at IS DISTINCT FROM p_occurred_at THEN
@@ -598,16 +697,17 @@ BEGIN
 
   IF v_state.last_snapshot_occurred_at IS NOT NULL
      AND p_occurred_at = v_state.last_snapshot_occurred_at THEN
-    RAISE EXCEPTION 'PADDLE_SUBSCRIPTION_SNAPSHOT_RECONCILIATION_REQUIRED'
-      USING
-        ERRCODE = 'P0001',
-        DETAIL = format(
-          'subscription=%s existing_event=%s incoming_event=%s occurred_at=%s',
-          v_state.subscription_id,
-          v_state.last_snapshot_event_id,
-          p_provider_event_id,
-          p_occurred_at
-        );
+    -- The immutable event was inserted above. Return a fail-closed outcome
+    -- instead of raising, because an exception would roll that evidence back.
+    RETURN jsonb_build_object(
+      'applied', false,
+      'reason', 'reconciliation_required',
+      'terminal', v_state.terminal,
+      'lifecycleStatus', v_state.lifecycle_status,
+      'lastEventId', v_state.last_snapshot_event_id,
+      'incomingEventId', btrim(p_provider_event_id),
+      'occurredAt', p_occurred_at
+    );
   END IF;
 
   -- Different Paddle subscription IDs have independent reducer rows, but they

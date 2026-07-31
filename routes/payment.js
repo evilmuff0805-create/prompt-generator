@@ -18,8 +18,19 @@ const {
   isCreditPackPurchasesEnabled,
   parseExpiryDays
 } = require('../lib/credit-pack-catalog');
+const { parsePaddleTimestamp } = require('../lib/paddle-time');
+const { getPaddleApiBase } = require('../lib/paddle-api');
+const {
+  MAX_POSTGRES_INTEGER,
+  isPostgresMinorUnitAmount
+} = require('../lib/paddle-money');
 
-const PADDLE_API_BASE = process.env.PADDLE_API_BASE || 'https://api.paddle.com';
+const PADDLE_API_BASE = getPaddleApiBase(process.env);
+const PADDLE_READ_TIMEOUT_MS = 8000;
+const PADDLE_CHARGE_TIMEOUT_MS = 15000;
+const CREDIT_PACK_REQUEST_ID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const CREDIT_PACK_TERMINAL_RECOVERY_WINDOW_MS = 60 * 60 * 1000;
 
 function makePaymentAdminClient() {
   return createClient(
@@ -105,15 +116,35 @@ async function transitionSubscriptionCheckoutAttempt(
   return data;
 }
 
-async function createCreditPackPurchaseRequest(supabase, {
+function approvedCreditPackPreviewAmounts(approvedPreview) {
+  const approvedAmounts = parseMinorUnitAmountRecord(approvedPreview, [
+    'subtotal',
+    'discount',
+    'tax',
+    'total',
+    'credit',
+    'balance',
+    'grandTotal',
+    'grandTotalTax'
+  ]);
+  if (!approvedAmounts) {
+    throw new Error('Approved Paddle preview totals are invalid');
+  }
+  return approvedAmounts;
+}
+
+async function beginCreditPackPurchasePreview(supabase, {
   requestId,
   userId,
   customerId,
   subscriptionId,
   pack,
-  expiryDays
+  expiryDays,
+  providerSubscriptionUpdatedAt,
+  providerPlanPriceId,
+  eligibilityCheckStartedAt
 }) {
-  const { data, error } = await supabase.rpc('create_credit_pack_purchase_request', {
+  const { data, error } = await supabase.rpc('begin_credit_pack_purchase_preview', {
     p_request_id: requestId,
     p_user_id: userId,
     p_customer_id: customerId,
@@ -122,18 +153,223 @@ async function createCreditPackPurchaseRequest(supabase, {
     p_credits: pack.credits,
     p_unit_amount: pack.priceCents,
     p_currency_code: 'USD',
-    p_expiry_days: expiryDays
+    p_expiry_days: expiryDays,
+    p_provider_subscription_updated_at: providerSubscriptionUpdatedAt,
+    p_provider_plan_price_id: providerPlanPriceId,
+    p_eligibility_check_started_at: eligibilityCheckStartedAt
   });
 
   if (error) {
-    throw new Error('create_credit_pack_purchase_request RPC failed: ' + error.message);
+    throw new Error('begin_credit_pack_purchase_preview RPC failed: ' + error.message);
+  }
+  const validOutcome = data && (
+    (
+      data.applied === true
+      && data.reason === 'purchase_preview_reserved'
+      && data.status === 'previewing'
+      && data.confirmationVersion === 0
+    )
+    || (
+      data.applied === false
+      && data.reason === 'duplicate_pending'
+      && [
+        'previewing',
+        'created',
+        'charging',
+        'submitted',
+        'provider_unknown'
+      ].includes(data.status)
+    )
+    || (
+      data.applied === false
+      && data.reason === 'purchase_review_required'
+      && data.status === 'withheld'
+    )
+  );
+  const validRequestReference =
+    data.reason === 'purchase_review_required'
+      ? data.requestId == null || isCreditPackRequestId(data.requestId)
+      : isCreditPackRequestId(data.requestId);
+  if (!validOutcome || !validRequestReference) {
+    throw new Error('begin_credit_pack_purchase_preview returned an invalid outcome');
+  }
+  return data;
+}
+
+async function finalizeCreditPackPurchasePreview(supabase, {
+  requestId,
+  userId,
+  expectedConfirmationVersion,
+  approvedPreview,
+  providerApiRequestId
+}) {
+  const approvedAmounts = approvedCreditPackPreviewAmounts(approvedPreview);
+  const { data, error } = await supabase.rpc(
+    'finalize_credit_pack_purchase_preview',
+    {
+      p_request_id: requestId,
+      p_user_id: userId,
+      p_expected_confirmation_version: expectedConfirmationVersion,
+      p_approved_subtotal: approvedAmounts.subtotal,
+      p_approved_discount: approvedAmounts.discount,
+      p_approved_tax: approvedAmounts.tax,
+      p_approved_total: approvedAmounts.total,
+      p_approved_credit: approvedAmounts.credit,
+      p_approved_balance: approvedAmounts.balance,
+      p_approved_grand_total: approvedAmounts.grandTotal,
+      p_approved_grand_total_tax: approvedAmounts.grandTotalTax,
+      p_provider_api_request_id: providerApiRequestId
+    }
+  );
+
+  if (error) {
+    throw new Error('finalize_credit_pack_purchase_preview RPC failed: ' + error.message);
+  }
+  const validOutcome = data && (
+    (
+      data.applied === true
+      && [
+        'purchase_preview_finalized',
+        'purchase_confirmation_refreshed'
+      ].includes(data.reason)
+      && data.status === 'created'
+      && Number.isInteger(data.confirmationVersion)
+      && data.confirmationVersion >= 1
+    )
+    || (
+      data.applied === false
+      && [
+        'duplicate_or_ambiguous',
+        'already_finalized',
+        'authorization_expired',
+        'confirmation_version_mismatch'
+      ].includes(data.reason)
+      && typeof data.status === 'string'
+    )
+  );
+  if (!validOutcome || data.requestId !== requestId) {
+    throw new Error('finalize_credit_pack_purchase_preview returned an invalid outcome');
+  }
+  return data;
+}
+
+async function claimCreditPackPurchaseRequest(supabase, {
+  requestId,
+  userId,
+  customerId,
+  subscriptionId,
+  packKey,
+  expectedConfirmationVersion
+}) {
+  const { data, error } = await supabase.rpc(
+    'claim_credit_pack_purchase_request',
+    {
+      p_request_id: requestId,
+      p_user_id: userId,
+      p_customer_id: customerId,
+      p_subscription_id: subscriptionId,
+      p_pack_key: packKey,
+      p_expected_confirmation_version: expectedConfirmationVersion
+    }
+  );
+  if (error) {
+    throw new Error('claim_credit_pack_purchase_request RPC failed: ' + error.message);
+  }
+  const validOutcome = data && (
+    (
+      data.applied === true
+      && data.reason === 'purchase_request_claimed'
+      && data.status === 'charging'
+    )
+    || (
+      data.applied === false
+      && [
+        'duplicate_or_ambiguous',
+        'already_finalized',
+        'authorization_expired',
+        'confirmation_version_mismatch',
+        'purchase_review_required',
+        'subscription_reconfirmation_required'
+      ].includes(data.reason)
+      && typeof data.status === 'string'
+      && (
+        ![
+          'purchase_review_required',
+          'subscription_reconfirmation_required'
+        ].includes(data.reason)
+        || (
+          data.status === 'created'
+          && data.cancellable === true
+          && data.cancelReason === 'confirmation_rejected'
+        )
+      )
+    )
+  );
+  if (!validOutcome || data.requestId !== requestId) {
+    throw new Error('claim_credit_pack_purchase_request returned an invalid outcome');
+  }
+  return data;
+}
+
+async function cancelCreditPackPurchaseRequest(supabase, {
+  requestId,
+  userId,
+  reason
+}) {
+  const { data, error } = await supabase.rpc(
+    'cancel_credit_pack_purchase_request',
+    {
+      p_request_id: requestId,
+      p_user_id: userId,
+      p_reason: reason
+    }
+  );
+  if (error) {
+    throw new Error('cancel_credit_pack_purchase_request RPC failed: ' + error.message);
   }
   if (
     !data
-    || !['purchase_request_created', 'duplicate_pending'].includes(data.reason)
-    || !['created', 'submitted', 'provider_unknown', 'completed'].includes(data.status)
+    || data.requestId !== requestId
+    || ![
+      'purchase_request_cancelled',
+      'reconciliation_required',
+      'already_finalized',
+      'duplicate'
+    ].includes(data.reason)
+    || typeof data.status !== 'string'
   ) {
-    throw new Error('create_credit_pack_purchase_request returned an invalid outcome');
+    throw new Error('cancel_credit_pack_purchase_request returned an invalid outcome');
+  }
+  return data;
+}
+
+async function expireCreditPackPurchaseRequest(supabase, {
+  requestId,
+  userId
+}) {
+  const { data, error } = await supabase.rpc(
+    'expire_credit_pack_purchase_request',
+    {
+      p_request_id: requestId,
+      p_user_id: userId
+    }
+  );
+  if (error) {
+    throw new Error('expire_credit_pack_purchase_request RPC failed: ' + error.message);
+  }
+  if (
+    !data
+    || data.requestId !== requestId
+    || ![
+      'purchase_request_expired',
+      'authorization_active',
+      'reconciliation_required',
+      'already_finalized',
+      'duplicate'
+    ].includes(data.reason)
+    || typeof data.status !== 'string'
+  ) {
+    throw new Error('expire_credit_pack_purchase_request returned an invalid outcome');
   }
   return data;
 }
@@ -279,7 +515,17 @@ function validateCreditPackChargeResponse(data, expected) {
 }
 
 function isMinorUnitAmount(value) {
-  return typeof value === 'string' && /^(0|[1-9]\d*)$/.test(value);
+  return isPostgresMinorUnitAmount(value);
+}
+
+function parseMinorUnitAmountRecord(source, names) {
+  if (!source || !Array.isArray(names)) return null;
+  const parsed = {};
+  for (const name of names) {
+    if (!isMinorUnitAmount(source[name])) return null;
+    parsed[name] = Number(source[name]);
+  }
+  return parsed;
 }
 
 function parseCreditPackPreviewResponse(data, expected) {
@@ -291,6 +537,19 @@ function parseCreditPackPreviewResponse(data, expected) {
     ? lineItems[0]
     : null;
   const expectedSubtotal = String(expected.pack.priceCents);
+  const parsedTotals = parseMinorUnitAmountRecord(totals, [
+    'subtotal',
+    'discount',
+    'tax',
+    'total',
+    'credit',
+    'balance',
+    'grand_total',
+    'grand_total_tax'
+  ]);
+  const subtotalPlusTax = parsedTotals
+    ? parsedTotals.subtotal + parsedTotals.tax
+    : null;
 
   const validIdentity = data
     && data.id === expected.subscriptionId
@@ -303,17 +562,15 @@ function parseCreditPackPreviewResponse(data, expected) {
     && lineItem.product?.id === null
     && lineItem.totals?.subtotal === expectedSubtotal;
   const validTotals = details?.currency_code === 'USD'
-    && [
-      totals?.subtotal,
-      totals?.discount,
-      totals?.tax,
-      totals?.total,
-      totals?.credit,
-      totals?.balance,
-      totals?.grand_total,
-      totals?.grand_total_tax
-    ].every(isMinorUnitAmount)
-    && totals.subtotal === expectedSubtotal;
+    && parsedTotals
+    && totals.subtotal === expectedSubtotal
+    && subtotalPlusTax <= MAX_POSTGRES_INTEGER
+    && parsedTotals.discount === 0
+    && parsedTotals.credit === 0
+    && parsedTotals.total === subtotalPlusTax
+    && parsedTotals.grand_total === parsedTotals.total
+    && parsedTotals.balance === parsedTotals.grand_total
+    && parsedTotals.grand_total_tax === parsedTotals.tax;
 
   if (!validIdentity || !validCustomLineItem || !validTotals) {
     return null;
@@ -365,13 +622,15 @@ async function loadEligibleCreditPackSubscription(req, apiKey) {
     );
   }
 
+  const eligibilityCheckStartedAt = new Date().toISOString();
   let subscriptionResponse;
   try {
     subscriptionResponse = await fetch(`${PADDLE_API_BASE}/subscriptions/${subscriptionId}`, {
       headers: {
         'Authorization': `Bearer ${apiKey}`,
         'Content-Type': 'application/json'
-      }
+      },
+      signal: AbortSignal.timeout(PADDLE_READ_TIMEOUT_MS)
     });
   } catch (error) {
     throw creditPackHttpError(
@@ -391,18 +650,31 @@ async function loadEligibleCreditPackSubscription(req, apiKey) {
 
   const subscriptionJson = await subscriptionResponse.json().catch(() => null);
   const subscription = subscriptionJson?.data;
+  const providerSubscriptionUpdatedAt = parsePaddleTimestamp(
+    subscription?.updated_at
+  );
+  const providerApiRequestId =
+    typeof subscriptionJson?.meta?.request_id === 'string'
+      ? subscriptionJson.meta.request_id.trim()
+      : '';
   const hasSinglePlanItem = Array.isArray(subscription?.items)
     && subscription.items.length === 1
-    && subscription.items[0]?.quantity === 1;
+    && subscription.items[0]?.quantity === 1
+    && subscription.items[0]?.status === 'active'
+    && subscription.items[0]?.recurring === true;
   const subscriptionPlan = hasSinglePlanItem
     ? getPlanForPaddlePriceId(subscription.items[0]?.price?.id)
     : null;
-  const subscriptionEligible = subscription?.status === 'active'
+  const subscriptionEligible = subscription?.id === subscriptionId
+    && subscription?.status === 'active'
     && subscription?.collection_mode === 'automatic'
     && subscription?.currency_code === 'USD'
     && subscription?.scheduled_change == null
     && subscription?.customer_id === customerId
-    && subscriptionPlan === expectedPlan;
+    && subscriptionPlan === expectedPlan
+    && providerSubscriptionUpdatedAt
+    && providerApiRequestId
+    && providerApiRequestId.length <= 255;
 
   if (!subscriptionEligible) {
     throw creditPackHttpError(
@@ -417,7 +689,11 @@ async function loadEligibleCreditPackSubscription(req, apiKey) {
     expectedPlan,
     customerId,
     subscriptionId,
-    subscription
+    subscription,
+    providerSubscriptionUpdatedAt,
+    providerApiRequestId,
+    providerPlanPriceId: subscription.items[0].price.id,
+    eligibilityCheckStartedAt
   };
 }
 
@@ -438,7 +714,8 @@ async function requestCreditPackPreview({
           'Authorization': `Bearer ${apiKey}`,
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify(chargeBody)
+        body: JSON.stringify(chargeBody),
+        signal: AbortSignal.timeout(PADDLE_READ_TIMEOUT_MS)
       }
     );
   } catch (_) {
@@ -467,19 +744,27 @@ async function requestCreditPackPreview({
   }
 
   const previewJson = await previewResponse.json().catch(() => null);
+  const providerApiRequestId =
+    typeof previewJson?.meta?.request_id === 'string'
+      ? previewJson.meta.request_id.trim()
+      : '';
   const preview = parseCreditPackPreviewResponse(previewJson?.data, {
     customerId,
     subscriptionId,
     pack
   });
-  if (!preview) {
+  if (
+    !preview
+    || !providerApiRequestId
+    || providerApiRequestId.length > 255
+  ) {
     throw creditPackHttpError(
       502,
       'INVALID_PADDLE_PREVIEW',
       'The billing provider returned an invalid add-on total.'
     );
   }
-  return preview;
+  return { preview, providerApiRequestId };
 }
 
 /* ── Build the Paddle subscription-update request body ── */
@@ -1023,7 +1308,8 @@ function creditPackFeatureUnavailable(res) {
   return res.status(404).json({
     success: false,
     error: 'Usage add-ons are not available.',
-    code: 'CREDIT_PACKS_UNAVAILABLE'
+    code: 'CREDIT_PACKS_UNAVAILABLE',
+    chargeMayHaveRun: false
   });
 }
 
@@ -1036,9 +1322,139 @@ function creditPackResponsePack(pack) {
   };
 }
 
+function isCreditPackRequestId(value) {
+  return typeof value === 'string'
+    && CREDIT_PACK_REQUEST_ID_PATTERN.test(value);
+}
+
+function isRecoverableCreditPackPurchase(data, nowMs = Date.now()) {
+  if (!data) return false;
+  if (data.review_required === true) {
+    return true;
+  }
+  if (
+    [
+      'previewing',
+      'created',
+      'charging',
+      'submitted',
+      'provider_unknown',
+      'withheld',
+      'chargeback'
+    ]
+      .includes(data.status)
+  ) {
+    return true;
+  }
+  if (!['completed', 'refunded', 'failed'].includes(data.status)) {
+    return false;
+  }
+
+  const terminalTimestamp = data.status === 'failed'
+    ? data.reconciliation_closed_at || data.created_at
+    : data.completed_at;
+  const terminalAtMs = Date.parse(terminalTimestamp);
+  return Number.isFinite(terminalAtMs)
+    && terminalAtMs >= nowMs - CREDIT_PACK_TERMINAL_RECOVERY_WINDOW_MS;
+}
+
+function creditPackStatePack(state) {
+  return creditPackResponsePack({
+    key: state.packKey,
+    credits: state.credits,
+    priceUsd: state.unitAmount / 100
+  });
+}
+
+function creditPackStateMayHaveCharged(status) {
+  return [
+    'charging',
+    'submitted',
+    'provider_unknown',
+    'completed',
+    'withheld',
+    'refunded',
+    'chargeback'
+  ].includes(status);
+}
+
+function sendCreditPackPendingResponse(res, state, options = {}) {
+  const isReview = state.status === 'withheld';
+  const code = options.code || (
+    isReview ? 'PURCHASE_REVIEW_REQUIRED' : 'PURCHASE_ALREADY_PENDING'
+  );
+  const success = options.success ?? !isReview;
+  const body = {
+    success,
+    purchaseRequestId: state.requestId,
+    status: state.status,
+    code
+  };
+  if (state.packKey && state.credits && state.unitAmount) {
+    body.pack = creditPackStatePack(state);
+  }
+  if (Number.isInteger(state.confirmationVersion)) {
+    body.confirmationVersion = state.confirmationVersion;
+  }
+  if (creditPackStateMayHaveCharged(state.status)) {
+    body.chargeMayHaveRun = true;
+  }
+  return res.status(state.status === 'withheld' ? 409 : 202).json(body);
+}
+
+async function respondAfterUnchargedCreditPackFailure(res, {
+  adminClient,
+  userId,
+  requestId,
+  cancellationReason,
+  statusCode,
+  error,
+  code
+}) {
+  let cancellation;
+  try {
+    cancellation = await cancelCreditPackPurchaseRequest(adminClient, {
+      requestId,
+      userId,
+      reason: cancellationReason
+    });
+  } catch (cancellationError) {
+    console.error(
+      '[payment/credit-packs] Could not confirm uncharged request cancellation:',
+      cancellationError.message
+    );
+  }
+
+  if (cancellation?.status === 'failed') {
+    return res.status(statusCode).json({
+      success: false,
+      purchaseRequestId: requestId,
+      status: 'failed',
+      error,
+      code,
+      chargeMayHaveRun: false
+    });
+  }
+
+  if (cancellation && creditPackStateMayHaveCharged(cancellation.status)) {
+    return sendCreditPackPendingResponse(res, cancellation, {
+      code: 'PURCHASE_CONFIRMATION_PENDING'
+    });
+  }
+
+  return res.status(503).json({
+    success: false,
+    purchaseRequestId: requestId,
+    status: cancellation?.status || 'unknown',
+    error: 'Could not confirm the uncharged purchase request was released.',
+    code: 'PURCHASE_RECOVERY_REQUIRED'
+  });
+}
+
 /* ── POST /api/payment/credit-packs/preview ── */
-// Calculates tax and the final amount against the authenticated subscriber's
-// billing details. No purchase request is created and no money moves.
+// Reserves one owner-scoped request before Paddle calculates tax. The
+// reservation closes the cross-tab race while keeping money movement
+// impossible until a later, exact-version purchase claim.
 async function handleCreditPackPreview(req, res) {
   res.set('Cache-Control', 'no-store');
 
@@ -1052,7 +1468,8 @@ async function handleCreditPackPreview(req, res) {
     return res.status(503).json({
       success: false,
       error: 'Usage add-ons are temporarily unavailable.',
-      code: 'CREDIT_PACKS_UNAVAILABLE'
+      code: 'CREDIT_PACKS_UNAVAILABLE',
+      chargeMayHaveRun: false
     });
   }
 
@@ -1061,7 +1478,8 @@ async function handleCreditPackPreview(req, res) {
     return res.status(400).json({
       success: false,
       error: 'Invalid usage add-on.',
-      code: 'INVALID_CREDIT_PACK'
+      code: 'INVALID_CREDIT_PACK',
+      chargeMayHaveRun: false
     });
   }
 
@@ -1076,21 +1494,80 @@ async function handleCreditPackPreview(req, res) {
     return res.status(error.statusCode || 500).json({
       success: false,
       error: error.message,
-      code: error.code || 'SUBSCRIPTION_CHECK_FAILED'
+      code: error.code || 'SUBSCRIPTION_CHECK_FAILED',
+      chargeMayHaveRun: false
     });
   }
 
+  const requestId = crypto.randomUUID();
   const expiryDays = parseExpiryDays(process.env.CREDIT_PACK_EXPIRY_DAYS);
-  const previewBody = buildCreditPackChargeBody({
-    pack,
-    requestId: crypto.randomUUID(),
-    expiryDays,
-    taxCategory: process.env.PADDLE_CREDIT_PACK_TAX_CATEGORY
-  });
-
-  let preview;
+  const adminClient = req.paymentAdminClient || makePaymentAdminClient();
+  let requestState;
   try {
-    preview = await requestCreditPackPreview({
+    requestState = await beginCreditPackPurchasePreview(adminClient, {
+      requestId,
+      userId: req.user.id,
+      customerId: eligibility.customerId,
+      subscriptionId: eligibility.subscriptionId,
+      pack,
+      expiryDays,
+      providerSubscriptionUpdatedAt:
+        eligibility.providerSubscriptionUpdatedAt,
+      providerPlanPriceId: eligibility.providerPlanPriceId,
+      eligibilityCheckStartedAt: eligibility.eligibilityCheckStartedAt
+    });
+  } catch (error) {
+    console.error(
+      '[payment/credit-packs] Preview reservation failed:',
+      error.message
+    );
+    return res.status(503).json({
+      success: false,
+      purchaseRequestId: requestId,
+      status: 'unknown',
+      error: 'Could not reserve the billing preview.',
+      code: 'PURCHASE_REQUEST_UNAVAILABLE',
+      chargeMayHaveRun: false
+    });
+  }
+
+  if (requestState.reason === 'purchase_review_required') {
+    return sendCreditPackPendingResponse(res, requestState, {
+      code: 'PURCHASE_REVIEW_REQUIRED',
+      success: false
+    });
+  }
+  if (requestState.reason === 'duplicate_pending') {
+    return sendCreditPackPendingResponse(res, requestState);
+  }
+
+  let previewBody;
+  try {
+    previewBody = buildCreditPackChargeBody({
+      pack,
+      requestId,
+      expiryDays,
+      taxCategory: process.env.PADDLE_CREDIT_PACK_TAX_CATEGORY
+    });
+  } catch (error) {
+    console.error(
+      '[payment/credit-packs] Preview configuration is invalid:',
+      error.message
+    );
+    return respondAfterUnchargedCreditPackFailure(res, {
+      adminClient,
+      userId: req.user.id,
+      requestId,
+      cancellationReason: 'preview_unavailable',
+      statusCode: 503,
+      error: 'Usage add-ons are temporarily unavailable.',
+      code: error.code || 'CREDIT_PACK_CONFIGURATION_INVALID'
+    });
+  }
+
+  let providerPreview;
+  try {
+    providerPreview = await requestCreditPackPreview({
       apiKey,
       subscriptionId: eligibility.subscriptionId,
       customerId: eligibility.customerId,
@@ -1098,61 +1575,167 @@ async function handleCreditPackPreview(req, res) {
       chargeBody: previewBody
     });
   } catch (error) {
-    return res.status(error.statusCode || 502).json({
-      success: false,
+    return respondAfterUnchargedCreditPackFailure(res, {
+      adminClient,
+      userId: req.user.id,
+      requestId,
+      cancellationReason: 'preview_failed',
+      statusCode: error.statusCode || 502,
       error: error.message,
       code: error.code || 'PADDLE_UNAVAILABLE'
     });
   }
 
+  let finalized;
+  try {
+    finalized = await finalizeCreditPackPurchasePreview(adminClient, {
+      requestId,
+      userId: req.user.id,
+      expectedConfirmationVersion: 0,
+      approvedPreview: providerPreview.preview,
+      providerApiRequestId: providerPreview.providerApiRequestId
+    });
+  } catch (error) {
+    console.error(
+      '[payment/credit-packs] Preview finalization failed:',
+      error.message
+    );
+    return respondAfterUnchargedCreditPackFailure(res, {
+      adminClient,
+      userId: req.user.id,
+      requestId,
+      cancellationReason: 'preview_unavailable',
+      statusCode: 503,
+      error: 'Could not finalize the billing preview.',
+      code: 'PURCHASE_REQUEST_UNAVAILABLE'
+    });
+  }
+  if (finalized.applied !== true) {
+    if (finalized.reason === 'authorization_expired') {
+      return respondAfterUnchargedCreditPackFailure(res, {
+        adminClient,
+        userId: req.user.id,
+        requestId,
+        cancellationReason: 'confirmation_rejected',
+        statusCode: 409,
+        error: 'The billing preview expired.',
+        code: 'CREDIT_PACK_PREVIEW_EXPIRED'
+      });
+    }
+    return sendCreditPackPendingResponse(res, finalized);
+  }
+
   return res.json({
     success: true,
+    purchaseRequestId: requestId,
+    status: 'created',
+    confirmationVersion: finalized.confirmationVersion,
     pack: creditPackResponsePack(pack),
     expiryDays,
-    preview
+    authorizationExpiresAt: finalized.authorizationExpiresAt,
+    preview: providerPreview.preview
   });
 }
 
 /* ── POST /api/payment/credit-packs/purchase ── */
 // Dormant by default. The server re-previews the exact tax-inclusive total,
-// compares it with the customer's explicit confirmation, records a durable
-// request, and only then charges the authenticated active subscription once.
+// compares it with the customer's explicit confirmation, atomically claims
+// the reserved request, and only then charges the active subscription once.
 async function handleCreditPackPurchase(req, res) {
   res.set('Cache-Control', 'no-store');
 
+  const requestId = req.body?.purchaseRequestId;
+  const adminClient = req.paymentAdminClient || (
+    isCreditPackRequestId(requestId) && isCreditLedgerV2Enabled()
+      ? makePaymentAdminClient()
+      : null
+  );
+
   if (!isCreditPackPurchasesEnabled() || !isCreditLedgerV2Enabled()) {
+    if (adminClient && isCreditPackRequestId(requestId)) {
+      return respondAfterUnchargedCreditPackFailure(res, {
+        adminClient,
+        userId: req.user.id,
+        requestId,
+        cancellationReason: 'confirmation_rejected',
+        statusCode: 404,
+        error: 'Usage add-ons are not available.',
+        code: 'CREDIT_PACKS_UNAVAILABLE'
+      });
+    }
     return creditPackFeatureUnavailable(res);
   }
 
   const apiKey = process.env.PADDLE_API_KEY;
   if (!apiKey) {
     console.error('[payment/credit-packs] PADDLE_API_KEY is not configured');
+    if (adminClient && isCreditPackRequestId(requestId)) {
+      return respondAfterUnchargedCreditPackFailure(res, {
+        adminClient,
+        userId: req.user.id,
+        requestId,
+        cancellationReason: 'preview_unavailable',
+        statusCode: 503,
+        error: 'Usage add-ons are temporarily unavailable.',
+        code: 'CREDIT_PACKS_UNAVAILABLE'
+      });
+    }
     return res.status(503).json({
       success: false,
       error: 'Usage add-ons are temporarily unavailable.',
-      code: 'CREDIT_PACKS_UNAVAILABLE'
+      code: 'CREDIT_PACKS_UNAVAILABLE',
+      chargeMayHaveRun: false
     });
   }
 
   const pack = getCreditPack(req.body?.packKey);
   if (!pack) {
+    if (adminClient && isCreditPackRequestId(requestId)) {
+      return respondAfterUnchargedCreditPackFailure(res, {
+        adminClient,
+        userId: req.user.id,
+        requestId,
+        cancellationReason: 'confirmation_rejected',
+        statusCode: 400,
+        error: 'Invalid usage add-on.',
+        code: 'INVALID_CREDIT_PACK'
+      });
+    }
     return res.status(400).json({
       success: false,
       error: 'Invalid usage add-on.',
-      code: 'INVALID_CREDIT_PACK'
+      code: 'INVALID_CREDIT_PACK',
+      chargeMayHaveRun: false
     });
   }
 
   const confirmedGrandTotal = req.body?.confirmedGrandTotal;
   const confirmedCurrencyCode = req.body?.confirmedCurrencyCode;
+  const confirmationVersion = req.body?.confirmationVersion;
   if (
     !isMinorUnitAmount(confirmedGrandTotal)
     || confirmedCurrencyCode !== 'USD'
+    || !isCreditPackRequestId(requestId)
+    || !Number.isInteger(confirmationVersion)
+    || confirmationVersion < 1
+    || confirmationVersion > MAX_POSTGRES_INTEGER
   ) {
+    if (adminClient && isCreditPackRequestId(requestId)) {
+      return respondAfterUnchargedCreditPackFailure(res, {
+        adminClient,
+        userId: req.user.id,
+        requestId,
+        cancellationReason: 'confirmation_rejected',
+        statusCode: 400,
+        error: 'A valid billing preview must be confirmed before purchase.',
+        code: 'PREVIEW_CONFIRMATION_REQUIRED'
+      });
+    }
     return res.status(400).json({
       success: false,
       error: 'A valid billing preview must be confirmed before purchase.',
-      code: 'PREVIEW_CONFIRMATION_REQUIRED'
+      code: 'PREVIEW_CONFIRMATION_REQUIRED',
+      chargeMayHaveRun: false
     });
   }
 
@@ -1164,26 +1747,46 @@ async function handleCreditPackPurchase(req, res) {
       '[payment/credit-packs] Eligibility check failed userId=' +
       req.user.id + ' code=' + (error.code || 'unknown')
     );
-    return res.status(error.statusCode || 500).json({
-      success: false,
+    return respondAfterUnchargedCreditPackFailure(res, {
+      adminClient,
+      userId: req.user.id,
+      requestId,
+      cancellationReason: 'confirmation_rejected',
+      statusCode: error.statusCode || 500,
       error: error.message,
       code: error.code || 'SUBSCRIPTION_CHECK_FAILED'
     });
   }
   const { customerId, subscriptionId } = eligibility;
 
-  const requestId = crypto.randomUUID();
   const expiryDays = parseExpiryDays(process.env.CREDIT_PACK_EXPIRY_DAYS);
-  const chargeBody = buildCreditPackChargeBody({
-    pack,
-    requestId,
-    expiryDays,
-    taxCategory: process.env.PADDLE_CREDIT_PACK_TAX_CATEGORY
-  });
-
-  let freshPreview;
+  let chargeBody;
   try {
-    freshPreview = await requestCreditPackPreview({
+    chargeBody = buildCreditPackChargeBody({
+      pack,
+      requestId,
+      expiryDays,
+      taxCategory: process.env.PADDLE_CREDIT_PACK_TAX_CATEGORY
+    });
+  } catch (error) {
+    console.error(
+      '[payment/credit-packs] Purchase configuration is invalid:',
+      error.message
+    );
+    return respondAfterUnchargedCreditPackFailure(res, {
+      adminClient,
+      userId: req.user.id,
+      requestId,
+      cancellationReason: 'preview_unavailable',
+      statusCode: 503,
+      error: 'Usage add-ons are temporarily unavailable.',
+      code: error.code || 'CREDIT_PACK_CONFIGURATION_INVALID'
+    });
+  }
+
+  let providerPreview;
+  try {
+    providerPreview = await requestCreditPackPreview({
       apiKey,
       subscriptionId,
       customerId,
@@ -1191,58 +1794,248 @@ async function handleCreditPackPurchase(req, res) {
       chargeBody
     });
   } catch (error) {
-    return res.status(error.statusCode || 502).json({
-      success: false,
+    return respondAfterUnchargedCreditPackFailure(res, {
+      adminClient,
+      userId: req.user.id,
+      requestId,
+      cancellationReason: 'preview_failed',
+      statusCode: error.statusCode || 502,
       error: error.message,
       code: error.code || 'PADDLE_UNAVAILABLE'
     });
   }
+  const freshPreview = providerPreview.preview;
 
   if (
     freshPreview.currencyCode !== confirmedCurrencyCode
     || freshPreview.grandTotal !== confirmedGrandTotal
   ) {
+    let refreshed;
+    try {
+      refreshed = await finalizeCreditPackPurchasePreview(adminClient, {
+        requestId,
+        userId: req.user.id,
+        expectedConfirmationVersion: confirmationVersion,
+        approvedPreview: freshPreview,
+        providerApiRequestId: providerPreview.providerApiRequestId
+      });
+    } catch (error) {
+      console.error(
+        '[payment/credit-packs] Changed-total finalization failed:',
+        error.message
+      );
+      return res.status(503).json({
+        success: false,
+        purchaseRequestId: requestId,
+        status: 'created',
+        error: 'Could not save the updated billing preview.',
+        code: 'PURCHASE_RECOVERY_REQUIRED'
+      });
+    }
+    if (refreshed.applied !== true) {
+      if (refreshed.reason === 'authorization_expired') {
+        return respondAfterUnchargedCreditPackFailure(res, {
+          adminClient,
+          userId: req.user.id,
+          requestId,
+          cancellationReason: 'confirmation_rejected',
+          statusCode: 409,
+          error: 'The billing preview expired.',
+          code: 'CREDIT_PACK_PREVIEW_EXPIRED'
+        });
+      }
+      return sendCreditPackPendingResponse(res, refreshed);
+    }
     return res.status(409).json({
       success: false,
       error: 'The final billing total changed. Review the updated total before purchasing.',
       code: 'CREDIT_PACK_TOTAL_CHANGED',
+      chargeMayHaveRun: false,
+      purchaseRequestId: requestId,
+      status: 'created',
+      confirmationVersion: refreshed.confirmationVersion,
       pack: creditPackResponsePack(pack),
       expiryDays,
+      authorizationExpiresAt: refreshed.authorizationExpiresAt,
       preview: freshPreview
     });
   }
 
-  const adminClient = req.paymentAdminClient || makePaymentAdminClient();
-  let requestState;
+  let claimState;
   try {
-    requestState = await createCreditPackPurchaseRequest(adminClient, {
+    claimState = await claimCreditPackPurchaseRequest(adminClient, {
       requestId,
       userId: req.user.id,
       customerId,
       subscriptionId,
-      pack,
-      expiryDays
+      packKey: pack.key,
+      expectedConfirmationVersion: confirmationVersion
     });
   } catch (error) {
-    console.error('[payment/credit-packs] Purchase request registration failed:', error.message);
-    return res.status(503).json({
-      success: false,
-      error: 'Could not start the purchase.',
-      code: 'PURCHASE_REQUEST_UNAVAILABLE'
+    // The claim RPC may have committed even when its response was lost. Since
+    // charging is the point of no automatic retry, never call Paddle here.
+    console.error('[payment/credit-packs] Purchase claim outcome is unknown:', error.message);
+    return res.status(202).json({
+      success: true,
+      purchaseRequestId: requestId,
+      status: 'charging',
+      code: 'PURCHASE_CONFIRMATION_PENDING',
+      chargeMayHaveRun: true,
+      pack: creditPackResponsePack(pack)
     });
   }
 
-  if (requestState.reason === 'duplicate_pending') {
+  if (claimState.applied !== true) {
+    if (claimState.reason === 'authorization_expired') {
+      let expired;
+      try {
+        expired = await expireCreditPackPurchaseRequest(adminClient, {
+          requestId,
+          userId: req.user.id
+        });
+      } catch (error) {
+        console.error(
+          '[payment/credit-packs] Expired authorization could not be closed:',
+          error.message
+        );
+      }
+      if (expired?.status === 'failed') {
+        return res.status(409).json({
+          success: false,
+          purchaseRequestId: requestId,
+          status: 'failed',
+          error: 'The billing preview expired.',
+          code: 'CREDIT_PACK_PREVIEW_EXPIRED',
+          chargeMayHaveRun: false
+        });
+      }
+      return res.status(503).json({
+        success: false,
+        purchaseRequestId: requestId,
+        status: expired?.status || claimState.status,
+        error: 'Could not close the expired billing preview.',
+        code: 'PURCHASE_RECOVERY_REQUIRED'
+      });
+    }
+    if (claimState.reason === 'confirmation_version_mismatch') {
+      let recoveryRow = null;
+      try {
+        const recoveryResult = await loadOwnerCreditPackPurchaseData(
+          adminClient,
+          req.user.id,
+          requestId
+        );
+        if (recoveryResult.error) {
+          throw new Error(recoveryResult.error.message);
+        }
+        recoveryRow = await expireCreditPackAuthorizationIfNeeded(
+          adminClient,
+          req.user.id,
+          recoveryResult.data
+        );
+      } catch (error) {
+        console.error(
+          '[payment/credit-packs] Changed confirmation recovery failed:',
+          error.message
+        );
+      }
+      if (recoveryRow?.status === 'created') {
+        return res.status(409).json({
+          success: false,
+          ...creditPackPurchaseStatusPayload(recoveryRow),
+          error: 'The billing total changed. Review it again before purchasing.',
+          code: 'CREDIT_PACK_TOTAL_CHANGED',
+          chargeMayHaveRun: false
+        });
+      }
+      return res.status(409).json({
+        success: false,
+        purchaseRequestId: requestId,
+        status: recoveryRow?.status || claimState.status,
+        error: 'Could not recover the updated billing confirmation.',
+        code: 'PURCHASE_RECOVERY_REQUIRED'
+      });
+    }
+    if (claimState.reason === 'purchase_review_required') {
+      return respondAfterUnchargedCreditPackFailure(res, {
+        adminClient,
+        userId: req.user.id,
+        requestId,
+        cancellationReason: claimState.cancelReason,
+        statusCode: 409,
+        error: 'A previous usage add-on purchase requires review.',
+        code: 'PURCHASE_REVIEW_REQUIRED'
+      });
+    }
+    if (claimState.reason === 'subscription_reconfirmation_required') {
+      return respondAfterUnchargedCreditPackFailure(res, {
+        adminClient,
+        userId: req.user.id,
+        requestId,
+        cancellationReason: claimState.cancelReason,
+        statusCode: 409,
+        error: 'Your subscription changed. Start a new billing preview.',
+        code: 'SUBSCRIPTION_RECONFIRMATION_REQUIRED'
+      });
+    }
+    return sendCreditPackPendingResponse(res, {
+      ...claimState,
+      packKey: pack.key,
+      credits: pack.credits,
+      unitAmount: pack.priceCents
+    });
+  }
+
+  let claimedAmounts = null;
+  try {
+    claimedAmounts = approvedCreditPackPreviewAmounts({
+      subtotal: String(claimState.approvedSubtotal),
+      discount: String(claimState.approvedDiscount),
+      tax: String(claimState.approvedTax),
+      total: String(claimState.approvedTotal),
+      credit: String(claimState.approvedCredit),
+      balance: String(claimState.approvedBalance),
+      grandTotal: String(claimState.approvedGrandTotal),
+      grandTotalTax: String(claimState.approvedGrandTotalTax)
+    });
+  } catch (_) {
+    claimedAmounts = null;
+  }
+  if (
+    !claimedAmounts
+    || claimState.confirmationVersion !== confirmationVersion
+    || claimState.packKey !== pack.key
+    || claimState.credits !== pack.credits
+    || claimState.unitAmount !== pack.priceCents
+    || claimState.currencyCode !== 'USD'
+    || claimedAmounts.subtotal !== Number(freshPreview.subtotal)
+    || claimedAmounts.discount !== Number(freshPreview.discount)
+    || claimedAmounts.tax !== Number(freshPreview.tax)
+    || claimedAmounts.total !== Number(freshPreview.total)
+    || claimedAmounts.credit !== Number(freshPreview.credit)
+    || claimedAmounts.balance !== Number(freshPreview.balance)
+    || claimedAmounts.grandTotal !== Number(freshPreview.grandTotal)
+    || claimedAmounts.grandTotalTax !== Number(freshPreview.grandTotalTax)
+  ) {
+    console.error('[payment/credit-packs] Claimed request contract is invalid');
+    await transitionCreditPackPurchaseRequest(adminClient, {
+      requestId,
+      userId: req.user.id,
+      status: 'provider_unknown',
+      providerErrorCode: 'claim_contract_mismatch'
+    }).catch((transitionError) => {
+      console.error(
+        '[payment/credit-packs] Could not persist invalid claim outcome:',
+        transitionError.message
+      );
+    });
     return res.status(202).json({
       success: true,
-      purchaseRequestId: requestState.requestId,
-      status: requestState.status,
-      code: 'PURCHASE_ALREADY_PENDING',
-      pack: creditPackResponsePack({
-        key: requestState.packKey,
-        credits: requestState.credits,
-        priceUsd: requestState.unitAmount / 100
-      })
+      purchaseRequestId: requestId,
+      status: 'provider_unknown',
+      code: 'PURCHASE_CONFIRMATION_PENDING',
+      chargeMayHaveRun: true,
+      pack: creditPackResponsePack(pack)
     });
   }
 
@@ -1251,12 +2044,13 @@ async function handleCreditPackPurchase(req, res) {
     chargeResponse = await fetch(
       `${PADDLE_API_BASE}/subscriptions/${subscriptionId}/charge`,
       {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${apiKey}`,
-        'Content-Type': 'application/json'
-      },
-        body: JSON.stringify(chargeBody)
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${apiKey}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(chargeBody),
+        signal: AbortSignal.timeout(PADDLE_CHARGE_TIMEOUT_MS)
       }
     );
   } catch (error) {
@@ -1269,7 +2063,10 @@ async function handleCreditPackPurchase(req, res) {
       requestId,
       userId: req.user.id,
       status: 'provider_unknown',
-      providerErrorCode: 'network_error'
+      providerErrorCode:
+        error?.name === 'TimeoutError' || error?.name === 'AbortError'
+          ? 'timeout'
+          : 'network_error'
     }).catch((transitionError) => {
       console.error('[payment/credit-packs] Could not persist unknown outcome:', transitionError.message);
     });
@@ -1278,6 +2075,7 @@ async function handleCreditPackPurchase(req, res) {
       purchaseRequestId: requestId,
       status: 'provider_unknown',
       code: 'PURCHASE_CONFIRMATION_PENDING',
+      chargeMayHaveRun: true,
       pack: creditPackResponsePack(pack)
     });
   }
@@ -1286,7 +2084,6 @@ async function handleCreditPackPurchase(req, res) {
     const errorBody = await chargeResponse.text().catch(() => '');
     const errorCode = extractPaddleErrorCode(errorBody)
       || `http_${chargeResponse.status}`;
-    const definitive = chargeResponse.status >= 400 && chargeResponse.status < 500;
     console.error(
       '[payment/credit-packs] Paddle charge rejected status=' +
       chargeResponse.status + ' code=' + errorCode
@@ -1294,18 +2091,19 @@ async function handleCreditPackPurchase(req, res) {
     await transitionCreditPackPurchaseRequest(adminClient, {
       requestId,
       userId: req.user.id,
-      status: definitive ? 'failed' : 'provider_unknown',
-      providerErrorCode: errorCode
+      status: 'provider_unknown',
+      providerErrorCode: String(errorCode).slice(0, 255)
     }).catch((transitionError) => {
       console.error('[payment/credit-packs] Could not persist rejected outcome:', transitionError.message);
     });
-    return res.status(definitive ? 409 : 202).json({
-      success: false,
+    return res.status(202).json({
+      success: true,
       purchaseRequestId: requestId,
-      error: definitive
-        ? 'The add-on charge was not accepted.'
-        : 'Purchase confirmation is pending.',
-      code: definitive ? 'CREDIT_PACK_CHARGE_REJECTED' : 'PURCHASE_CONFIRMATION_PENDING'
+      status: 'provider_unknown',
+      error: 'Purchase confirmation is pending.',
+      code: 'PURCHASE_CONFIRMATION_PENDING',
+      chargeMayHaveRun: true,
+      pack: creditPackResponsePack(pack)
     });
   }
 
@@ -1329,6 +2127,7 @@ async function handleCreditPackPurchase(req, res) {
       purchaseRequestId: requestId,
       status: 'provider_unknown',
       code: 'PURCHASE_CONFIRMATION_PENDING',
+      chargeMayHaveRun: true,
       pack: creditPackResponsePack(pack)
     });
   }
@@ -1354,7 +2153,7 @@ async function handleCreditPackPurchase(req, res) {
 }
 
 function creditPackPurchaseStatusPayload(data) {
-  return {
+  const payload = {
     purchaseRequestId: data.request_id,
     status: data.status,
     pack: {
@@ -1364,28 +2163,139 @@ function creditPackPurchaseStatusPayload(data) {
       currencyCode: data.currency_code
     },
     createdAt: data.created_at,
-    completedAt: data.completed_at
+    completedAt: data.completed_at,
+    reviewRequired:
+      data.review_required === true
+      || ['withheld', 'chargeback'].includes(data.status)
   };
+  if (['previewing', 'created'].includes(data.status)) {
+    payload.confirmationVersion = data.confirmation_version;
+    payload.expiryDays = data.expiry_days;
+    payload.authorizationExpiresAt = data.authorization_expires_at;
+  }
+  if (
+    data.status === 'created'
+    && Number.isInteger(data.confirmation_version)
+    && data.confirmation_version >= 1
+    && [
+      data.approved_subtotal,
+      data.approved_discount,
+      data.approved_tax,
+      data.approved_total,
+      data.approved_credit,
+      data.approved_balance,
+      data.approved_grand_total,
+      data.approved_grand_total_tax
+    ].every((amount) => (
+      Number.isInteger(amount)
+      && amount >= 0
+      && amount <= MAX_POSTGRES_INTEGER
+    ))
+  ) {
+    payload.preview = {
+      currencyCode: data.currency_code,
+      subtotal: String(data.approved_subtotal),
+      discount: String(data.approved_discount),
+      tax: String(data.approved_tax),
+      total: String(data.approved_total),
+      credit: String(data.approved_credit),
+      balance: String(data.approved_balance),
+      grandTotal: String(data.approved_grand_total),
+      grandTotalTax: String(data.approved_grand_total_tax)
+    };
+  }
+  return payload;
+}
+
+const CREDIT_PACK_STATUS_SELECT = [
+  'request_id',
+  'status',
+  'review_required',
+  'pack_key',
+  'credits',
+  'unit_amount',
+  'currency_code',
+  'confirmation_version',
+  'expiry_days',
+  'approved_subtotal',
+  'approved_discount',
+  'approved_tax',
+  'approved_total',
+  'approved_credit',
+  'approved_balance',
+  'approved_grand_total',
+  'approved_grand_total_tax',
+  'authorization_expires_at',
+  'reconciliation_closed_at',
+  'created_at',
+  'completed_at'
+].join(', ');
+
+function loadOwnerCreditPackPurchaseData(
+  adminClient,
+  userId,
+  requestId
+) {
+  return adminClient
+    .from('credit_pack_purchase_requests')
+    .select(CREDIT_PACK_STATUS_SELECT)
+    .eq('request_id', requestId)
+    .eq('authorized_user_id', userId)
+    .maybeSingle();
+}
+
+async function expireCreditPackAuthorizationIfNeeded(
+  adminClient,
+  userId,
+  data,
+  nowMs = Date.now()
+) {
+  if (!data || !['previewing', 'created'].includes(data.status)) {
+    return data;
+  }
+  const expiresAtMs = Date.parse(data.authorization_expires_at);
+  if (!Number.isFinite(expiresAtMs) || expiresAtMs > nowMs) {
+    return data;
+  }
+
+  try {
+    const expiration = await expireCreditPackPurchaseRequest(adminClient, {
+      requestId: data.request_id,
+      userId
+    });
+    if (expiration.status === 'failed') {
+      return { ...data, status: 'failed' };
+    }
+    if (expiration.status && expiration.status !== data.status) {
+      return { ...data, status: expiration.status };
+    }
+  } catch (error) {
+    console.error(
+      '[payment/credit-packs] Expired authorization close failed:',
+      error.message
+    );
+  }
+  return data;
 }
 
 /* ── GET /api/payment/credit-packs/purchase/pending ── */
 // Recovers a request even when the charge response was lost before the browser
-// learned its opaque ID. This endpoint is owner-scoped and returns only the
-// newest non-terminal request, never provider identifiers or diagnostics.
+// learned its opaque ID. This endpoint is owner-scoped and returns the newest
+// unresolved/review-locked request or a very recent terminal result. Returning
+// a recent completion closes the fast-webhook race where a lost POST response
+// otherwise makes the browser believe no purchase happened.
 async function handlePendingCreditPackPurchase(req, res) {
   res.set('Cache-Control', 'no-store');
-  if (!isCreditPackPurchasesEnabled() || !isCreditLedgerV2Enabled()) {
+  // Recovery must remain available when the sales kill switch is off.
+  if (!isCreditLedgerV2Enabled()) {
     return creditPackFeatureUnavailable(res);
   }
 
   const adminClient = req.paymentAdminClient || makePaymentAdminClient();
   const { data, error } = await adminClient
     .from('credit_pack_purchase_requests')
-    .select(
-      'request_id, status, pack_key, credits, unit_amount, currency_code, created_at, completed_at'
-    )
-    .eq('user_id', req.user.id)
-    .in('status', ['created', 'submitted', 'provider_unknown'])
+    .select(CREDIT_PACK_STATUS_SELECT)
+    .eq('authorized_user_id', req.user.id)
     .order('created_at', { ascending: false })
     .limit(1)
     .maybeSingle();
@@ -1399,9 +2309,16 @@ async function handlePendingCreditPackPurchase(req, res) {
     });
   }
 
+  const currentData = await expireCreditPackAuthorizationIfNeeded(
+    adminClient,
+    req.user.id,
+    data
+  );
   return res.json({
     success: true,
-    purchase: data ? creditPackPurchaseStatusPayload(data) : null
+    purchase: isRecoverableCreditPackPurchase(currentData)
+      ? creditPackPurchaseStatusPayload(currentData)
+      : null
   });
 }
 
@@ -1410,7 +2327,8 @@ async function handlePendingCreditPackPurchase(req, res) {
 // IDs or provider diagnostics and cannot read another user's request.
 async function handleCreditPackPurchaseStatus(req, res) {
   res.set('Cache-Control', 'no-store');
-  if (!isCreditPackPurchasesEnabled() || !isCreditLedgerV2Enabled()) {
+  // Recovery must remain available when the sales kill switch is off.
+  if (!isCreditLedgerV2Enabled()) {
     return creditPackFeatureUnavailable(res);
   }
 
@@ -1426,11 +2344,9 @@ async function handleCreditPackPurchaseStatus(req, res) {
   const adminClient = req.paymentAdminClient || makePaymentAdminClient();
   const { data, error } = await adminClient
     .from('credit_pack_purchase_requests')
-    .select(
-      'request_id, status, pack_key, credits, unit_amount, currency_code, created_at, completed_at'
-    )
+    .select(CREDIT_PACK_STATUS_SELECT)
     .eq('request_id', requestId)
-    .eq('user_id', req.user.id)
+    .eq('authorized_user_id', req.user.id)
     .maybeSingle();
 
   if (error) {
@@ -1449,14 +2365,84 @@ async function handleCreditPackPurchaseStatus(req, res) {
     });
   }
 
+  const currentData = await expireCreditPackAuthorizationIfNeeded(
+    adminClient,
+    req.user.id,
+    data
+  );
   return res.json({
     success: true,
-    ...creditPackPurchaseStatusPayload(data)
+    ...creditPackPurchaseStatusPayload(currentData)
   });
+}
+
+/* ── POST /api/payment/credit-packs/purchase/:requestId/cancel ── */
+// Cancellation is permitted only before the atomic created -> charging claim.
+// The exact failed + chargeMayHaveRun:false contract is the browser's sole
+// authority to release its local recovery lock.
+async function handleCancelCreditPackPurchase(req, res) {
+  res.set('Cache-Control', 'no-store');
+  if (!isCreditLedgerV2Enabled()) {
+    return creditPackFeatureUnavailable(res);
+  }
+
+  const requestId = String(req.params?.requestId || '');
+  if (!isCreditPackRequestId(requestId)) {
+    return res.status(400).json({
+      success: false,
+      error: 'Invalid purchase request.',
+      code: 'INVALID_PURCHASE_REQUEST'
+    });
+  }
+
+  const adminClient = req.paymentAdminClient || makePaymentAdminClient();
+  let cancellation;
+  try {
+    cancellation = await cancelCreditPackPurchaseRequest(adminClient, {
+      requestId,
+      userId: req.user.id,
+      reason: 'client_cancelled'
+    });
+  } catch (error) {
+    console.error('[payment/credit-packs] Purchase cancellation failed:', error.message);
+    return res.status(503).json({
+      success: false,
+      purchaseRequestId: requestId,
+      status: 'unknown',
+      error: 'Could not confirm the purchase request was cancelled.',
+      code: 'PURCHASE_CANCELLATION_UNCONFIRMED'
+    });
+  }
+
+  if (cancellation.status === 'failed') {
+    return res.json({
+      success: true,
+      purchaseRequestId: requestId,
+      status: 'failed',
+      chargeMayHaveRun: false
+    });
+  }
+
+  const body = {
+    success: false,
+    purchaseRequestId: requestId,
+    status: cancellation.status,
+    error: 'This purchase can no longer be safely cancelled.',
+    code: 'PURCHASE_CANCELLATION_UNSAFE'
+  };
+  if (creditPackStateMayHaveCharged(cancellation.status)) {
+    body.chargeMayHaveRun = true;
+  }
+  return res.status(409).json(body);
 }
 
 router.post('/credit-packs/preview', authMiddleware, handleCreditPackPreview);
 router.post('/credit-packs/purchase', authMiddleware, handleCreditPackPurchase);
+router.post(
+  '/credit-packs/purchase/:requestId/cancel',
+  authMiddleware,
+  handleCancelCreditPackPurchase
+);
 router.get(
   '/credit-packs/purchase/pending',
   authMiddleware,
@@ -1494,5 +2480,11 @@ module.exports.handleCreditPackPreview = handleCreditPackPreview;
 module.exports.handleCreditPackPurchase = handleCreditPackPurchase;
 module.exports.handlePendingCreditPackPurchase = handlePendingCreditPackPurchase;
 module.exports.handleCreditPackPurchaseStatus = handleCreditPackPurchaseStatus;
-module.exports.createCreditPackPurchaseRequest = createCreditPackPurchaseRequest;
+module.exports.handleCancelCreditPackPurchase = handleCancelCreditPackPurchase;
+module.exports.beginCreditPackPurchasePreview = beginCreditPackPurchasePreview;
+module.exports.finalizeCreditPackPurchasePreview =
+  finalizeCreditPackPurchasePreview;
+module.exports.claimCreditPackPurchaseRequest = claimCreditPackPurchaseRequest;
+module.exports.cancelCreditPackPurchaseRequest = cancelCreditPackPurchaseRequest;
+module.exports.expireCreditPackPurchaseRequest = expireCreditPackPurchaseRequest;
 module.exports.transitionCreditPackPurchaseRequest = transitionCreditPackPurchaseRequest;

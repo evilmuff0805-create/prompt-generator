@@ -17,7 +17,9 @@ describe('credit pack catalog', () => {
     CREDIT_PACK_PURCHASES_ENABLED: 'true',
     CREDIT_PACK_EXPIRY_DAYS: '365',
     PADDLE_CREDIT_PACK_TAX_CATEGORY: 'saas',
-    PADDLE_CREDIT_PACK_TAX_CATEGORY_CONFIRMED: 'true'
+    PADDLE_CREDIT_PACK_TAX_CATEGORY_CONFIRMED: 'true',
+    PADDLE_SUBSCRIPTION_HISTORY_CONFIRMED: 'true',
+    PADDLE_TRANSACTION_READ_CONFIRMED: 'true'
   };
 
   test('uses the approved provisional ladder without reusable Paddle price IDs', () => {
@@ -55,6 +57,16 @@ describe('credit pack catalog', () => {
       ...enabledEnv,
       PADDLE_CREDIT_PACK_TAX_CATEGORY_CONFIRMED: 'false'
     })).toThrow('requires written confirmation');
+
+    expect(() => validateCreditPackConfiguration({
+      ...enabledEnv,
+      PADDLE_SUBSCRIPTION_HISTORY_CONFIRMED: 'false'
+    })).toThrow('requires a Paddle API key with subscription_history.read');
+
+    expect(() => validateCreditPackConfiguration({
+      ...enabledEnv,
+      PADDLE_TRANSACTION_READ_CONFIRMED: 'false'
+    })).toThrow('requires a Paddle API key with transaction.read');
 
     expect(validateCreditPackConfiguration(enabledEnv)).toEqual({
       enabled: true,

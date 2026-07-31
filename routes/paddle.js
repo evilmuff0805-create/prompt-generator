@@ -16,6 +16,51 @@ const {
   isCreditLedgerV2Enabled,
   parseExpiryDays
 } = require('../lib/credit-pack-catalog');
+const { parsePaddleTimestamp } = require('../lib/paddle-time');
+const { getPaddleApiBase } = require('../lib/paddle-api');
+const {
+  parsePostgresMinorUnitAmount
+} = require('../lib/paddle-money');
+
+const PADDLE_API_BASE = getPaddleApiBase(process.env);
+const CREDIT_PACK_HISTORY_ACTIONS = Object.freeze([
+  'subscription_activated',
+  'subscription_address_updated',
+  'subscription_billing_cycle_updated',
+  'subscription_billing_date_updated',
+  'subscription_billing_details_updated',
+  'subscription_business_added',
+  'subscription_business_removed',
+  'subscription_business_updated',
+  'subscription_canceled',
+  'subscription_collection_mode_updated',
+  'subscription_consent_requirement_granted',
+  'subscription_created',
+  'subscription_currency_updated',
+  'subscription_custom_data_updated',
+  'subscription_customer_updated',
+  'subscription_discount_added',
+  'subscription_discount_expired',
+  'subscription_discount_removed',
+  'subscription_item_added',
+  'subscription_item_quantity_updated',
+  'subscription_item_removed',
+  'subscription_one_off_charge_applied',
+  'subscription_past_due',
+  'subscription_paused',
+  'subscription_payment_attempted',
+  'subscription_payment_method_added',
+  'subscription_payment_method_removed',
+  'subscription_payment_method_updated',
+  'subscription_renewed',
+  'subscription_resumed',
+  'subscription_scheduled_change_added',
+  'subscription_scheduled_change_removed',
+  'subscription_scheduled_change_updated'
+]);
+const CREDIT_PACK_HISTORY_ACTION_SET = new Set(CREDIT_PACK_HISTORY_ACTIONS);
+const MAX_CREDIT_PACK_HISTORY_PAGES = 20;
+const PADDLE_HISTORY_TIMEOUT_MS = 8000;
 
 /* ── Supabase admin client ── */
 function makeAdminClient() {
@@ -93,6 +138,75 @@ function priceIdToPlan(priceId, env = process.env) {
   return getPlanForPaddlePriceId(priceId, env);
 }
 
+function minorUnitAmountToInteger(value) {
+  return parsePostgresMinorUnitAmount(value);
+}
+
+function parseCompletedCreditPackTotals(data, item) {
+  const totals = data?.details?.totals;
+  const lineItems = data?.details?.line_items;
+  const lineItem = Array.isArray(lineItems) && lineItems.length === 1
+    ? lineItems[0]
+    : null;
+  const capturedPayments = Array.isArray(data?.payments)
+    ? data.payments.filter((payment) => payment?.status === 'captured')
+    : [];
+  const capturedPayment = capturedPayments.length === 1
+    && parsePaddleTimestamp(capturedPayments[0]?.captured_at)
+    ? capturedPayments[0]
+    : null;
+  const amountNames = [
+    'subtotal',
+    'discount',
+    'tax',
+    'total',
+    'credit',
+    'balance',
+    'grand_total',
+    'grand_total_tax'
+  ];
+  const actualTotals = {};
+  for (const name of amountNames) {
+    const amount = minorUnitAmountToInteger(totals?.[name]);
+    if (amount === null) return null;
+    actualTotals[name] = amount;
+  }
+
+  const lineTotalNames = ['subtotal', 'discount', 'tax', 'total'];
+  const consistentLineTotals = lineTotalNames.every((name) => (
+    minorUnitAmountToInteger(lineItem?.totals?.[name]) !== null
+    && lineItem.totals[name] === totals[name]
+  ));
+  const optionalPaymentCurrencyMatches =
+    capturedPayment?.currency_code === undefined
+    || capturedPayment?.currency_code === 'USD';
+  if (
+    data?.currency_code !== 'USD'
+    || totals?.currency_code !== 'USD'
+    || !lineItem
+    || lineItem.price_id !== item?.price?.id
+    || lineItem.product?.id !== item?.price?.product_id
+    || lineItem.quantity !== item?.quantity
+    || !consistentLineTotals
+    || actualTotals.balance !== 0
+    || capturedPayment?.amount !== totals.grand_total
+    || !optionalPaymentCurrencyMatches
+  ) {
+    return null;
+  }
+
+  return Object.freeze({
+    subtotal: actualTotals.subtotal,
+    discount: actualTotals.discount,
+    tax: actualTotals.tax,
+    total: actualTotals.total,
+    credit: actualTotals.credit,
+    balance: actualTotals.balance,
+    grandTotal: actualTotals.grand_total,
+    grandTotalTax: actualTotals.grand_total_tax
+  });
+}
+
 function validateCompletedCreditPackTransaction(data, pack) {
   if (!data || !pack) return { valid: false, reason: 'missing_data' };
   if (!data.id || !data.customer_id || !data.subscription_id) {
@@ -100,6 +214,14 @@ function validateCompletedCreditPackTransaction(data, pack) {
   }
   if (data.origin !== 'subscription_charge') {
     return { valid: false, reason: 'invalid_origin' };
+  }
+  if (
+    data.status !== 'completed'
+    || data.collection_mode !== 'automatic'
+    || data.currency_code !== 'USD'
+    || !parsePaddleTimestamp(data.created_at)
+  ) {
+    return { valid: false, reason: 'invalid_transaction_state' };
   }
   if (!Array.isArray(data.items) || data.items.length !== 1) {
     return { valid: false, reason: 'invalid_item_count' };
@@ -144,7 +266,354 @@ function validateCompletedCreditPackTransaction(data, pack) {
   ) {
     return { valid: false, reason: 'catalog_price_mismatch' };
   }
-  return { valid: true, reason: 'verified' };
+  const capturedPayments = Array.isArray(data.payments)
+    ? data.payments.filter((payment) => payment?.status === 'captured')
+    : [];
+  if (
+    capturedPayments.length !== 1
+    || !parsePaddleTimestamp(capturedPayments[0]?.captured_at)
+  ) {
+    return { valid: false, reason: 'invalid_payment_capture' };
+  }
+  const actualTotals = parseCompletedCreditPackTotals(data, item);
+  return {
+    valid: true,
+    reason: actualTotals ? 'verified' : 'amount_contract_malformed',
+    actualTotals
+  };
+}
+
+async function loadCreditPackTemporalContext(supabase, requestId) {
+  const { data, error } = await supabase
+    .from('credit_pack_purchase_requests')
+    .select(
+      'request_id, customer_id, subscription_id, authorized_at, ' +
+      'authorization_expires_at, eligibility_check_started_at'
+    )
+    .eq('request_id', requestId)
+    .maybeSingle();
+
+  if (error) {
+    throw new Error('Credit pack authorization lookup failed: ' + error.message);
+  }
+  if (
+    !data
+    || data.request_id !== requestId
+    || !parsePaddleTimestamp(data.authorized_at)
+    || !parsePaddleTimestamp(data.authorization_expires_at)
+    || !parsePaddleTimestamp(data.eligibility_check_started_at)
+  ) {
+    throw new Error('Credit pack authorization context is missing or invalid');
+  }
+  return data;
+}
+
+function buildCreditPackHistoryUrl({
+  apiBase,
+  subscriptionId,
+  authorizedAt,
+  completedAt
+}) {
+  const trustedApiBase = getPaddleApiBase({
+    NODE_ENV: process.env.NODE_ENV,
+    PADDLE_API_BASE: apiBase
+  });
+  const url = new URL(
+    `/subscriptions/${encodeURIComponent(subscriptionId)}/history`,
+    trustedApiBase
+  );
+  url.searchParams.set('occurred_at[GTE]', authorizedAt);
+  url.searchParams.set('occurred_at[LTE]', completedAt);
+  url.searchParams.set('per_page', '200');
+  url.searchParams.set('order_by', 'id[DESC]');
+  return url;
+}
+
+function validateCreditPackHistoryNextUrl(nextValue, expected) {
+  if (typeof nextValue !== 'string' || !nextValue.trim()) return null;
+  let next;
+  try {
+    next = new URL(nextValue);
+  } catch (_) {
+    return null;
+  }
+  const allowedKeys = new Set([
+    'occurred_at[GTE]',
+    'occurred_at[LTE]',
+    'per_page',
+    'order_by',
+    'after'
+  ]);
+  const hasUnexpectedOrDuplicateParameter = [...next.searchParams.keys()]
+    .some((key) => (
+      !allowedKeys.has(key)
+      || next.searchParams.getAll(key).length !== 1
+    ));
+  if (
+    next.origin !== expected.origin
+    || next.pathname !== expected.pathname
+    || hasUnexpectedOrDuplicateParameter
+    || next.searchParams.get('occurred_at[GTE]') !==
+      expected.searchParams.get('occurred_at[GTE]')
+    || next.searchParams.get('occurred_at[LTE]') !==
+      expected.searchParams.get('occurred_at[LTE]')
+    || next.searchParams.get('per_page') !== '200'
+    || next.searchParams.get('order_by') !== 'id[DESC]'
+    || !next.searchParams.get('after')
+  ) {
+    return null;
+  }
+  return next;
+}
+
+function classifyCreditPackHistoryEntry(entry, transactionId) {
+  const action = entry?.detail?.action;
+  if (!CREDIT_PACK_HISTORY_ACTION_SET.has(action)) {
+    return 'ambiguous';
+  }
+
+  // An immediate one-off charge creates its own history entry. It is the only
+  // action that is expected inside this narrow authorization window, and is
+  // safe only when Paddle binds it to this exact completed transaction.
+  if (action === 'subscription_one_off_charge_applied') {
+    const effectiveFrom = entry?.detail?.effective_from;
+    const historyTransactionId = entry?.detail?.transaction_id;
+    if (
+      typeof effectiveFrom !== 'string'
+      || typeof historyTransactionId !== 'string'
+      || !historyTransactionId.trim()
+    ) {
+      return 'ambiguous';
+    }
+    return effectiveFrom === 'immediately'
+      && historyTransactionId === transactionId
+      ? 'safe'
+      : 'ineligible';
+  }
+
+  // Paddle defines subscription_payment_attempted as a failed payment.
+  // Every other currently documented action is conservatively ineligible;
+  // newly introduced actions remain ambiguous until explicitly reviewed.
+  return 'ineligible';
+}
+
+function paddleTimestampToEpochNanoseconds(value) {
+  const normalized = parsePaddleTimestamp(value);
+  if (!normalized) return null;
+
+  const match = normalized.match(
+    /^(.+:\d{2})(?:\.(\d{1,9}))?(Z|[+-]\d{2}:\d{2})$/
+  );
+  if (!match) return null;
+
+  const wholeSecondMs = Date.parse(`${match[1]}${match[3]}`);
+  if (!Number.isSafeInteger(wholeSecondMs)) return null;
+
+  const fractionalNanoseconds = BigInt((match[2] || '').padEnd(9, '0'));
+  return (BigInt(wholeSecondMs) * 1000000n) + fractionalNanoseconds;
+}
+
+function comparePaddleTimestamps(left, right) {
+  const leftNanoseconds = paddleTimestampToEpochNanoseconds(left);
+  const rightNanoseconds = paddleTimestampToEpochNanoseconds(right);
+  if (leftNanoseconds === null || rightNanoseconds === null) return null;
+  if (leftNanoseconds < rightNanoseconds) return -1;
+  if (leftNanoseconds > rightNanoseconds) return 1;
+  return 0;
+}
+
+async function verifyCreditPackSubscriptionHistory({
+  apiKey,
+  subscriptionId,
+  transactionId,
+  historyStartAt,
+  authorizedAt,
+  authorizationExpiresAt,
+  completedAt,
+  apiBase = PADDLE_API_BASE,
+  fetchImpl = fetch
+}) {
+  const normalizedAuthorizedAt = parsePaddleTimestamp(authorizedAt);
+  const normalizedHistoryStartAt = parsePaddleTimestamp(historyStartAt);
+  const normalizedExpiresAt = parsePaddleTimestamp(authorizationExpiresAt);
+  const normalizedCompletedAt = parsePaddleTimestamp(completedAt);
+  if (
+    !normalizedAuthorizedAt
+    || !normalizedHistoryStartAt
+    || !normalizedExpiresAt
+    || !normalizedCompletedAt
+    || typeof transactionId !== 'string'
+    || !transactionId.trim()
+  ) {
+    return { status: 'ambiguous', requestId: null };
+  }
+
+  const completedVsAuthorized = comparePaddleTimestamps(
+    normalizedCompletedAt,
+    normalizedAuthorizedAt
+  );
+  const completedVsExpires = comparePaddleTimestamps(
+    normalizedCompletedAt,
+    normalizedExpiresAt
+  );
+  if (
+    completedVsAuthorized === null
+    || completedVsExpires === null
+    || completedVsAuthorized < 0
+    || completedVsExpires >= 0
+  ) {
+    return { status: 'not_checked', requestId: null };
+  }
+  if (!apiKey) {
+    return { status: 'unavailable', requestId: null };
+  }
+  const historyStartVsAuthorized = comparePaddleTimestamps(
+    normalizedHistoryStartAt,
+    normalizedAuthorizedAt
+  );
+  if (historyStartVsAuthorized === null) {
+    return { status: 'ambiguous', requestId: null };
+  }
+  const queryStartAt = historyStartVsAuthorized <= 0
+    ? normalizedHistoryStartAt
+    : normalizedAuthorizedAt;
+
+  let firstUrl;
+  try {
+    firstUrl = buildCreditPackHistoryUrl({
+      apiBase,
+      subscriptionId,
+      authorizedAt: queryStartAt,
+      completedAt: normalizedCompletedAt
+    });
+  } catch (_) {
+    return { status: 'unavailable', requestId: null };
+  }
+  let nextUrl = firstUrl;
+  let firstRequestId = null;
+  let firstIneligibleEvent = null;
+  let safeEvent = null;
+
+  for (let page = 0; page < MAX_CREDIT_PACK_HISTORY_PAGES; page += 1) {
+    let response;
+    try {
+      response = await fetchImpl(nextUrl.toString(), {
+        headers: {
+          'Authorization': `Bearer ${apiKey}`,
+          'Content-Type': 'application/json'
+        },
+        signal: AbortSignal.timeout(PADDLE_HISTORY_TIMEOUT_MS)
+      });
+    } catch (_) {
+      return { status: 'unavailable', requestId: firstRequestId };
+    }
+    if (!response?.ok) {
+      return { status: 'unavailable', requestId: firstRequestId };
+    }
+
+    const body = await response.json().catch(() => null);
+    const requestId =
+      typeof body?.meta?.request_id === 'string'
+        ? body.meta.request_id.trim()
+        : '';
+    const pagination = body?.meta?.pagination;
+    if (
+      !Array.isArray(body?.data)
+      || !requestId
+      || requestId.length > 255
+      || typeof pagination?.has_more !== 'boolean'
+      || typeof pagination?.next !== 'string'
+    ) {
+      return {
+        status: firstRequestId ? 'ambiguous' : 'unavailable',
+        requestId: firstRequestId
+      };
+    }
+    if (!firstRequestId) firstRequestId = requestId;
+
+    for (const entry of body.data) {
+      const eventId =
+        typeof entry?.id === 'string' ? entry.id.trim() : '';
+      const action = entry?.detail?.action;
+      const occurredAt = parsePaddleTimestamp(entry?.occurred_at);
+      if (
+        !eventId
+        || eventId.length > 255
+        || entry?.subscription_id !== subscriptionId
+        || !occurredAt
+      ) {
+        return { status: 'ambiguous', requestId: firstRequestId };
+      }
+      const occurredVsStart = comparePaddleTimestamps(occurredAt, queryStartAt);
+      const occurredVsCompleted = comparePaddleTimestamps(
+        occurredAt,
+        normalizedCompletedAt
+      );
+      if (
+        occurredVsStart === null
+        || occurredVsCompleted === null
+        || occurredVsStart < 0
+        || occurredVsCompleted > 0
+      ) {
+        return { status: 'ambiguous', requestId: firstRequestId };
+      }
+      const classification = classifyCreditPackHistoryEntry(
+        entry,
+        transactionId
+      );
+      if (classification === 'ambiguous') {
+        return { status: 'ambiguous', requestId: firstRequestId };
+      }
+      if (classification === 'ineligible' && !firstIneligibleEvent) {
+        firstIneligibleEvent = {
+          id: eventId,
+          action,
+          occurredAt
+        };
+      }
+      if (classification === 'safe') {
+        const safeVsAuthorized = comparePaddleTimestamps(
+          occurredAt,
+          normalizedAuthorizedAt
+        );
+        if (safeVsAuthorized === null || safeVsAuthorized < 0) {
+          return { status: 'ambiguous', requestId: firstRequestId };
+        }
+        if (safeEvent) {
+          return { status: 'ambiguous', requestId: firstRequestId };
+        }
+        safeEvent = {
+          id: eventId,
+          action,
+          occurredAt
+        };
+      }
+    }
+
+    if (!pagination.has_more) {
+      if (!safeEvent) {
+        return { status: 'ambiguous', requestId: firstRequestId };
+      }
+      return firstIneligibleEvent
+        ? {
+            status: 'ineligible',
+            requestId: firstRequestId,
+            event: firstIneligibleEvent
+          }
+          : {
+            status: 'eligible',
+            requestId: firstRequestId,
+            event: safeEvent
+          };
+    }
+
+    nextUrl = validateCreditPackHistoryNextUrl(pagination.next, firstUrl);
+    if (!nextUrl) {
+      return { status: 'ambiguous', requestId: firstRequestId };
+    }
+  }
+
+  return { status: 'ambiguous', requestId: firstRequestId };
 }
 
 async function grantCreditsForPack(
@@ -152,14 +621,56 @@ async function grantCreditsForPack(
   data,
   pack,
   env = process.env,
-  purchasedAt
+  purchasedAt,
+  providerEventId
 ) {
   const expiryDays = parseExpiryDays(env.CREDIT_PACK_EXPIRY_DAYS);
   const item = data?.items?.[0];
   const requestId = item?.price?.custom_data?.promptgenPurchaseRequestId;
-  if (!purchasedAt || Number.isNaN(Date.parse(purchasedAt))) {
+  const normalizedPurchasedAt = parsePaddleOccurredAt(purchasedAt);
+  const transactionCreatedAt = parsePaddleOccurredAt(data?.created_at);
+  const capturedPayments = Array.isArray(data?.payments)
+    ? data.payments.filter((payment) => payment?.status === 'captured')
+    : [];
+  const capturedAt = capturedPayments.length === 1
+    ? parsePaddleOccurredAt(capturedPayments[0].captured_at)
+    : null;
+  const actualTotals = parseCompletedCreditPackTotals(data, item);
+  if (!normalizedPurchasedAt) {
     throw new Error('Credit pack purchase is missing a valid Paddle occurred_at');
   }
+  if (
+    !transactionCreatedAt
+    || !capturedAt
+    || typeof providerEventId !== 'string'
+    || !providerEventId.trim()
+    || providerEventId.length > 255
+  ) {
+    throw new Error('Credit pack purchase is missing valid provider evidence');
+  }
+
+  const temporalContext = await loadCreditPackTemporalContext(
+    supabase,
+    requestId
+  );
+  if (
+    temporalContext.customer_id !== data.customer_id
+    || temporalContext.subscription_id !== data.subscription_id
+  ) {
+    throw new Error('Credit pack authorization binding does not match transaction');
+  }
+
+  const historyProof = await verifyCreditPackSubscriptionHistory({
+    apiKey: env.PADDLE_API_KEY,
+    subscriptionId: data.subscription_id,
+    transactionId: data.id,
+    historyStartAt: temporalContext.eligibility_check_started_at,
+    authorizedAt: temporalContext.authorized_at,
+    authorizationExpiresAt: temporalContext.authorization_expires_at,
+    completedAt: normalizedPurchasedAt,
+    apiBase: getPaddleApiBase(env)
+  });
+
   const { data: result, error } = await supabase.rpc('apply_credit_pack_subscription_charge', {
     p_request_id: requestId,
     p_transaction_id: data.id,
@@ -171,16 +682,128 @@ async function grantCreditsForPack(
     p_credits: pack.credits,
     p_unit_amount: pack.priceCents,
     p_currency_code: 'USD',
+    p_actual_subtotal: actualTotals?.subtotal ?? null,
+    p_actual_discount: actualTotals?.discount ?? null,
+    p_actual_tax: actualTotals?.tax ?? null,
+    p_actual_total: actualTotals?.total ?? null,
+    p_actual_credit: actualTotals?.credit ?? null,
+    p_actual_balance: actualTotals?.balance ?? null,
+    p_actual_grand_total: actualTotals?.grandTotal ?? null,
+    p_actual_grand_total_tax: actualTotals?.grandTotalTax ?? null,
     p_expiry_days: expiryDays,
-    p_purchased_at: purchasedAt
+    p_purchased_at: normalizedPurchasedAt,
+    p_provider_event_id: providerEventId.trim(),
+    p_transaction_created_at: transactionCreatedAt,
+    p_captured_at: capturedAt,
+    p_history_proof_status: historyProof.status,
+    p_history_api_request_id: historyProof.requestId || null,
+    p_history_event_id: historyProof.event?.id || null,
+    p_history_event_action: historyProof.event?.action || null,
+    p_history_event_occurred_at: historyProof.event?.occurredAt || null
   });
 
   if (error) {
     throw new Error('apply_credit_pack_subscription_charge RPC failed: ' + error.message);
   }
-  if (result?.reason === 'duplicate') {
+  if (
+    result?.reconciliationSuperseded === true
+    && result?.status === 'completed'
+    && result?.entitlementGranted === true
+  ) {
+    const reconciliationIncident = await reportIncident({
+      severity: 'critical',
+      source: 'paddle-webhook',
+      eventCode: 'CREDIT_PACK_RECONCILIATION_SUPERSEDED',
+      message: 'A signed completed payment superseded a definitive no-match reconciliation',
+      fingerprint:
+        `paddle-webhook:CREDIT_PACK_RECONCILIATION_SUPERSEDED:${data.id}`,
+      context: {
+        transactionId: data.id,
+        requestId,
+        providerEventId: providerEventId.trim(),
+        userId: result.userId || null
+      }
+    });
+    // The entitlement RPC may already have committed. Do not ACK until the
+    // supersession is durable: a provider retry will hit the immutable payment
+    // receipt, avoid a second grant, and retry this same incident fingerprint.
+    if (reconciliationIncident?.persisted !== true) {
+      throw webhookProcessingError(
+        'CREDIT_PACK_RECONCILIATION_INCIDENT_PERSIST_FAILED',
+        'Reconciliation supersession incident could not be persisted'
+      );
+    }
+  }
+  if (
+    result?.reason === 'duplicate'
+    && ['completed', 'withheld', 'refunded', 'chargeback'].includes(result?.status)
+  ) {
     console.log('[paddle/webhook] Credit pack already applied for transaction_id=' + data.id);
     return result;
+  }
+  if (
+    result?.reason === 'entitlement_withheld'
+    && result?.status === 'withheld'
+    && result?.entitlementGranted === false
+    && result?.reviewRequired === true
+  ) {
+    await reportIncident({
+      severity: 'critical',
+      source: 'paddle-webhook',
+      eventCode: 'CREDIT_PACK_PURCHASE_WITHHELD',
+      message: 'A completed credit-pack payment was withheld from entitlement',
+      fingerprint: `paddle-webhook:CREDIT_PACK_PURCHASE_WITHHELD:${data.id}`,
+      context: {
+        transactionId: data.id,
+        requestId,
+        providerEventId: providerEventId.trim(),
+        userId: result.userId || null,
+        withheldReason: result.withheldReason || null
+      }
+    });
+    return result;
+  }
+  if (
+    result?.reason === 'payment_refunded_before_entitlement'
+    && result?.status === 'refunded'
+    && result?.entitlementGranted === false
+    && result?.reviewRequired === false
+  ) {
+    console.log(
+      '[paddle/webhook] Credit-pack payment was already refunded before ' +
+      'entitlement transaction_id=' + data.id
+    );
+    return result;
+  }
+  if (
+    result?.reason === 'payment_chargeback_before_entitlement'
+    && result?.status === 'chargeback'
+    && result?.entitlementGranted === false
+    && result?.reviewRequired === true
+  ) {
+    await reportIncident({
+      severity: 'critical',
+      source: 'paddle-webhook',
+      eventCode: 'CREDIT_PACK_PAYMENT_CHARGEBACK',
+      message: 'A credit-pack payment chargeback preceded entitlement',
+      fingerprint: `paddle-webhook:CREDIT_PACK_PAYMENT_CHARGEBACK:${data.id}`,
+      context: {
+        transactionId: data.id,
+        requestId,
+        providerEventId: providerEventId.trim(),
+        userId: result.userId || null
+      }
+    });
+    return result;
+  }
+  if (
+    result?.applied !== true
+    || result?.status !== 'completed'
+    || result?.entitlementGranted !== true
+  ) {
+    throw new Error(
+      'apply_credit_pack_subscription_charge returned an invalid outcome'
+    );
   }
 
   console.log(
@@ -600,7 +1223,9 @@ function classifyCompletedTransactionRoute(
         ? 'credit_pack'
         : 'invalid_promptgen_transaction';
     }
-    return subscriptionCheckoutMarked ? 'invalid_promptgen_transaction' : 'ignore';
+    return subscriptionCheckoutMarked
+      ? 'invalid_promptgen_transaction'
+      : 'unbound_subscription_charge';
   }
 
   if (data?.origin === 'api') {
@@ -619,6 +1244,57 @@ function classifyCompletedTransactionRoute(
   return (subscriptionCheckoutMarked || creditPackMarked)
     ? 'invalid_promptgen_transaction'
     : 'ignore';
+}
+
+async function reportUnboundSubscriptionCharge(
+  data,
+  {
+    requestId = null,
+    eventId = null,
+    providerEventId = null,
+    incidentReporter = reportIncident
+  } = {}
+) {
+  const transactionId = data?.id || null;
+  const context = {
+    requestId,
+    eventId,
+    providerEventId,
+    transactionId,
+    customerId: data?.customer_id || null,
+    subscriptionId: data?.subscription_id || null,
+    origin: data?.origin || null,
+    itemCount: Array.isArray(data?.items) ? data.items.length : 0,
+    entitlementGranted: false,
+    purchaseReviewRequired: true
+  };
+
+  console.error(
+    '[paddle/webhook] [CRITICAL] Markerless subscription charge withheld |',
+    'transaction_id=' + (transactionId || 'n/a'),
+    '| event_id=' + (providerEventId || eventId || 'n/a'),
+    '| subscription_id=' + (context.subscriptionId || 'n/a')
+  );
+
+  const incident = await incidentReporter({
+    severity: 'critical',
+    source: 'paddle-webhook',
+    eventCode: 'UNBOUND_SUBSCRIPTION_CHARGE',
+    message: 'A markerless subscription charge was withheld for manual review',
+    fingerprint:
+      `paddle-webhook:UNBOUND_SUBSCRIPTION_CHARGE:${transactionId || providerEventId || eventId || 'unknown'}`,
+    context
+  });
+
+  // Do not ACK the provider event until the review-required incident is
+  // durable. Throwing leaves the webhook inbox retryable without granting any
+  // entitlement.
+  if (incident?.persisted !== true) {
+    throw webhookProcessingError(
+      'UNBOUND_SUBSCRIPTION_CHARGE_INCIDENT_PERSIST_FAILED',
+      'Markerless subscription charge incident could not be persisted'
+    );
+  }
 }
 
 /* ── Reset credits on each subscription payment (initial + renewals) ── */
@@ -879,7 +1555,8 @@ async function applyPaddleSubscriptionSnapshot(
     'snapshot_recorded_entitlement_skipped',
     'snapshot_recorded_superseded_subscription',
     'subscription_entitlement_applied',
-    'entitlement_preserved'
+    'entitlement_preserved',
+    'reconciliation_required'
   ]);
   if (!result || !acceptedReasons.has(result.reason)) {
     throw new Error('apply_paddle_subscription_snapshot returned an invalid outcome');
@@ -898,6 +1575,34 @@ async function applyPaddleSubscriptionSnapshot(
       eventCode: 'TERMINAL_SUBSCRIPTION_SNAPSHOT_IGNORED',
       message: 'A non-canceled subscription snapshot arrived after terminal cancellation',
       fingerprint: `paddle-webhook:TERMINAL_SUBSCRIPTION_SNAPSHOT_IGNORED:${subscriptionId}:${providerEventId}`,
+      context: {
+        requestId,
+        notificationId,
+        providerEventId,
+        eventType,
+        occurredAt: normalizedOccurredAt,
+        subscriptionId,
+        customerId: customerId || null,
+        userId,
+        status,
+        plan: plan || null
+      }
+    });
+  }
+  if (result.reason === 'reconciliation_required') {
+    console.error(
+      '[paddle/webhook] [CRITICAL] Equal-time subscription snapshots conflict |',
+      'subscription_id=' + subscriptionId,
+      '| status=' + status,
+      '| event_id=' + providerEventId
+    );
+    await incidentReporter({
+      severity: 'critical',
+      source: 'paddle-webhook',
+      eventCode: 'SUBSCRIPTION_SNAPSHOT_RECONCILIATION_REQUIRED',
+      message: 'Conflicting subscription snapshots share the same occurred_at timestamp',
+      fingerprint:
+        `paddle-webhook:SUBSCRIPTION_SNAPSHOT_RECONCILIATION_REQUIRED:${subscriptionId}:${providerEventId}`,
       context: {
         requestId,
         notificationId,
@@ -1077,7 +1782,11 @@ async function expireSubscription(supabase, userId) {
   console.log('[paddle/webhook] Subscription expired (plan=free, credits=0) for userId=' + userId);
 }
 
-async function applyCreditPackAdjustment(supabase, data) {
+async function applyCreditPackAdjustment(
+  supabase,
+  data,
+  { providerEventId = null, occurredAt = null } = {}
+) {
   if (!isCreditLedgerV2Enabled()) {
     return { matched: false, applied: false, reason: 'ledger_disabled' };
   }
@@ -1087,17 +1796,28 @@ async function applyCreditPackAdjustment(supabase, data) {
   if (!adjustmentId || !transactionId) {
     return { matched: false, applied: false, reason: 'missing_identity' };
   }
+  const normalizedOccurredAt = parsePaddleOccurredAt(occurredAt);
+  if (
+    typeof providerEventId !== 'string'
+    || !providerEventId.trim()
+    || providerEventId.length > 255
+    || !normalizedOccurredAt
+  ) {
+    throw new Error('Credit-pack adjustment is missing valid provider evidence');
+  }
 
-  const { data: result, error } = await supabase.rpc('apply_credit_pack_adjustment', {
+  const { data: result, error } = await supabase.rpc('apply_credit_pack_adjustment_v2', {
     p_adjustment_id: adjustmentId,
+    p_provider_event_id: providerEventId.trim(),
     p_transaction_id: transactionId,
     p_action: data?.action || 'unknown',
     p_adjustment_type: data?.type || null,
-    p_status: data?.status || 'unknown'
+    p_status: data?.status || 'unknown',
+    p_occurred_at: normalizedOccurredAt
   });
 
   if (error) {
-    throw new Error('apply_credit_pack_adjustment RPC failed: ' + error.message);
+    throw new Error('apply_credit_pack_adjustment_v2 RPC failed: ' + error.message);
   }
   if (!result?.matched) {
     return result || { matched: false, applied: false };
@@ -1355,18 +2075,7 @@ function getPaddleOrderingTarget(payload) {
 }
 
 function parsePaddleOccurredAt(value) {
-  if (typeof value !== 'string' || !value.trim() || value.length > 80) return null;
-  const normalized = value.trim();
-  // Preserve Paddle's RFC3339 fractional-second precision. Converting through
-  // JavaScript Date truncates microseconds to milliseconds and can collapse two
-  // distinct events into the same timestamp before PostgreSQL compares them.
-  if (
-    !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})$/.test(normalized)
-    || !Number.isFinite(Date.parse(normalized))
-  ) {
-    return null;
-  }
-  return normalized;
+  return parsePaddleTimestamp(value);
 }
 
 async function claimPaddleEventOrder(supabase, payload, claimToken) {
@@ -1835,7 +2544,8 @@ router.post('/webhook',
                 eventId,
                 transactionId,
                 priceId,
-                requestId: creditPackMetadata?.promptgenPurchaseRequestId || null
+                purchaseRequestId:
+                  creditPackMetadata?.promptgenPurchaseRequestId || null
               }
             });
             throw webhookProcessingError(
@@ -1853,11 +2563,12 @@ router.post('/webhook',
               message: 'A completed credit pack transaction failed server contract validation',
               fingerprint: `paddle-webhook:CREDIT_PACK_TRANSACTION_INVALID:${transactionId || eventId || 'unknown'}`,
               context: {
-                requestId: req.id,
+                httpRequestId: req.id,
                 eventId,
                 transactionId,
                 priceId,
-                requestId: creditPackMetadata?.promptgenPurchaseRequestId || null,
+                purchaseRequestId:
+                  creditPackMetadata?.promptgenPurchaseRequestId || null,
                 reason: validation.reason
               }
             });
@@ -1872,7 +2583,8 @@ router.post('/webhook',
             data,
             creditPack,
             process.env,
-            payload?.occurred_at
+            payload?.occurred_at,
+            payload?.event_id
           );
           return;
         }
@@ -1975,6 +2687,15 @@ router.post('/webhook',
             incidentCode,
             'PromptGen transaction could not be matched to its server-bound request'
           );
+        }
+
+        if (transactionRoute === 'unbound_subscription_charge') {
+          await reportUnboundSubscriptionCharge(data, {
+            requestId: req.id,
+            eventId,
+            providerEventId: payload?.event_id
+          });
+          return;
         }
 
         const plan = (
@@ -2173,7 +2894,10 @@ router.post('/webhook',
         const transactionId = data?.transaction_id;
         const supabase = adminClient;
 
-        const packAdjustment = await applyCreditPackAdjustment(supabase, data);
+        const packAdjustment = await applyCreditPackAdjustment(supabase, data, {
+          providerEventId: payload?.event_id,
+          occurredAt: payload?.occurred_at
+        });
         if (packAdjustment?.matched) {
           return;
         }
@@ -2316,6 +3040,8 @@ module.exports = router;
 module.exports.classifyTransactionOrigin = classifyTransactionOrigin;
 module.exports.classifyCompletedTransactionRoute =
   classifyCompletedTransactionRoute;
+module.exports.reportUnboundSubscriptionCharge =
+  reportUnboundSubscriptionCharge;
 module.exports.isActiveSubscription = isActiveSubscription;
 module.exports.isTestAccount = isTestAccount;
 module.exports.getSubscriptionCheckoutMetadata = getSubscriptionCheckoutMetadata;
@@ -2349,6 +3075,11 @@ module.exports.parsePaddleOccurredAt = parsePaddleOccurredAt;
 module.exports.priceIdToPlan = priceIdToPlan;
 module.exports.verifyPaddleSignature = verifyPaddleSignature;
 module.exports.validateCompletedCreditPackTransaction = validateCompletedCreditPackTransaction;
+module.exports.buildCreditPackHistoryUrl = buildCreditPackHistoryUrl;
+module.exports.validateCreditPackHistoryNextUrl = validateCreditPackHistoryNextUrl;
+module.exports.verifyCreditPackSubscriptionHistory =
+  verifyCreditPackSubscriptionHistory;
+module.exports.loadCreditPackTemporalContext = loadCreditPackTemporalContext;
 module.exports.grantCreditsForPack = grantCreditsForPack;
 module.exports.applyCreditPackAdjustment = applyCreditPackAdjustment;
 module.exports.expireSubscription = expireSubscription;

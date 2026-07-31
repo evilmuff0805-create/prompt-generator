@@ -5,8 +5,11 @@ const {
   getPaddleCatalogMetadata,
   isPro1099Enabled
 } = require('../lib/product-catalog');
+const {
+  DEFAULT_PADDLE_API_BASE,
+  getPaddleApiBase
+} = require('../lib/paddle-api');
 
-const PADDLE_API_BASE = process.env.PADDLE_API_BASE || 'https://api.paddle.com';
 const ALLOWED_STATUSES = new Set(['active', 'archived']);
 const DEFAULT_AUDIT_CONTRACT = Object.freeze({
   productStatus: 'active',
@@ -18,7 +21,12 @@ const DEFAULT_AUDIT_CONTRACT = Object.freeze({
   trialPeriod: null
 });
 
-async function getPaddleEntity(path, apiKey, fetchImpl = fetch, apiBase = PADDLE_API_BASE) {
+async function getPaddleEntity(
+  path,
+  apiKey,
+  fetchImpl = fetch,
+  apiBase = DEFAULT_PADDLE_API_BASE
+) {
   const response = await fetchImpl(`${apiBase}${path}`, {
     headers: { Authorization: `Bearer ${apiKey}` }
   });
@@ -217,7 +225,7 @@ async function auditPaddleCatalog({ env = process.env, fetchImpl = fetch } = {})
 
   const targets = buildPaddleAuditTargets(env);
   const mismatches = [];
-  const apiBase = env.PADDLE_API_BASE || PADDLE_API_BASE;
+  const apiBase = getPaddleApiBase(env);
 
   for (const { plan, expected } of targets) {
     if (!expected.priceId) {

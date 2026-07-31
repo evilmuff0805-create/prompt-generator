@@ -24,12 +24,22 @@ Purchase and consumption require an eligible, active paid subscription.
 
 All payment and ledger feature flags default to `false`.
 
-Known code gate: usage add-on requests do not yet carry an approved request
-TTL or a temporal eligibility decision for a delayed
-`transaction.completed`. The feature must remain disabled until PromptGen can
-distinguish a charge completed before a later cancellation from a charge
-completed after the subscription became ineligible, record a withheld
-entitlement without retrying the charge, and reconcile/refund that payment.
+The Draft PR now contains the **static code foundation** for the approved
+temporal rule. A usage add-on authorization is valid only from its immutable
+server authorization timestamp up to, but not including, 15 minutes later.
+The signed `transaction.completed` timestamp, captured-payment evidence,
+immutable PromptGen request, Paddle Subscription History proof, and durable
+subscription lifecycle history are evaluated before entitlement is granted.
+An expired, ineligible, unavailable, ambiguous, already-adjusted, or otherwise
+unsafe payment is recorded as `withheld` without creating a spendable credit
+lot, and its later refund or chargeback remains attributable.
+
+This static foundation is not release proof. The Paddle API key must be granted
+and verified for Subscription History reads, the complete temporal and
+adjustment matrix must pass in Paddle Sandbox, and migrations 023 through 026
+must pass against a production-schema clone. All payment and ledger flags
+remain `false`; no production migration, deployment, or checkout activation is
+authorized by this document.
 
 Known cutover gate: an already-bound subscription checkout preserves its
 immutable price contract. Before enabling the USD 10.99 flag, every open
@@ -158,8 +168,10 @@ The flow is:
    total no longer matches, it returns a fresh preview and does not charge.
 6. `create_credit_pack_purchase_request` durably records the immutable pack
    key, credits, USD contract, customer, subscription, expiry policy, and
-   opaque request ID before Paddle is called. At most one open request exists
-   per user.
+   opaque request ID before Paddle is called. It also records the verified
+   Paddle subscription response timestamp and request ID, the current signed
+   active lifecycle snapshot, and the exclusive 15-minute authorization
+   window. At most one unresolved request exists per user.
 7. The server calls Paddle's immediate subscription charge endpoint with
    `effective_from=immediately`, `on_payment_failure=prevent_change`, quantity
    one, and transaction-specific non-catalog price/product metadata containing
@@ -169,10 +181,103 @@ The flow is:
    instead of issuing a second charge.
    If the browser lost the charge response before learning the request ID, it
    performs one authenticated, owner-scoped lookup for the newest non-terminal
-   request and resumes that request. It never repeats the purchase POST.
+   request and resumes that request. A 72-hour reconciled no-match remains
+   review-locked and discoverable from `reconciliation_closed_at` rather than
+   disappearing because its original `created_at` is old. The browser never
+   repeats the purchase POST.
 9. Only a valid signed `transaction.completed` event with
    `origin=subscription_charge`, the exact request/subscription/customer
-   binding, one custom line item, and the exact pack contract grants credits.
+   binding, one custom line item, one captured payment, the exact pack
+   contract, and eligible Subscription History proof can grant credits.
+
+An exhaustive no-match reconciliation applies only after the authorization
+window plus 72 hours for `charging`, `submitted`, or `provider_unknown`.
+Before any Paddle transaction scan, the operator is restricted to PromptGen's
+exact Supabase project and reads the exact Paddle subscription with the same
+API key. Subscription ID, customer ID, bound recurring plan Price ID, API
+environment, and provider request ID must all match. A wrong project, key/base
+environment mismatch, wrong Paddle seller, missing permission, malformed
+response, or failed entity read stops before both the scan and database RPC.
+
+Paddle's list API and PostgreSQL cannot share one atomic transaction. An
+exhaustive no-match scan therefore records its evidence but deliberately keeps
+the request review-locked as `provider_unknown`; it never reopens purchasing.
+The confirmation scan must take a fresh cutoff immediately before the write so
+a transaction created after the first scan is inside the second scan. If an
+exact signed completion is then delivered, only that specific reconciled
+request may continue through all normal identity, amount, authorization-window,
+Subscription History, lifecycle, adjustment, and receipt-idempotency checks. A
+fully valid completion grants once, preserves the reconciliation evidence, and
+records a critical `CREDIT_PACK_RECONCILIATION_SUPERSEDED` incident. Every
+ordinary failure or mismatch remains withheld and review-locked until a
+confirmed full refund clears it. Releasing a no-match lock requires a separate,
+audited provider-terminal operator procedure; that release procedure is not
+part of this foundation.
+
+The temporal interval is exactly:
+
+```text
+authorized_at <= transaction.completed.occurred_at < authorization_expires_at
+authorization_expires_at = authorized_at + 15 minutes
+authorized_at - 5 minutes <= eligibility_check_started_at
+eligibility_check_started_at <= authorized_at + 30 seconds
+
+history_start_at = min(eligibility_check_started_at, authorized_at)
+history_start_at <= subscription_history.occurred_at
+subscription_history.occurred_at <= transaction.completed.occurred_at
+```
+
+PromptGen requests Paddle Subscription History from the earlier of
+`eligibility_check_started_at` and `authorized_at` through the signed completion
+time, inclusive, and validates every page and provider request ID. The immutable
+request also stores when that eligibility check began. A check older than five
+minutes at database authorization, or more than 30 seconds ahead of the
+database clock, is rejected before a charge request can proceed; the 30-second
+allowance is only a bounded clock-skew tolerance. A pause, past-due transition,
+cancellation, disqualifying subscription-history action, database lifecycle
+event, or adjustment at or before completion makes the payment ineligible.
+History permission errors, incomplete pagination, malformed evidence, clock
+ambiguity, and missing proof fail closed to `withheld`. A withheld payment is
+audited with its provider event, transaction creation, capture, completion,
+request, subscription, amount, and history evidence; no credit lot is minted.
+It is never charged again automatically.
+
+An eligible History proof contains **exactly one**
+`subscription_one_off_charge_applied` event whose `effective_from` is
+`immediately`, whose transaction ID is the exact completed transaction, and
+whose event time is from `authorized_at` through the signed completion time,
+inclusive. No matching event, a duplicate matching event, a match before
+authorization, an unknown or malformed action, or any other documented
+subscription action in the inspected interval fails closed. Route validation
+and the money-moving database RPC both enforce this proof so a caller cannot
+bypass it by invoking the RPC directly.
+
+The initial add-on release does not support Paddle discounts or customer credit
+balances. A valid preview must have `discount=0`, `credit=0`,
+`total=subtotal+tax`, `grand_total=total`, `balance=grand_total`, and
+`grand_total_tax=tax`. The signed completed transaction must preserve the
+approved subtotal, discount, tax, total, credit, grand total, and grand-total
+tax; its post-payment balance must be zero and its single captured payment must
+equal the grand total. A discount or customer credit detected in preview is
+rejected before charging. If any amount changes or a customer credit is applied
+after confirmation but before completion, fulfillment is withheld and the
+payment must follow the manual refund/reconciliation runbook.
+
+If an adjustment arrives before `transaction.completed`, its immutable receipt
+is retained even though the payment receipt does not exist yet. Fulfillment
+later resolves an approved full refund or credit directly to `refunded`, or an
+approved full chargeback to `chargeback`, marks the adjustment matched/applied,
+and returns without creating a credit lot. A pre-completion refund closes
+without manual entitlement work; a chargeback remains review-required while
+still being terminal for payment and entitlement. Partial, unapproved, or
+otherwise ambiguous preceding adjustments remain withheld for manual review.
+
+Account deletion never deletes the immutable payment, request, provider-event,
+or adjustment receipts. User-owned checkout, purchase, and credit-lot rows may
+be removed by their foreign-key policy, while retained evidence sets `user_id`
+to null. A later signed, approved full refund, credit, or chargeback
+terminalizes those retained records without calling a user balance or lot
+mutator. Partial, unapproved, or ambiguous adjustments remain review-required.
 
 The three allowed non-catalog contracts are:
 
@@ -188,7 +293,13 @@ written confirmation exists; checkout activation fails closed unless the
 category is configured and the confirmation flag is exactly `true`. If
 reusable add-on prices were created during an earlier experiment,
 list them in the matching `PADDLE_CREDIT_PACK_*_LEGACY_PRICE_IDS` variables.
-The read-only audit must confirm all of them are archived:
+The read-only audit verifies only explicitly declared IDs; it does not enumerate
+the full Paddle catalog. Blank legacy-ID variables therefore do **not** prove
+that no reusable prices exist. With zero declared IDs the command reports
+`not audited; manual inventory required` and exits nonzero, so activation
+remains fail-closed. First inventory the full Paddle catalog manually and retain
+the evidence, then list every reusable add-on Price ID found. The read-only
+audit must confirm every declared ID is archived:
 
 ```text
 npm run audit:paddle-credit-packs
@@ -269,12 +380,24 @@ No feature flag or production checkout may be enabled until all items pass:
 - [ ] Every open subscription checkout attempt is reconciled before the
   USD 10.99 cutover; no old bound USD 9.99 transaction remains indefinitely
   payable after the effective date.
-- [ ] Any historical reusable add-on prices are inventoried and audited as
-  archived.
+- [ ] The full Paddle catalog is manually inventoried with retained evidence;
+  every historical reusable add-on Price ID found is declared, and the
+  read-only audit confirms every declared ID is archived. Zero declared IDs
+  alone are `not audited` and cannot open the activation gate.
 - [ ] An approved add-on request TTL and signed-event temporal eligibility
-  rule are implemented and proven for completion-before-cancellation,
-  completion-after-cancellation, delayed delivery, `provider_unknown`, and
-  manual refund/reconciliation paths.
+  rule have passed database-clone and Paddle Sandbox proof for the exclusive
+  15-minute boundary, completion-before-cancellation,
+  completion-after-cancellation, delayed delivery, `provider_unknown`,
+  adjustment-before-completion, and manual refund/reconciliation paths. The
+  static implementation in this Draft PR does not satisfy this gate by itself.
+- [ ] The production Paddle API key has the required Subscription History read
+  permission, and authenticated paginated history queries are proven in
+  Sandbox for eligible, ineligible, empty, unavailable, malformed, and
+  multi-page results.
+- [ ] The reconciliation key has `subscription.read` and `transaction.read`;
+  wrong Supabase project, key/API-base mismatch, wrong Paddle seller, failed
+  subscription binding, incomplete pagination, and malformed provider evidence
+  all prove zero reconciliation writes.
 - [ ] Production backup/restore is tested and migrations 023 through 026 pass
   against a clone of the actual production schema, including race and rollback
   tests.
@@ -334,11 +457,37 @@ No feature flag or production checkout may be enabled until all items pass:
 | Canceled, paused, past-due, trialing, manual-collection, mismatched, multi-item, or scheduled-change subscription | Rejected before charge |
 | Browser closes or reloads after submission | Same durable request resumes; no new charge is issued |
 | Network timeout, HTTP 5xx, or malformed success | `provider_unknown`; no automatic retry; reconciliation required |
+| Charge API succeeds as `submitted`, but the webhook is never delivered | After 72 hours, the same exhaustive reconciliation rules apply; no automatic retry |
+| A markerless one-item subscription charge matches the exact subscription, customer, and origin but has changed or incomplete totals/details | Classify as ambiguous partial evidence; never close the request as a definitive no-match |
+| A write-capable no-match reconciliation is attempted | Perform two complete Paddle scans with disjoint provider request IDs and a fresh second cutoff; any match, partial, malformed page, or reused/stale evidence blocks the write |
+| Both no-match scans complete | Persist the evidence but keep the request `provider_unknown` with review required; never enable a replacement purchase |
+| A markerless `subscription_charge` completion is delivered | Grant nothing, create a durable critical incident with minimal identifiers, and keep the account purchase-locked for review |
+| Operator no-match scan completes immediately before an exact signed completion is processed | The exact completion may supersede only the review-locked reconciled request, grants once after all normal checks, preserves evidence, and emits a critical incident |
+| Reconciliation runs with a wrong Supabase project, Paddle environment, seller, subscription, customer, or plan Price ID | Stops before transaction scan and database reconciliation RPC |
 | `transaction.completed` delivered twice | Exactly one grant from the bound request |
 | Webhook arrives before browser response | Webhook grants once; browser only reports durable status |
+| Eligibility check began exactly 5:00 before database authorization | Accepted by the freshness bound; all other evidence must still pass |
+| Eligibility check began more than 5:00 before database authorization | Request rejected as stale before charge submission |
+| Eligibility-check timestamp is exactly 0:30 ahead of database authorization | Accepted only as bounded clock skew; all other evidence must still pass |
+| Eligibility-check timestamp is more than 0:30 ahead of database authorization | Request rejected as stale/clock-invalid before charge submission |
+| Completion at 14:59.999 after authorization | Eligible only if all other evidence passes; exactly one grant |
+| Completion exactly 15:00.000 after authorization | Withheld; no lot and no balance change |
+| Exactly one matching immediate one-off History event inside authorization | Eligible only if every other identity, lifecycle, and amount invariant passes |
+| Missing, duplicate, pre-authorization, malformed, or wrong-transaction one-off History event | Withheld; no lot and no automatic retry |
+| Subscription History permission unavailable, pagination incomplete, or proof malformed | Withheld with a durable incident; no lot and no automatic retry |
+| Pause, past-due, cancellation, or disqualifying history event before completion | Withheld; transaction and proof retained for refund |
+| Ineligibility occurs strictly after a timely completion | Historical payment remains eligible, subject to the exact Sandbox evidence |
+| Preview contains a discount or customer credit balance | Rejected before purchase request or charge |
+| Signed completion contains a discount, customer credit, changed total, nonzero post-payment balance, or capture mismatch | Withheld; immutable amount evidence retained for refund/reconciliation |
+| Approved full refund or credit arrives before `transaction.completed` | Adjustment receipt is retained; later completion atomically finalizes the payment as refunded, marks the adjustment applied, and mints no lot |
+| Approved full chargeback arrives before `transaction.completed` | Later completion atomically records chargeback with review required, marks the adjustment applied, and mints no lot |
+| Partial, unapproved, or ambiguous adjustment arrives before completion | Later completion is withheld with review required and mints no lot |
+| Full refund of an already-withheld payment | Payment/request/receipt become refunded without looking up or mutating a credit lot |
 | Full refund before spending | Exact source lot revoked once |
+| Full refund of a withheld payment | Payment/request/purchase become refunded, durable review lock clears, and no credit lot is created |
 | Full refund after spending or chargeback | No unrelated debit; critical manual reconciliation |
 | Partial refund | Remaining pack lot quarantined immediately and removed from spendable balance |
+| Account deleted after authorization or grant, then full refund/credit/chargeback arrives | Retained immutable evidence is terminalized without recreating a user, lot, or balance mutation |
 | 365-day expiry | Only unspent credits in that source lot expire from Paddle `occurred_at` |
 | Paid plan becomes ineligible | New purchase and add-on consumption blocked without deleting ledger evidence |
 | Out-of-order/equal-time events | Ordered reducer applies only valid successor; ambiguity fails closed |
@@ -361,11 +510,50 @@ IDs outside the repository without customer personal data.
    inbox, subscription state, purchase, lot, allocation, and profile balance.
 5. If Paddle charged, bind/replay the original signed event or use an audited
    reconciliation path; never create a replacement charge.
-6. If Paddle definitively did not create a charge, close the request as failed
-   through the approved reconciliation procedure before allowing another
-   attempt.
+6. If both scans find no charge, keep the request review-locked as
+   `provider_unknown`. Do not allow another attempt. Only a separate audited
+   procedure with provider-terminal evidence may release that lock; this
+   foundation intentionally does not implement that release.
 7. Keep the incident open until Paddle, the request state, entitlement, and
    ledger agree.
+
+The operator is dry-run by default:
+
+```text
+npm run reconcile:credit-pack -- --request-id=<opaque UUID>
+```
+
+It scans only after the request is at least 72 hours past authorization,
+validates every Paddle page and provider request ID, and never prints keys or
+customer payloads. A markerless transaction with the exact subscription,
+customer, `subscription_charge` origin, and one-item envelope is partial
+evidence even when totals or details differ or are incomplete; it is never
+treated as an unrelated definitive no-match. The explicit write performs a
+second complete scan with a new cutoff and requires request IDs disjoint from
+the first scan. The write is rejected if the completed scan evidence is more
+than two minutes old; rerun the scan rather than extending that window. A
+successful no-match write stores review evidence and leaves the request locked
+as `provider_unknown`; it does not authorize a retry. Review the dry-run
+evidence and retained external audit record before the explicit write:
+
+```text
+npm run reconcile:credit-pack -- --request-id=<opaque UUID> --apply
+```
+
+`--apply` is production-only: it requires the exact PromptGen Supabase project,
+`https://api.paddle.com`, a modern `pdl_live_apikey_...` key, and a successful
+exact subscription/customer/recurring-Price binding read before the transaction
+scan. Sandbox or legacy credentials cannot persist the review record. A
+write-capable run
+performs a second complete provider scan immediately before the database CAS
+and requires provider response request IDs disjoint from the first scan. Any
+match, partial evidence, malformed page, or reused request ID blocks the write.
+
+If the database commit succeeded but the CLI response was lost, rerunning the
+same command never writes again. It first revalidates the Paddle binding and
+rescans Paddle: a still-empty result reports the retained and current evidence
+as idempotent, while a late exact match is reported as revalidation evidence
+that requires replay of the original signed webhook event.
 
 ### Direct or unbound subscription payment
 
@@ -377,6 +565,36 @@ IDs outside the repository without customer personal data.
    authenticated server attempt.
 5. Record the operator, Paddle transaction/refund IDs, reason, and final
    subscription state.
+
+### Withheld usage add-on payment
+
+1. Keep `CREDIT_PACK_PURCHASES_ENABLED=false` for a systemic incident; do not
+   retry the charge or create a replacement request.
+2. Locate the immutable purchase request, payment receipt, adjustment receipt,
+   signed webhook inbox row, Paddle transaction, captured payment, Subscription
+   History response/request ID, and lifecycle history. If the account still
+   exists, also inspect the purchase, lot, and profile rows. If the retained
+   evidence has `user_id=NULL`, explicitly record that the account was deleted
+   and that the migration-023 user-owned purchase/lot graph may correctly be
+   absent; do not recreate it.
+3. Classify the durable reason: expired authorization, event before
+   authorization, ineligible subscription history, unavailable or ambiguous
+   history, adjustment before completion, previously failed request, or
+   conflicting transaction binding.
+4. If money was captured and entitlement was withheld, issue or confirm the
+   approved Paddle full refund. Do not call the grant RPC, manually add credits,
+   or replay the purchase POST.
+5. Allow the signed adjustment webhook to update every surviving purchase row
+   plus the payment, request, and adjustment receipts. With `user_id=NULL`, the
+   immutable receipts and request alone are terminalized. A withheld refund
+   must complete without requiring a credit-lot lookup or balance mutation.
+6. For a partial adjustment, chargeback, missing adjustment, mismatched
+   evidence, or any non-terminal provider state, keep manual review open and
+   preserve every receipt. Never debit unrelated subscription or add-on lots.
+7. Record the operator, Paddle transaction/adjustment IDs, Subscription History
+   request ID, reason, timestamps, final monetary state, zero-lot evidence, and
+   final profile balance when the profile still exists. Close the incident only
+   when Paddle and every applicable durable PromptGen record agree.
 
 ### Stale event-order lease
 
@@ -400,7 +618,9 @@ blocking gates and an explicit production approval:
 
 1. Keep `PRO_PRICE_1099_ENABLED=false`,
    `CREDIT_LEDGER_V2_ENABLED=false`, and
-   `CREDIT_PACK_PURCHASES_ENABLED=false`.
+   `CREDIT_PACK_PURCHASES_ENABLED=false`. Also keep
+   `PADDLE_CREDIT_PACK_TAX_CATEGORY_CONFIRMED=false` and
+   `PADDLE_SUBSCRIPTION_HISTORY_CONFIRMED=false`.
 2. Freeze payment/credit mutations, take and verify a backup, and confirm no
    active credit reservations or pending storyboard jobs.
 3. Apply migrations 023, 024, 025, and 026 in order.
@@ -412,13 +632,21 @@ blocking gates and an explicit production approval:
    USD 9.99 mapping.
 7. Configure and audit the stable, staged, Enterprise, and legacy Paddle
    catalog. Do not configure reusable add-on Price IDs.
-8. Re-run the complete Sandbox matrix against the exact release configuration.
-9. After notice and price gates pass, enable `PRO_PRICE_1099_ENABLED` and
+8. While new add-on sales remain disabled, set
+   `PADDLE_CREDIT_PACK_TAX_CATEGORY=<Paddle-confirmed value>`, verify that exact
+   value and receipt treatment in Sandbox, and only then set
+   `PADDLE_CREDIT_PACK_TAX_CATEGORY_CONFIRMED=true`. Prove the production API
+   key's paginated Subscription History reads against the exact release
+   configuration, and only then set
+   `PADDLE_SUBSCRIPTION_HISTORY_CONFIRMED=true`.
+9. Re-run the complete Sandbox matrix with both confirmation gates enabled and
+   `CREDIT_PACK_PURCHASES_ENABLED=false`.
+10. After notice and price gates pass, enable `PRO_PRICE_1099_ENABLED` and
    only after reconciling all open checkout attempts; then verify a new
    USD 10.99 checkout/receipt plus a USD 9.99 renewal.
-10. After every add-on gate passes, enable
+11. After every add-on gate passes, enable
     `CREDIT_PACK_PURCHASES_ENABLED`.
-11. Monitor provider errors, attempt/request ages, webhook retries, withheld
+12. Monitor provider errors, attempt/request ages, webhook retries, withheld
     direct payments, grants, refunds, quarantined lots, and balance
     reconciliation throughout the release window.
 
@@ -439,6 +667,16 @@ It must not stop:
 - expiry and ledger reconciliation;
 - status lookup for already-created attempts/requests; or
 - operator reconciliation of `provider_unknown` and withheld payments.
+
+The authenticated browser must likewise keep owner-scoped recovery independent
+from the sales catalog. Even when the add-on panel is hidden because new sales
+are disabled, an existing stored request continues status lookup and shows its
+durable result. `pending` remains locked against another submission,
+`withheld` remains stored and visibly review-required, and a confirmed
+`refunded` result clears the local request lock only after the status endpoint
+returns that terminal state. `chargeback` remains a distinct, review-required
+status: the browser retains its request lock, disables another add-on attempt,
+and shows chargeback-specific copy instead of labeling it as a refund.
 
 After money has been accepted, do not drop migrations, revert to a
 profile-only credit balance, delete attempts/requests, or run the pre-024

@@ -1,6 +1,7 @@
 'use strict';
 
 const {
+  INVENTORY_NOT_AUDITED_CODE,
   parsePriceIds,
   collectLegacyPriceIds,
   collectArchivedPriceMismatches,
@@ -8,6 +9,7 @@ const {
 } = require('../../scripts/audit-credit-pack-catalog');
 
 const BASE_ENV = {
+  NODE_ENV: 'test',
   PADDLE_API_KEY: 'test-read-only-key',
   PADDLE_API_BASE: 'https://sandbox-api.paddle.test',
   CREDIT_PACK_EXPIRY_DAYS: '365'
@@ -29,12 +31,15 @@ describe('read-only legacy Paddle add-on price audit', () => {
     ]);
   });
 
-  test('needs no API key or network when no reusable legacy price exists', async () => {
+  test('fails closed when no legacy IDs are declared and full inventory is not audited', async () => {
     const fetchImpl = jest.fn();
     await expect(auditCreditPackCatalog({
       env: { CREDIT_PACK_EXPIRY_DAYS: '365' },
       fetchImpl
-    })).resolves.toEqual([]);
+    })).rejects.toMatchObject({
+      code: INVENTORY_NOT_AUDITED_CODE,
+      message: expect.stringMatching(/not audited; manual inventory required/i)
+    });
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
@@ -100,5 +105,19 @@ describe('read-only legacy Paddle add-on price audit', () => {
       },
       fetchImpl: jest.fn()
     })).rejects.toThrow('PADDLE_API_KEY');
+  });
+
+  test('rejects an untrusted bearer-token destination before any catalog read', async () => {
+    const fetchImpl = jest.fn();
+    await expect(auditCreditPackCatalog({
+      env: {
+        ...BASE_ENV,
+        NODE_ENV: 'production',
+        PADDLE_API_BASE: 'https://api.paddle.com.attacker.example',
+        PADDLE_CREDIT_PACK_600_LEGACY_PRICE_IDS: 'pri_old_600'
+      },
+      fetchImpl
+    })).rejects.toThrow('PADDLE_API_BASE');
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 });

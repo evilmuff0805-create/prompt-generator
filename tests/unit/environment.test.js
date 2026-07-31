@@ -72,6 +72,67 @@ describe('environment contract', () => {
     });
   });
 
+  test.each([
+    'https://api.paddle.com',
+    'https://sandbox-api.paddle.com'
+  ])('accepts the exact trusted Paddle API origin %s', (paddleApiBase) => {
+    expect(validateStartupEnvironment({
+      ...completeEnv,
+      PADDLE_API_BASE: paddleApiBase
+    })).toEqual({
+      strictFeatures: false,
+      missingFeatures: {},
+      missingFeatureVariables: []
+    });
+  });
+
+  test.each([
+    'http://api.paddle.com',
+    'https://api.paddle.com.attacker.example',
+    'https://user:password@api.paddle.com',
+    'https://api.paddle.com/v1',
+    'https://api.paddle.com?redirect=attacker'
+  ])('rejects an unsafe Paddle bearer-token destination %s', (paddleApiBase) => {
+    expect(() => validateStartupEnvironment({
+      ...completeEnv,
+      PADDLE_API_BASE: paddleApiBase
+    })).toThrow('PADDLE_API_BASE must be the exact Paddle production or sandbox HTTPS origin');
+  });
+
+  test('allows an HTTP loopback Paddle fixture only in NODE_ENV=test', () => {
+    expect(validateStartupEnvironment({
+      ...completeEnv,
+      NODE_ENV: 'test',
+      PADDLE_API_BASE: 'http://127.0.0.1:54322'
+    })).toEqual({
+      strictFeatures: false,
+      missingFeatures: {},
+      missingFeatureVariables: []
+    });
+    expect(() => validateStartupEnvironment({
+      ...completeEnv,
+      NODE_ENV: 'production',
+      PADDLE_API_BASE: 'http://127.0.0.1:54322'
+    })).toThrow('PADDLE_API_BASE');
+  });
+
+  test('allows an HTTPS .test Paddle fixture only in NODE_ENV=test', () => {
+    expect(validateStartupEnvironment({
+      ...completeEnv,
+      NODE_ENV: 'test',
+      PADDLE_API_BASE: 'https://sandbox-api.paddle.test'
+    })).toEqual({
+      strictFeatures: false,
+      missingFeatures: {},
+      missingFeatureVariables: []
+    });
+    expect(() => validateStartupEnvironment({
+      ...completeEnv,
+      NODE_ENV: 'production',
+      PADDLE_API_BASE: 'https://sandbox-api.paddle.test'
+    })).toThrow('PADDLE_API_BASE');
+  });
+
   test('rejects cross-plan current or legacy Paddle price ID collisions', () => {
     expect(() => validateStartupEnvironment({
       ...completeEnv,
@@ -168,6 +229,8 @@ describe('environment contract', () => {
         CREDIT_PACK_PURCHASES_ENABLED: 'true',
         PADDLE_CREDIT_PACK_TAX_CATEGORY: 'saas',
         PADDLE_CREDIT_PACK_TAX_CATEGORY_CONFIRMED: 'true',
+        PADDLE_SUBSCRIPTION_HISTORY_CONFIRMED: 'true',
+        PADDLE_TRANSACTION_READ_CONFIRMED: 'true',
         ENV_VALIDATION_STRICT_FEATURES: 'false'
       };
       delete env[missingVariable];
@@ -188,7 +251,9 @@ describe('environment contract', () => {
       CREDIT_LEDGER_V2_ENABLED: 'true',
       CREDIT_PACK_PURCHASES_ENABLED: 'true',
       PADDLE_CREDIT_PACK_TAX_CATEGORY: 'saas',
-      PADDLE_CREDIT_PACK_TAX_CATEGORY_CONFIRMED: 'true'
+      PADDLE_CREDIT_PACK_TAX_CATEGORY_CONFIRMED: 'true',
+      PADDLE_SUBSCRIPTION_HISTORY_CONFIRMED: 'true',
+      PADDLE_TRANSACTION_READ_CONFIRMED: 'true'
     }).missingFeatureVariables).toEqual([]);
   });
 
@@ -198,8 +263,34 @@ describe('environment contract', () => {
       CREDIT_LEDGER_V2_ENABLED: 'true',
       CREDIT_PACK_PURCHASES_ENABLED: 'true',
       PADDLE_CREDIT_PACK_TAX_CATEGORY: 'saas',
-      PADDLE_CREDIT_PACK_TAX_CATEGORY_CONFIRMED: 'false'
+      PADDLE_CREDIT_PACK_TAX_CATEGORY_CONFIRMED: 'false',
+      PADDLE_SUBSCRIPTION_HISTORY_CONFIRMED: 'true',
+      PADDLE_TRANSACTION_READ_CONFIRMED: 'true'
     })).toThrow('requires written confirmation');
+  });
+
+  test('credit-pack purchases fail closed until Paddle subscription history access is confirmed', () => {
+    expect(() => validateStartupEnvironment({
+      ...completeEnv,
+      CREDIT_LEDGER_V2_ENABLED: 'true',
+      CREDIT_PACK_PURCHASES_ENABLED: 'true',
+      PADDLE_CREDIT_PACK_TAX_CATEGORY: 'saas',
+      PADDLE_CREDIT_PACK_TAX_CATEGORY_CONFIRMED: 'true',
+      PADDLE_SUBSCRIPTION_HISTORY_CONFIRMED: 'false',
+      PADDLE_TRANSACTION_READ_CONFIRMED: 'true'
+    })).toThrow('requires a Paddle API key with subscription_history.read');
+  });
+
+  test('credit-pack purchases fail closed until Paddle transaction reads are confirmed', () => {
+    expect(() => validateStartupEnvironment({
+      ...completeEnv,
+      CREDIT_LEDGER_V2_ENABLED: 'true',
+      CREDIT_PACK_PURCHASES_ENABLED: 'true',
+      PADDLE_CREDIT_PACK_TAX_CATEGORY: 'saas',
+      PADDLE_CREDIT_PACK_TAX_CATEGORY_CONFIRMED: 'true',
+      PADDLE_SUBSCRIPTION_HISTORY_CONFIRMED: 'true',
+      PADDLE_TRANSACTION_READ_CONFIRMED: 'false'
+    })).toThrow('requires a Paddle API key with transaction.read');
   });
 
   test('catalogs are unique and expose names/defaults rather than secret values', () => {
@@ -221,10 +312,12 @@ describe('environment contract', () => {
     expect(OPTIONAL_DEFAULTS.CREDIT_PACK_PURCHASES_ENABLED).toBe('false');
     expect(OPTIONAL_DEFAULTS.PADDLE_CREDIT_PACK_TAX_CATEGORY).toBe('');
     expect(OPTIONAL_DEFAULTS.PADDLE_CREDIT_PACK_TAX_CATEGORY_CONFIRMED).toBe('false');
+    expect(OPTIONAL_DEFAULTS.PADDLE_SUBSCRIPTION_HISTORY_CONFIRMED).toBe('false');
+    expect(OPTIONAL_DEFAULTS.PADDLE_TRANSACTION_READ_CONFIRMED).toBe('false');
     expect(OPTIONAL_DEFAULTS).not.toHaveProperty('SUPABASE_SERVICE_ROLE_KEY');
   });
 
-  test('Playwright credit-pack fixture explicitly confirms only its test tax placeholder', () => {
+  test('Playwright credit-pack fixture explicitly confirms only its test placeholders', () => {
     const config = fs.readFileSync(
       path.join(__dirname, '..', '..', 'playwright.config.js'),
       'utf8'
@@ -233,6 +326,8 @@ describe('environment contract', () => {
     expect(config).toContain("CREDIT_PACK_PURCHASES_ENABLED: 'true'");
     expect(config).toContain("PADDLE_CREDIT_PACK_TAX_CATEGORY: 'saas'");
     expect(config).toContain("PADDLE_CREDIT_PACK_TAX_CATEGORY_CONFIRMED: 'true'");
+    expect(config).toContain("PADDLE_SUBSCRIPTION_HISTORY_CONFIRMED: 'true'");
+    expect(config).toContain("PADDLE_TRANSACTION_READ_CONFIRMED: 'true'");
     expect(config).toContain('Test-only placeholder; not evidence of Paddle tax approval.');
   });
 

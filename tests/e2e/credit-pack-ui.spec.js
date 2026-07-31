@@ -33,6 +33,14 @@ const SECOND_PAID_SESSION = {
 const PURCHASE_REQUEST_ID = '11111111-1111-4111-8111-111111111111';
 const SECOND_PURCHASE_REQUEST_ID = '33333333-3333-4333-8333-333333333333';
 const CHECKOUT_ATTEMPT_ID = '22222222-2222-4222-8222-222222222222';
+const OPEN_PURCHASE_STATUSES = new Set([
+  'previewing',
+  'created',
+  'charging',
+  'submitted',
+  'provider_unknown',
+  'withheld'
+]);
 const CATALOG = {
   analysisCreditCost: 2,
   storyboardCreditCost: 30,
@@ -117,23 +125,90 @@ async function installPaymentFixture(page, {
   credits = 0,
   purchaseMode = 'submitted',
   initialPurchaseStatus = 'submitted',
-  storedRequestId = null
+  storedRequestId = null,
+  creditPackPurchasesEnabled = true,
+  statusNotFoundCount = 0,
+  storageWriteFails = false,
+  purchaseReviewRequired = false,
+  previewMode = 'success',
+  previewDelayMs = 0,
+  cancelMode = 'success',
+  cancelDelayMs = 0,
+  sharedState = null
 } = {}) {
-  const state = {
+  const publicCatalog = {
+    ...CATALOG,
+    creditPacks: {
+      ...CATALOG.creditPacks,
+      enabled: creditPackPurchasesEnabled,
+      packs: creditPackPurchasesEnabled ? CATALOG.creditPacks.packs : []
+    }
+  };
+  const state = sharedState || {
     credits,
     previewRequests: [],
+    previewReservations: 0,
     purchaseRequests: [],
+    purchaseHandlerEntries: 0,
+    providerChargeAttempts: 0,
+    cancelRequests: [],
     pendingRecoveryRequests: 0,
     pendingRecoveryAuthorizations: [],
     pendingPurchase: null,
+    openPurchase: null,
     statusRequests: 0,
+    statusRequestIds: [],
+    unhandledApiRequests: [],
     subscriptionRequests: [],
-    purchaseStatus: initialPurchaseStatus
+    purchaseStatus: initialPurchaseStatus,
+    statusNotFoundRemaining: statusNotFoundCount,
+    purchaseReviewRequired
   };
+  if (!sharedState && storedRequestId) {
+    const pack = CATALOG.creditPacks.packs[0];
+    state.openPurchase = {
+      purchaseRequestId: storedRequestId,
+      status: initialPurchaseStatus,
+      pack,
+      expiryDays: 365,
+      confirmationVersion: 1,
+      preview: makePreview(pack),
+      createdAt: '2026-07-29T00:00:00.000Z',
+      completedAt: [
+        'completed',
+        'withheld',
+        'refunded',
+        'failed',
+        'chargeback'
+      ].includes(initialPurchaseStatus)
+        ? '2026-07-29T00:00:01.000Z'
+        : null
+    };
+    state.pendingPurchase = state.openPurchase;
+  }
 
-  await page.addInitScript(({ fakeSession, pendingRequestId }) => {
+  await page.addInitScript(({
+    fakeSession,
+    pendingRequestId,
+    shouldFailRecoveryStorage
+  }) => {
+    if (shouldFailRecoveryStorage) {
+      const originalSetItem = Storage.prototype.setItem;
+      Storage.prototype.setItem = function setItem(key, value) {
+        if (
+          this === window.localStorage
+          && String(key).startsWith('promptgen:credit-pack-purchase:')
+        ) {
+          throw new DOMException(
+            'Credit pack recovery storage is unavailable.',
+            'QuotaExceededError'
+          );
+        }
+        return originalSetItem.call(this, key, value);
+      };
+    }
     if (fakeSession && pendingRequestId) {
-      window.sessionStorage.setItem(
+      window.localStorage.setItem(
         `promptgen:credit-pack-purchase:${fakeSession.user.id}`,
         pendingRequestId
       );
@@ -144,7 +219,7 @@ async function installPaymentFixture(page, {
       currentSession = nextSession;
       authStateCallback?.(event, nextSession);
     };
-    window.supabase = {
+    const supabaseDouble = {
       createClient: () => ({
         auth: {
           getSession: async () => ({ data: { session: currentSession } }),
@@ -159,9 +234,15 @@ async function installPaymentFixture(page, {
         }
       })
     };
+    Object.defineProperty(window, 'supabase', {
+      configurable: false,
+      enumerable: true,
+      writable: false,
+      value: supabaseDouble
+    });
     window.__paddleCheckoutCalls = [];
     window.__paddleInitializeCount = 0;
-    window.Paddle = {
+    const paddleDouble = {
       Initialize: options => {
         window.__paddleInitializeCount += 1;
         window.__paddleCallback = options.eventCallback;
@@ -172,15 +253,54 @@ async function installPaymentFixture(page, {
         }
       }
     };
+    Object.defineProperty(window, 'Paddle', {
+      configurable: false,
+      enumerable: true,
+      writable: false,
+      value: paddleDouble
+    });
   }, {
     fakeSession: session,
-    pendingRequestId: storedRequestId
+    pendingRequestId: storedRequestId,
+    shouldFailRecoveryStorage: storageWriteFails
   });
 
+  // Register the fail-closed API fallback first. Playwright evaluates newer,
+  // more specific routes before older routes, so the handlers below still win
+  // while any forgotten local API call is kept away from the dummy services.
+  await page.route(/\/api\//, async route => {
+    state.unhandledApiRequests.push({
+      method: route.request().method(),
+      pathname: new URL(route.request().url()).pathname
+    });
+    await route.fulfill({
+      status: 501,
+      contentType: 'application/json',
+      body: JSON.stringify({ success: false, code: 'UNHANDLED_E2E_API' })
+    });
+  });
+
+  // Keep the deterministic SDK doubles installed above. Otherwise the remote
+  // UMD scripts can overwrite them after addInitScript, which makes multi-page
+  // tests depend on CDN timing and may leak requests to a local Supabase URL.
+  await page.route('https://cdn.jsdelivr.net/**/supabase.js', route => (
+    route.fulfill({
+      status: 200,
+      contentType: 'application/javascript',
+      body: ''
+    })
+  ));
+  await page.route('https://cdn.paddle.com/**/paddle.js', route => (
+    route.fulfill({
+      status: 200,
+      contentType: 'application/javascript',
+      body: ''
+    })
+  ));
   await page.route('**/api/catalog', route => route.fulfill({
     status: 200,
     contentType: 'application/json',
-    body: JSON.stringify({ success: true, catalog: CATALOG })
+    body: JSON.stringify({ success: true, catalog: publicCatalog })
   }));
   await page.route('**/api/user/profile', route => route.fulfill({
     status: 200,
@@ -195,6 +315,16 @@ async function installPaymentFixture(page, {
       credits: state.credits,
       daily_used: 0
     })
+  }));
+  await page.route('**/api/analytics/events', route => route.fulfill({
+    status: 202,
+    contentType: 'application/json',
+    body: JSON.stringify({ accepted: true, duplicate: false })
+  }));
+  await page.route('**/api/storyboard/active', route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({ success: true, items: [] })
   }));
   await page.route(/\/api\/payment\/checkout(?:\?.*)?$/, async route => {
     state.subscriptionRequests.push({
@@ -213,17 +343,67 @@ async function installPaymentFixture(page, {
   });
   await page.route(/\/api\/payment\/credit-packs\/preview(?:\?.*)?$/, async route => {
     const body = route.request().postDataJSON();
-    state.previewRequests.push({
+    const requestRecord = {
       body,
       authorization: route.request().headers().authorization
-    });
+    };
+    state.previewRequests.push(requestRecord);
     const pack = CATALOG.creditPacks.packs.find(candidate => candidate.key === body.packKey);
+
+    if (
+      pack
+      && state.openPurchase
+      && OPEN_PURCHASE_STATUSES.has(state.openPurchase.status)
+    ) {
+      await route.fulfill({
+        status: 409,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          success: false,
+          code: 'PURCHASE_ALREADY_PENDING',
+          purchaseRequestId: state.openPurchase.purchaseRequestId,
+          status: state.openPurchase.status,
+          pack: state.openPurchase.pack
+        })
+      });
+      return;
+    }
+
+    if (pack) {
+      state.previewReservations += 1;
+      state.purchaseStatus = 'previewing';
+      state.openPurchase = {
+        purchaseRequestId: PURCHASE_REQUEST_ID,
+        status: 'previewing',
+        pack,
+        expiryDays: 365,
+        confirmationVersion: 1,
+        preview: makePreview(pack),
+        createdAt: '2026-07-29T00:00:00.000Z',
+        completedAt: null
+      };
+      state.pendingPurchase = state.openPurchase;
+    }
+    if (previewDelayMs > 0) {
+      await new Promise(resolve => setTimeout(resolve, previewDelayMs));
+    }
+    if (pack) {
+      state.purchaseStatus = 'created';
+      state.openPurchase.status = 'created';
+    }
+    if (pack && previewMode === 'lost_response') {
+      await route.abort('failed');
+      return;
+    }
     await route.fulfill({
       status: pack ? 200 : 400,
       contentType: 'application/json',
       body: JSON.stringify(pack
         ? {
             success: true,
+            purchaseRequestId: PURCHASE_REQUEST_ID,
+            status: 'created',
+            confirmationVersion: 1,
             pack,
             expiryDays: 365,
             preview: makePreview(pack)
@@ -242,13 +422,46 @@ async function installPaymentFixture(page, {
     });
     const pack = CATALOG.creditPacks.packs.find(candidate => candidate.key === body.packKey);
 
+    if (
+      purchaseMode === 'api_rate_limited'
+      || purchaseMode === 'auth_invalid'
+    ) {
+      const rateLimited = purchaseMode === 'api_rate_limited';
+      await route.fulfill({
+        status: rateLimited ? 429 : 401,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          success: false,
+          error: rateLimited
+            ? 'Too many requests, please try again later.'
+            : 'Invalid or expired token',
+          code: rateLimited ? 'API_RATE_LIMITED' : 'AUTH_INVALID',
+          requestProcessed: false
+        })
+      });
+      return;
+    }
+    state.purchaseHandlerEntries += 1;
+
     if (purchaseMode === 'total_changed' && state.purchaseRequests.length === 1) {
+      state.purchaseStatus = 'created';
+      if (state.openPurchase) {
+        state.openPurchase.status = 'created';
+        state.openPurchase.confirmationVersion = 2;
+        state.openPurchase.preview = makePreview(pack, {
+          tax: '120',
+          grandTotal: '1120'
+        });
+      }
       await route.fulfill({
         status: 409,
         contentType: 'application/json',
         body: JSON.stringify({
           success: false,
           code: 'CREDIT_PACK_TOTAL_CHANGED',
+          purchaseRequestId: body.purchaseRequestId,
+          status: 'created',
+          confirmationVersion: 2,
           pack,
           expiryDays: 365,
           preview: makePreview(pack, { tax: '120', grandTotal: '1120' })
@@ -257,16 +470,58 @@ async function installPaymentFixture(page, {
       return;
     }
 
+    const canClaim = state.openPurchase
+      && state.openPurchase.purchaseRequestId === body.purchaseRequestId
+      && state.openPurchase.status === 'created'
+      && state.openPurchase.confirmationVersion === body.confirmationVersion;
+    if (!canClaim) {
+      const pendingStatus = state.openPurchase?.status || state.purchaseStatus;
+      await route.fulfill({
+        status: 202,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          success: false,
+          code: 'PURCHASE_ALREADY_PENDING',
+          purchaseRequestId:
+            state.openPurchase?.purchaseRequestId || body.purchaseRequestId,
+          status: pendingStatus,
+          pack: state.openPurchase?.pack || pack
+        })
+      });
+      return;
+    }
+
+    state.openPurchase.status = 'charging';
+    state.purchaseStatus = 'charging';
+    state.providerChargeAttempts += 1;
     const providerUnknown = purchaseMode === 'provider_unknown';
-    state.purchaseStatus = providerUnknown ? 'provider_unknown' : state.purchaseStatus;
+    const completedBeforeResponse =
+      purchaseMode === 'lost_response_fast_completed';
+    state.purchaseStatus = providerUnknown
+      ? 'provider_unknown'
+      : 'submitted';
+    if (completedBeforeResponse) {
+      state.purchaseStatus = 'completed';
+    }
     state.pendingPurchase = {
-      purchaseRequestId: PURCHASE_REQUEST_ID,
-      status: providerUnknown ? 'provider_unknown' : 'submitted',
+      ...state.openPurchase,
+      purchaseRequestId: body.purchaseRequestId,
+      status: providerUnknown
+        ? 'provider_unknown'
+        : completedBeforeResponse
+          ? 'completed'
+          : 'submitted',
       pack,
       createdAt: '2026-07-29T00:00:00.000Z',
-      completedAt: null
+      completedAt: completedBeforeResponse
+        ? '2026-07-29T00:00:01.000Z'
+        : null
     };
-    if (purchaseMode === 'lost_response') {
+    state.openPurchase = state.pendingPurchase;
+    if (
+      purchaseMode === 'lost_response'
+      || purchaseMode === 'lost_response_fast_completed'
+    ) {
       await route.abort('failed');
       return;
     }
@@ -275,13 +530,65 @@ async function installPaymentFixture(page, {
       contentType: 'application/json',
       body: JSON.stringify({
         success: true,
-        purchaseRequestId: PURCHASE_REQUEST_ID,
+        purchaseRequestId: body.purchaseRequestId,
         status: providerUnknown ? 'provider_unknown' : 'submitted',
         code: providerUnknown ? 'PURCHASE_CONFIRMATION_PENDING' : undefined,
         pack
       })
     });
   });
+  await page.route(
+    /\/api\/payment\/credit-packs\/purchase\/[^/?]+\/cancel(?:\?.*)?$/,
+    async route => {
+      const requestId = new URL(route.request().url()).pathname
+        .split('/')
+        .filter(Boolean)
+        .at(-2);
+      state.cancelRequests.push({
+        purchaseRequestId: requestId,
+        body: route.request().postDataJSON(),
+        authorization: route.request().headers().authorization
+      });
+      if (cancelDelayMs > 0) {
+        await new Promise(resolve => setTimeout(resolve, cancelDelayMs));
+      }
+      if (cancelMode === 'lost_response') {
+        await route.abort('failed');
+        return;
+      }
+      if (
+        state.openPurchase?.purchaseRequestId === requestId
+        && ['previewing', 'created'].includes(state.openPurchase.status)
+      ) {
+        state.purchaseStatus = 'failed';
+        state.openPurchase.status = 'failed';
+        state.openPurchase.completedAt = '2026-07-29T00:00:01.000Z';
+        state.pendingPurchase = state.openPurchase;
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            success: true,
+            purchaseRequestId: requestId,
+            status: 'failed',
+            chargeMayHaveRun: false
+          })
+        });
+        return;
+      }
+      await route.fulfill({
+        status: 409,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          success: false,
+          code: 'PURCHASE_ALREADY_PENDING',
+          purchaseRequestId: requestId,
+          status: state.openPurchase?.status || state.purchaseStatus,
+          pack: state.openPurchase?.pack || CATALOG.creditPacks.packs[0]
+        })
+      });
+    }
+  );
   await page.route(/\/api\/payment\/credit-packs\/purchase\/pending(?:\?.*)?$/, async route => {
     state.pendingRecoveryRequests += 1;
     state.pendingRecoveryAuthorizations.push(
@@ -293,24 +600,75 @@ async function installPaymentFixture(page, {
       body: JSON.stringify({
         success: true,
         purchase: state.pendingPurchase
+          ? {
+              ...state.pendingPurchase,
+              status: state.purchaseStatus
+            }
+          : null
       })
     });
   });
   await page.route(/\/api\/payment\/credit-packs\/purchase\/(?!pending(?:[/?]|$))[^/?]+(?:\?.*)?$/, async route => {
     state.statusRequests += 1;
-    const pack = CATALOG.creditPacks.packs[0];
+    if (state.statusNotFoundRemaining > 0) {
+      state.statusNotFoundRemaining -= 1;
+      await route.fulfill({
+        status: 404,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          success: false,
+          code: 'PURCHASE_REQUEST_NOT_FOUND'
+        })
+      });
+      return;
+    }
+    const requestId = new URL(route.request().url()).pathname
+      .split('/')
+      .filter(Boolean)
+      .at(-1);
+    state.statusRequestIds.push(requestId);
+    if (
+      state.openPurchase
+      && requestId !== state.openPurchase.purchaseRequestId
+    ) {
+      await route.fulfill({
+        status: 404,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          success: false,
+          code: 'PURCHASE_REQUEST_NOT_FOUND'
+        })
+      });
+      return;
+    }
+    const pack = state.openPurchase?.pack || CATALOG.creditPacks.packs[0];
+    const purchase = state.openPurchase;
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
       body: JSON.stringify({
         success: true,
-        purchaseRequestId: PURCHASE_REQUEST_ID,
+        purchaseRequestId: requestId,
         status: state.purchaseStatus,
         pack,
+        expiryDays: purchase?.expiryDays,
+        confirmationVersion: purchase?.confirmationVersion,
+        preview: purchase?.preview,
         createdAt: '2026-07-29T00:00:00.000Z',
-        completedAt: state.purchaseStatus === 'completed'
+        completedAt: [
+          'completed',
+          'withheld',
+          'refunded',
+          'failed',
+          'chargeback'
+        ].includes(
+          state.purchaseStatus
+        )
           ? '2026-07-29T00:00:01.000Z'
-          : null
+          : null,
+        reviewRequired:
+          state.purchaseReviewRequired
+          || ['withheld', 'chargeback'].includes(state.purchaseStatus)
       })
     });
   });
@@ -354,7 +712,10 @@ test('subscription checkout sends only the plan to the server and opens only its
   });
   await page.goto('/', { waitUntil: 'domcontentloaded' });
 
-  await expect.poll(async () => page.locator('#planBadge').textContent()).toBe('Free');
+  await expect.poll(
+    async () => page.locator('#planBadge').textContent(),
+    { timeout: 15_000 }
+  ).toBe('Free');
   await page.locator('#proPlanBtn').click();
   await expect.poll(() => fixture.subscriptionRequests).toEqual([{
     body: { plan: 'pro' },
@@ -405,20 +766,28 @@ test('paid users explicitly confirm the tax-inclusive total and complete only fr
   await expect(page.locator('#creditPackModalTerms')).toContainText('expire 365 days');
   await expect(page.locator('#creditPackModalTerms')).toContainText('active Pro or Enterprise');
   await expect(page.locator('#creditPackModalTerms')).toContainText('no cash value');
+  await expect.poll(() => page.evaluate(userId => (
+    window.localStorage.getItem(`promptgen:credit-pack-purchase:${userId}`)
+  ), PAID_SESSION.user.id)).toBe(PURCHASE_REQUEST_ID);
 
   await page.locator('#creditPackModalConfirm').click();
   await expect.poll(() => fixture.purchaseRequests).toEqual([{
     body: {
       packKey: 'usage_600',
+      purchaseRequestId: PURCHASE_REQUEST_ID,
+      confirmationVersion: 1,
       confirmedGrandTotal: '1080',
       confirmedCurrencyCode: 'USD'
     },
     authorization: `Bearer ${PAID_SESSION.access_token}`
   }]);
   await expect.poll(() => page.evaluate(userId => (
-    window.sessionStorage.getItem(`promptgen:credit-pack-purchase:${userId}`)
+    window.localStorage.getItem(`promptgen:credit-pack-purchase:${userId}`)
   ), PAID_SESSION.user.id)).toBe(PURCHASE_REQUEST_ID);
   await expect(page.locator('#creditPackStatus')).toHaveAttribute('data-state', 'pending');
+  await expect(page.locator('#creditPackStatus')).toBeFocused();
+  expect(fixture.providerChargeAttempts).toBe(1);
+  expect(fixture.unhandledApiRequests).toEqual([]);
   expect(await page.evaluate(() => window.__paddleInitializeCount)).toBe(0);
   expect(await page.evaluate(() => window.__paddleCheckoutCalls)).toEqual([]);
 
@@ -433,7 +802,7 @@ test('paid users explicitly confirm the tax-inclusive total and complete only fr
   });
   await expect(page.locator('#creditPackStatus')).toContainText('Credits confirmed');
   await expect.poll(() => page.evaluate(userId => (
-    window.sessionStorage.getItem(`promptgen:credit-pack-purchase:${userId}`)
+    window.localStorage.getItem(`promptgen:credit-pack-purchase:${userId}`)
   ), PAID_SESSION.user.id)).toBeNull();
 });
 
@@ -456,15 +825,290 @@ test('a changed tax-inclusive total updates the modal and requires a second conf
 
   await page.locator('#creditPackModalConfirm').click();
   await expect.poll(() => fixture.purchaseRequests.length).toBe(2);
+  expect(fixture.purchaseRequests[0].body.confirmationVersion).toBe(1);
   expect(fixture.purchaseRequests[1].body).toEqual({
     packKey: 'usage_600',
+    purchaseRequestId: PURCHASE_REQUEST_ID,
+    confirmationVersion: 2,
     confirmedGrandTotal: '1120',
     confirmedCurrencyCode: 'USD'
   });
+  expect(fixture.providerChargeAttempts).toBe(1);
   await expect(page.locator('#creditPackConfirmModal')).not.toHaveClass(/open/);
 });
 
-test('pending purchases resume from user-scoped session storage after reload', async ({ page }) => {
+test('a recovery storage failure cancels the server reservation before unlocking', async ({ page }) => {
+  const fixture = await installPaymentFixture(page, {
+    session: PAID_SESSION,
+    plan: 'pro',
+    storageWriteFails: true
+  });
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await expect.poll(async () => page.locator('#planBadge').textContent()).toBe('Pro');
+
+  await page.locator('[data-credit-pack-key="usage_600"]').click();
+
+  await expect.poll(() => fixture.cancelRequests.length).toBe(1);
+  await expect(page.locator('#creditPackConfirmModal')).not.toHaveClass(/open/);
+  await expect(page.locator('#creditPackStatus')).toContainText(
+    'could not save the payment recovery key'
+  );
+  await expect(page.locator('#creditPackStatus')).toHaveAttribute(
+    'data-state',
+    'error'
+  );
+  expect(fixture.purchaseRequests).toEqual([]);
+  expect(fixture.providerChargeAttempts).toBe(0);
+  expect(fixture.cancelRequests[0]).toEqual({
+    purchaseRequestId: PURCHASE_REQUEST_ID,
+    body: { reason: 'client_cancelled' },
+    authorization: `Bearer ${PAID_SESSION.access_token}`
+  });
+  await expect.poll(() => page.evaluate(userId => (
+    window.localStorage.getItem(`promptgen:credit-pack-purchase:${userId}`)
+  ), PAID_SESSION.user.id)).toBeNull();
+  await expect(
+    page.locator('[data-credit-pack-key="usage_600"]')
+  ).toBeEnabled();
+});
+
+test('a lost cancellation response keeps a storage-failed reservation locked', async ({ page }) => {
+  const fixture = await installPaymentFixture(page, {
+    session: PAID_SESSION,
+    plan: 'pro',
+    storageWriteFails: true,
+    cancelMode: 'lost_response'
+  });
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await expect.poll(async () => page.locator('#planBadge').textContent()).toBe('Pro');
+
+  await page.locator('[data-credit-pack-key="usage_600"]').click();
+
+  await expect.poll(() => fixture.cancelRequests.length).toBe(1);
+  await expect(page.locator('#creditPackConfirmModal')).toHaveClass(/open/);
+  await expect(page.locator('#creditPackStatus')).toHaveAttribute(
+    'data-state',
+    'pending'
+  );
+  await expect(page.locator('#creditPackModalError')).toContainText(
+    'temporarily unavailable'
+  );
+  await expect(
+    page.locator('[data-credit-pack-key="usage_600"]')
+  ).toBeDisabled();
+  expect(fixture.purchaseRequests).toEqual([]);
+  expect(fixture.providerChargeAttempts).toBe(0);
+  await expect.poll(() => page.evaluate(userId => (
+    window.localStorage.getItem(`promptgen:credit-pack-purchase:${userId}`)
+  ), PAID_SESSION.user.id)).toBeNull();
+});
+
+for (const scenario of [
+  {
+    mode: 'auth_invalid',
+    label: 'expired authentication'
+  },
+  {
+    mode: 'api_rate_limited',
+    label: 'the application rate limiter'
+  }
+]) {
+  test(`${scenario.label} keeps the same reserved request available for a safe retry`, async ({ page }) => {
+    const fixture = await installPaymentFixture(page, {
+      session: PAID_SESSION,
+      plan: 'pro',
+      purchaseMode: scenario.mode
+    });
+    await page.goto('/', { waitUntil: 'domcontentloaded' });
+    await expect.poll(async () => page.locator('#planBadge').textContent()).toBe('Pro');
+
+    const buyButton = page.locator(
+      '[data-credit-pack-key="usage_600"]'
+    );
+    await buyButton.click();
+    await page.locator('#creditPackModalConfirm').click();
+
+    await expect.poll(() => fixture.purchaseRequests.length).toBe(1);
+    expect(fixture.purchaseHandlerEntries).toBe(0);
+    expect(fixture.providerChargeAttempts).toBe(0);
+    await expect(page.locator('#creditPackConfirmModal')).toHaveClass(/open/);
+    await expect(page.locator('#creditPackStatus')).toHaveAttribute(
+      'data-state',
+      'error'
+    );
+    await expect(page.locator('#creditPackStatus')).toContainText(
+      'temporarily unavailable'
+    );
+    await expect.poll(() => page.evaluate(userId => (
+      window.localStorage.getItem(`promptgen:credit-pack-purchase:${userId}`)
+    ), PAID_SESSION.user.id)).toBe(PURCHASE_REQUEST_ID);
+    await expect(buyButton).toBeDisabled();
+    await expect(page.locator('#creditPackModalConfirm')).toBeFocused();
+  });
+}
+
+test('exact-status 404 CAS-replaces a stale token with the authoritative owner-scoped request across reload', async ({ page }) => {
+  const fixture = await installPaymentFixture(page, {
+    session: PAID_SESSION,
+    plan: 'pro'
+  });
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await expect.poll(async () => page.locator('#planBadge').textContent()).toBe('Pro');
+
+  await page.locator('[data-credit-pack-key="usage_600"]').click();
+  await expect(page.locator('#creditPackConfirmModal')).toHaveClass(/open/);
+  await expect.poll(() => page.evaluate(userId => (
+    window.localStorage.getItem(`promptgen:credit-pack-purchase:${userId}`)
+  ), PAID_SESSION.user.id)).toBe(PURCHASE_REQUEST_ID);
+  await page.evaluate(({ userId, requestId }) => {
+    window.localStorage.setItem(
+      `promptgen:credit-pack-purchase:${userId}`,
+      requestId
+    );
+  }, {
+    userId: PAID_SESSION.user.id,
+    requestId: SECOND_PURCHASE_REQUEST_ID
+  });
+  await page.locator('#creditPackModalConfirm').click();
+
+  expect(fixture.purchaseRequests).toEqual([]);
+  await expect.poll(() => fixture.statusRequestIds).toContain(
+    SECOND_PURCHASE_REQUEST_ID
+  );
+  await expect.poll(() => fixture.pendingRecoveryRequests)
+    .toBeGreaterThanOrEqual(2);
+  await expect.poll(() => fixture.statusRequestIds).toContain(
+    PURCHASE_REQUEST_ID
+  );
+  expect(fixture.providerChargeAttempts).toBe(0);
+  await expect(page.locator('#creditPackConfirmModal')).toHaveClass(/open/);
+  await expect(page.locator('#creditPackModalTotal')).toHaveText('$10.80');
+  await expect.poll(() => page.evaluate(userId => (
+    window.localStorage.getItem(`promptgen:credit-pack-purchase:${userId}`)
+  ), PAID_SESSION.user.id)).toBe(PURCHASE_REQUEST_ID);
+
+  const statusRequestsBeforeReload = fixture.statusRequestIds.length;
+  await page.reload({ waitUntil: 'domcontentloaded' });
+
+  await expect.poll(() => fixture.statusRequestIds.length)
+    .toBeGreaterThan(statusRequestsBeforeReload);
+  expect(
+    fixture.statusRequestIds.slice(statusRequestsBeforeReload)
+  ).toContain(PURCHASE_REQUEST_ID);
+  await expect(page.locator('#creditPackConfirmModal')).toHaveClass(/open/);
+  await expect(page.locator('#creditPackModalTotal')).toHaveText('$10.80');
+  await expect.poll(() => page.evaluate(userId => (
+    window.localStorage.getItem(`promptgen:credit-pack-purchase:${userId}`)
+  ), PAID_SESSION.user.id)).toBe(PURCHASE_REQUEST_ID);
+  expect(fixture.purchaseRequests).toEqual([]);
+  expect(fixture.providerChargeAttempts).toBe(0);
+});
+
+test('interleaved tabs share one reservation and one provider money-moving attempt', async ({
+  page,
+  context
+}) => {
+  test.setTimeout(120_000);
+  const fixture = await installPaymentFixture(page, {
+    session: PAID_SESSION,
+    plan: 'pro',
+    storedRequestId: PURCHASE_REQUEST_ID,
+    initialPurchaseStatus: 'created'
+  });
+  await page.goto('/', { waitUntil: 'domcontentloaded', timeout: 30_000 });
+  await expect(page.locator('#creditPackConfirmModal')).toHaveClass(
+    /open/,
+    { timeout: 30_000 }
+  );
+  const firstPageStatusRequests = fixture.statusRequestIds.length;
+  const secondPage = await context.newPage();
+  await installPaymentFixture(secondPage, {
+    session: PAID_SESSION,
+    plan: 'pro',
+    storedRequestId: PURCHASE_REQUEST_ID,
+    initialPurchaseStatus: 'created',
+    sharedState: fixture
+  });
+  await secondPage.goto('/', {
+    waitUntil: 'domcontentloaded',
+    timeout: 30_000
+  });
+  await expect(secondPage.locator('#creditPackConfirmModal')).toHaveClass(
+    /open/,
+    { timeout: 30_000 }
+  );
+  await expect.poll(() => fixture.statusRequestIds.length)
+    .toBeGreaterThan(firstPageStatusRequests);
+  await expect.poll(() => fixture.statusRequestIds.filter(
+    requestId => requestId === PURCHASE_REQUEST_ID
+  ).length)
+    .toBeGreaterThanOrEqual(2);
+  expect(fixture.previewRequests).toEqual([]);
+  expect(fixture.previewReservations).toBe(0);
+  expect(fixture.openPurchase).toMatchObject({
+    purchaseRequestId: PURCHASE_REQUEST_ID,
+    status: 'created',
+    confirmationVersion: 1
+  });
+
+  await page.bringToFront();
+  const firstPurchaseResponse = page.waitForResponse(response => (
+    new URL(response.url()).pathname ===
+      '/api/payment/credit-packs/purchase'
+    && response.request().method() === 'POST'
+  ));
+  await page.locator('#creditPackModalConfirm').click({ timeout: 5_000 });
+  await secondPage.bringToFront();
+  const secondPurchaseResponse = secondPage.waitForResponse(response => (
+    new URL(response.url()).pathname ===
+      '/api/payment/credit-packs/purchase'
+    && response.request().method() === 'POST'
+  ));
+  await secondPage.locator('#creditPackModalConfirm').click({
+    timeout: 5_000
+  });
+  const purchaseResponses = await Promise.all([
+    firstPurchaseResponse,
+    secondPurchaseResponse
+  ]);
+  await Promise.all(purchaseResponses.map(response => response.finished()));
+  await expect.poll(() => fixture.purchaseRequests.length).toBe(2);
+  expect(fixture.providerChargeAttempts).toBe(1);
+  expect(fixture.unhandledApiRequests).toEqual([]);
+  await expect(secondPage.locator('#creditPackConfirmModal'))
+    .not.toHaveClass(/open/, { timeout: 15_000 });
+  const expectedPurchaseBody = {
+    packKey: 'usage_600',
+    purchaseRequestId: PURCHASE_REQUEST_ID,
+    confirmationVersion: 1,
+    confirmedGrandTotal: '1080',
+    confirmedCurrencyCode: 'USD'
+  };
+  expect(fixture.purchaseRequests.map(request => request.body)).toEqual([
+    expectedPurchaseBody,
+    expectedPurchaseBody
+  ]);
+  expect(fixture.openPurchase).toMatchObject({
+    purchaseRequestId: PURCHASE_REQUEST_ID,
+    status: 'submitted'
+  });
+  await expect(secondPage.locator('#creditPackStatus')).toHaveAttribute(
+    'data-state',
+    'pending'
+  );
+  // localStorage is shared by same-origin pages in this browser context. Read
+  // it once from the foreground tab: evaluating the redundant background-tab
+  // copy can stall on Windows Chrome while its status poll is still active.
+  await secondPage.bringToFront();
+  expect(await secondPage.evaluate(userId => (
+    window.localStorage.getItem(`promptgen:credit-pack-purchase:${userId}`)
+  ), PAID_SESSION.user.id)).toBe(PURCHASE_REQUEST_ID);
+  // The Playwright context fixture owns this page and closes it during test
+  // teardown. Closing it here can wait on the deliberately active status poll
+  // and turn a completed race assertion into a browser-shutdown timeout.
+});
+
+test('pending purchases resume from user-scoped local storage after reload', async ({ page }) => {
   const fixture = await installPaymentFixture(page, {
     session: PAID_SESSION,
     plan: 'pro',
@@ -477,9 +1121,239 @@ test('pending purchases resume from user-scoped session storage after reload', a
   await expect(page.locator('#creditPackStatus')).toHaveAttribute('data-state', 'success');
   expect(fixture.purchaseRequests).toEqual([]);
   await expect.poll(() => page.evaluate(userId => (
-    window.sessionStorage.getItem(`promptgen:credit-pack-purchase:${userId}`)
+    window.localStorage.getItem(`promptgen:credit-pack-purchase:${userId}`)
   ), PAID_SESSION.user.id)).toBeNull();
   expect(fixture.pendingRecoveryRequests).toBe(0);
+});
+
+test('a reserved created preview restores the exact confirmation after reload', async ({ page }) => {
+  const fixture = await installPaymentFixture(page, {
+    session: PAID_SESSION,
+    plan: 'pro',
+    storedRequestId: PURCHASE_REQUEST_ID,
+    initialPurchaseStatus: 'created'
+  });
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+
+  await expect.poll(() => fixture.statusRequests).toBeGreaterThan(0);
+  await expect(page.locator('#creditPackConfirmModal')).toHaveClass(/open/);
+  await expect(page.locator('#creditPackModalTotal')).toHaveText('$10.80');
+  await expect(page.locator('#creditPackModalTerms')).toContainText(
+    'expire 365 days'
+  );
+  await expect.poll(() => page.evaluate(userId => (
+    window.localStorage.getItem(`promptgen:credit-pack-purchase:${userId}`)
+  ), PAID_SESSION.user.id)).toBe(PURCHASE_REQUEST_ID);
+  expect(fixture.purchaseRequests).toEqual([]);
+  expect(fixture.providerChargeAttempts).toBe(0);
+
+  await page.locator('#creditPackModalCancel').click();
+  await expect.poll(() => fixture.cancelRequests.length).toBe(1);
+  await expect(page.locator('#creditPackConfirmModal')).not.toHaveClass(/open/);
+});
+
+test('withheld payments stay locked for review and cannot be purchased again', async ({ page }) => {
+  const fixture = await installPaymentFixture(page, {
+    session: PAID_SESSION,
+    plan: 'pro',
+    storedRequestId: PURCHASE_REQUEST_ID,
+    initialPurchaseStatus: 'withheld'
+  });
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+
+  await expect.poll(() => fixture.statusRequests).toBeGreaterThan(0);
+  await expect(page.locator('#creditPackStatus')).toHaveAttribute(
+    'data-state',
+    'error'
+  );
+  await expect(page.locator('#creditPackStatus')).toContainText(
+    'credits are on hold'
+  );
+  const buttons = page.locator('[data-credit-pack-key]');
+  await expect(buttons.first()).toBeDisabled();
+  await expect(buttons.first()).toHaveText('Review required');
+  expect(fixture.purchaseRequests).toEqual([]);
+  await expect.poll(() => page.evaluate(userId => (
+    window.localStorage.getItem(`promptgen:credit-pack-purchase:${userId}`)
+  ), PAID_SESSION.user.id)).toBe(PURCHASE_REQUEST_ID);
+});
+
+test('a confirmed refund clears the purchase lock without adding credits', async ({ page }) => {
+  const fixture = await installPaymentFixture(page, {
+    session: PAID_SESSION,
+    plan: 'pro',
+    credits: 80,
+    storedRequestId: PURCHASE_REQUEST_ID,
+    initialPurchaseStatus: 'refunded'
+  });
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+
+  await expect(page.locator('#usageDisplay')).toContainText('80');
+  await expect.poll(() => fixture.statusRequests).toBeGreaterThan(0);
+  await expect(page.locator('#creditPackStatus')).toHaveAttribute(
+    'data-state',
+    'success'
+  );
+  await expect(page.locator('#creditPackStatus')).toContainText(
+    'refund was confirmed'
+  );
+  const buttons = page.locator('[data-credit-pack-key]');
+  await expect(buttons).toHaveCount(3);
+  for (let index = 0; index < 3; index += 1) {
+    await expect(buttons.nth(index)).toBeEnabled();
+  }
+  await expect(page.locator('#usageDisplay')).toContainText('80');
+  expect(fixture.credits).toBe(80);
+  expect(fixture.purchaseRequests).toEqual([]);
+  await expect.poll(() => page.evaluate(userId => (
+    window.localStorage.getItem(`promptgen:credit-pack-purchase:${userId}`)
+  ), PAID_SESSION.user.id)).toBeNull();
+});
+
+test('a refunded purchase with consumed credits keeps the durable review lock', async ({ page }) => {
+  const fixture = await installPaymentFixture(page, {
+    session: PAID_SESSION,
+    plan: 'pro',
+    credits: 80,
+    storedRequestId: PURCHASE_REQUEST_ID,
+    initialPurchaseStatus: 'refunded',
+    purchaseReviewRequired: true
+  });
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+
+  await expect.poll(() => fixture.statusRequests).toBeGreaterThan(0);
+  await expect(page.locator('#creditPackStatus')).toHaveAttribute(
+    'data-state',
+    'error'
+  );
+  await expect(page.locator('#creditPackStatus')).toContainText(
+    'credits are on hold'
+  );
+  const buttons = page.locator('[data-credit-pack-key]');
+  await expect(buttons).toHaveCount(3);
+  for (let index = 0; index < 3; index += 1) {
+    await expect(buttons.nth(index)).toBeDisabled();
+    await expect(buttons.nth(index)).toHaveText('Review required');
+  }
+  expect(fixture.purchaseRequests).toEqual([]);
+  await expect.poll(() => page.evaluate(userId => (
+    window.localStorage.getItem(`promptgen:credit-pack-purchase:${userId}`)
+  ), PAID_SESSION.user.id)).toBe(PURCHASE_REQUEST_ID);
+});
+
+test('a chargeback keeps the review lock and shows a distinct warning', async ({ page }) => {
+  const fixture = await installPaymentFixture(page, {
+    session: PAID_SESSION,
+    plan: 'pro',
+    credits: 80,
+    storedRequestId: PURCHASE_REQUEST_ID,
+    initialPurchaseStatus: 'chargeback'
+  });
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+
+  await expect(page.locator('#usageDisplay')).toContainText('80');
+  await expect.poll(() => fixture.statusRequests).toBeGreaterThan(0);
+  await expect(page.locator('#creditPackStatus')).toHaveAttribute(
+    'data-state',
+    'error'
+  );
+  await expect(page.locator('#creditPackStatus')).toContainText(
+    'reversed by a chargeback'
+  );
+  const buttons = page.locator('[data-credit-pack-key]');
+  await expect(buttons).toHaveCount(3);
+  for (let index = 0; index < 3; index += 1) {
+    await expect(buttons.nth(index)).toBeDisabled();
+    await expect(buttons.nth(index)).toHaveText('Review required');
+  }
+  await expect(page.locator('#usageDisplay')).toContainText('80');
+  expect(fixture.credits).toBe(80);
+  expect(fixture.purchaseRequests).toEqual([]);
+  await expect.poll(() => page.evaluate(userId => (
+    window.localStorage.getItem(`promptgen:credit-pack-purchase:${userId}`)
+  ), PAID_SESSION.user.id)).toBe(PURCHASE_REQUEST_ID);
+});
+
+test('disabled sales still recover and display a stored withheld payment', async ({ page }) => {
+  const fixture = await installPaymentFixture(page, {
+    session: PAID_SESSION,
+    plan: 'pro',
+    storedRequestId: PURCHASE_REQUEST_ID,
+    initialPurchaseStatus: 'withheld',
+    creditPackPurchasesEnabled: false
+  });
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+
+  await expect(page.locator('#creditPackPanel')).toBeHidden();
+  await expect(page.locator('[data-credit-pack-key]')).toHaveCount(0);
+  await expect.poll(() => fixture.statusRequests).toBeGreaterThan(0);
+  await expect(page.locator('#creditPackStatus')).toBeVisible();
+  await expect(page.locator('#creditPackStatus')).toHaveAttribute(
+    'data-state',
+    'error'
+  );
+  await expect(page.locator('#creditPackStatus')).toContainText(
+    'credits are on hold'
+  );
+  expect(fixture.previewRequests).toEqual([]);
+  expect(fixture.purchaseRequests).toEqual([]);
+  await expect.poll(() => page.evaluate(userId => (
+    window.localStorage.getItem(`promptgen:credit-pack-purchase:${userId}`)
+  ), PAID_SESSION.user.id)).toBe(PURCHASE_REQUEST_ID);
+});
+
+test('disabled sales still recover a stored refund and clear its local lock', async ({ page }) => {
+  const fixture = await installPaymentFixture(page, {
+    session: PAID_SESSION,
+    plan: 'pro',
+    storedRequestId: PURCHASE_REQUEST_ID,
+    initialPurchaseStatus: 'refunded',
+    creditPackPurchasesEnabled: false
+  });
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+
+  await expect(page.locator('#creditPackPanel')).toBeHidden();
+  await expect(page.locator('[data-credit-pack-key]')).toHaveCount(0);
+  await expect.poll(() => fixture.statusRequests).toBeGreaterThan(0);
+  await expect(page.locator('#creditPackStatus')).toBeVisible();
+  await expect(page.locator('#creditPackStatus')).toHaveAttribute(
+    'data-state',
+    'success'
+  );
+  await expect(page.locator('#creditPackStatus')).toContainText(
+    'refund was confirmed'
+  );
+  expect(fixture.previewRequests).toEqual([]);
+  expect(fixture.purchaseRequests).toEqual([]);
+  await expect.poll(() => page.evaluate(userId => (
+    window.localStorage.getItem(`promptgen:credit-pack-purchase:${userId}`)
+  ), PAID_SESSION.user.id)).toBeNull();
+});
+
+test('a lost preview response recovers the same server reservation without charging', async ({ page }) => {
+  const fixture = await installPaymentFixture(page, {
+    session: PAID_SESSION,
+    plan: 'pro',
+    previewMode: 'lost_response'
+  });
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await expect.poll(async () => page.locator('#planBadge').textContent()).toBe('Pro');
+  const initialRecoveryRequests = fixture.pendingRecoveryRequests;
+
+  await page.locator('[data-credit-pack-key="usage_600"]').click();
+
+  await expect.poll(() => fixture.pendingRecoveryRequests)
+    .toBeGreaterThan(initialRecoveryRequests);
+  await expect.poll(() => fixture.statusRequests).toBeGreaterThan(0);
+  await expect(page.locator('#creditPackConfirmModal')).toHaveClass(/open/);
+  await expect(page.locator('#creditPackModalTotal')).toHaveText('$10.80');
+  expect(fixture.previewReservations).toBe(1);
+  expect(fixture.openPurchase.purchaseRequestId).toBe(PURCHASE_REQUEST_ID);
+  expect(fixture.purchaseRequests).toEqual([]);
+  expect(fixture.providerChargeAttempts).toBe(0);
+  await expect.poll(() => page.evaluate(userId => (
+    window.localStorage.getItem(`promptgen:credit-pack-purchase:${userId}`)
+  ), PAID_SESSION.user.id)).toBe(PURCHASE_REQUEST_ID);
 });
 
 test('a lost purchase response is recovered after reload without submitting again', async ({ page }) => {
@@ -491,6 +1365,7 @@ test('a lost purchase response is recovered after reload without submitting agai
   await page.goto('/', { waitUntil: 'domcontentloaded' });
   await expect.poll(async () => page.locator('#planBadge').textContent()).toBe('Pro');
   await expect.poll(() => fixture.pendingRecoveryRequests).toBe(1);
+  const recoveryRequestsBeforeReload = fixture.pendingRecoveryRequests;
 
   await page.locator('[data-credit-pack-key="usage_600"]').click();
   await page.locator('#creditPackModalConfirm').click();
@@ -500,16 +1375,22 @@ test('a lost purchase response is recovered after reload without submitting agai
     'pending'
   );
   await expect(page.locator('#creditPackStatus')).toContainText(
-    'Do not retry in this page'
+    'do not purchase again'
   );
+  await expect(page.locator('#creditPackStatus')).toBeFocused();
+  expect(await page.evaluate(() => (
+    document.activeElement?.closest('[aria-hidden="true"]') === null
+  ))).toBe(true);
   await expect.poll(() => page.evaluate(userId => (
-    window.sessionStorage.getItem(`promptgen:credit-pack-purchase:${userId}`)
-  ), PAID_SESSION.user.id)).toBeNull();
+    window.localStorage.getItem(`promptgen:credit-pack-purchase:${userId}`)
+  ), PAID_SESSION.user.id)).toBe(PURCHASE_REQUEST_ID);
 
   fixture.purchaseStatus = 'completed';
   await page.reload({ waitUntil: 'domcontentloaded' });
 
-  await expect.poll(() => fixture.pendingRecoveryRequests).toBe(2);
+  expect(fixture.pendingRecoveryRequests).toBe(
+    recoveryRequestsBeforeReload
+  );
   await expect.poll(() => fixture.statusRequests).toBeGreaterThan(0);
   await expect(page.locator('#creditPackStatus')).toHaveAttribute(
     'data-state',
@@ -520,11 +1401,10 @@ test('a lost purchase response is recovered after reload without submitting agai
   );
   expect(fixture.purchaseRequests).toHaveLength(1);
   expect(fixture.pendingRecoveryAuthorizations).toEqual([
-    `Bearer ${PAID_SESSION.access_token}`,
     `Bearer ${PAID_SESSION.access_token}`
   ]);
   await expect.poll(() => page.evaluate(userId => (
-    window.sessionStorage.getItem(`promptgen:credit-pack-purchase:${userId}`)
+    window.localStorage.getItem(`promptgen:credit-pack-purchase:${userId}`)
   ), PAID_SESSION.user.id)).toBeNull();
 
   await page.evaluate(() => {
@@ -532,8 +1412,45 @@ test('a lost purchase response is recovered after reload without submitting agai
     window.__emitAuthStateChange('SIGNED_IN');
   });
   await page.waitForTimeout(100);
-  expect(fixture.pendingRecoveryRequests).toBe(2);
+  expect(fixture.pendingRecoveryRequests).toBe(
+    recoveryRequestsBeforeReload
+  );
   expect(fixture.purchaseRequests).toHaveLength(1);
+});
+
+test('a fast webhook completion survives a lost POST response and an initial status 404', async ({ page }) => {
+  const fixture = await installPaymentFixture(page, {
+    session: PAID_SESSION,
+    plan: 'pro',
+    purchaseMode: 'lost_response_fast_completed',
+    statusNotFoundCount: 1
+  });
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await expect.poll(async () => page.locator('#planBadge').textContent()).toBe('Pro');
+
+  await page.locator('[data-credit-pack-key="usage_600"]').click();
+  await page.locator('#creditPackModalConfirm').click();
+
+  await expect.poll(() => fixture.purchaseRequests.length).toBe(1);
+  expect(fixture.purchaseRequests[0].body.purchaseRequestId)
+    .toBe(PURCHASE_REQUEST_ID);
+  await expect.poll(() => fixture.statusRequests, {
+    timeout: 5_000
+  }).toBeGreaterThanOrEqual(2);
+  await expect.poll(() => fixture.pendingRecoveryRequests)
+    .toBeGreaterThanOrEqual(2);
+  await expect(page.locator('#creditPackStatus')).toHaveAttribute(
+    'data-state',
+    'success',
+    { timeout: 5_000 }
+  );
+  await expect(page.locator('#creditPackStatus')).toContainText(
+    'Credits confirmed'
+  );
+  expect(fixture.purchaseRequests).toHaveLength(1);
+  await expect.poll(() => page.evaluate(userId => (
+    window.localStorage.getItem(`promptgen:credit-pack-purchase:${userId}`)
+  ), PAID_SESSION.user.id)).toBeNull();
 });
 
 test('a delayed preview from the previous account cannot reopen confirmation', async ({ page }) => {
@@ -555,6 +1472,9 @@ test('a delayed preview from the previous account cannot reopen confirmation', a
       contentType: 'application/json',
       body: JSON.stringify({
         success: true,
+        purchaseRequestId: PURCHASE_REQUEST_ID,
+        status: 'created',
+        confirmationVersion: 1,
         pack,
         expiryDays: 365,
         preview: makePreview(pack)
@@ -618,10 +1538,10 @@ test('a delayed purchase response is stored only for its original account', asyn
   await purchaseResponded.promise;
 
   await expect.poll(() => page.evaluate(userId => (
-    window.sessionStorage.getItem(`promptgen:credit-pack-purchase:${userId}`)
+    window.localStorage.getItem(`promptgen:credit-pack-purchase:${userId}`)
   ), PAID_SESSION.user.id)).toBe(PURCHASE_REQUEST_ID);
   await expect.poll(() => page.evaluate(userId => (
-    window.sessionStorage.getItem(`promptgen:credit-pack-purchase:${userId}`)
+    window.localStorage.getItem(`promptgen:credit-pack-purchase:${userId}`)
   ), SECOND_PAID_SESSION.user.id)).toBeNull();
   await expect(page.locator('#creditPackConfirmModal')).not.toHaveClass(/open/);
   await expect.poll(async () => page.locator('#planBadge').textContent()).toBe('Pro');
@@ -696,7 +1616,7 @@ test('a delayed status response cannot reset the next account purchase state', a
   }, SECOND_PAID_SESSION);
 
   await expect.poll(() => page.evaluate(userId => (
-    window.sessionStorage.getItem(`promptgen:credit-pack-purchase:${userId}`)
+    window.localStorage.getItem(`promptgen:credit-pack-purchase:${userId}`)
   ), SECOND_PAID_SESSION.user.id)).toBe(SECOND_PURCHASE_REQUEST_ID);
   await oldStatusResponded.promise;
 
@@ -708,10 +1628,10 @@ test('a delayed status response cannot reset the next account purchase state', a
     'Credits confirmed'
   );
   await expect.poll(() => page.evaluate(userId => (
-    window.sessionStorage.getItem(`promptgen:credit-pack-purchase:${userId}`)
+    window.localStorage.getItem(`promptgen:credit-pack-purchase:${userId}`)
   ), SECOND_PAID_SESSION.user.id)).toBe(SECOND_PURCHASE_REQUEST_ID);
   await expect.poll(() => page.evaluate(userId => (
-    window.sessionStorage.getItem(`promptgen:credit-pack-purchase:${userId}`)
+    window.localStorage.getItem(`promptgen:credit-pack-purchase:${userId}`)
   ), PAID_SESSION.user.id)).toBe(PURCHASE_REQUEST_ID);
   const buttons = page.locator('#creditPackPanel [data-credit-pack-key]');
   for (let index = 0; index < 3; index += 1) {
@@ -790,22 +1710,64 @@ test('provider-unknown purchases remain pending and cannot be submitted twice', 
   expect(fixture.purchaseRequests).toHaveLength(1);
 });
 
-test('confirmation modal traps focus, closes on Escape, and restores the purchase button', async ({ page }) => {
-  await installPaymentFixture(page, {
+test('confirmation modal traps focus and closes only after each server-confirmed cancellation', async ({ page }) => {
+  const fixture = await installPaymentFixture(page, {
     session: PAID_SESSION,
-    plan: 'pro'
+    plan: 'pro',
+    cancelDelayMs: 100
   });
   await page.goto('/', { waitUntil: 'domcontentloaded' });
   await expect.poll(async () => page.locator('#planBadge').textContent()).toBe('Pro');
 
   const buyButton = page.locator('[data-credit-pack-key="usage_600"]');
-  await buyButton.click();
-  await expect(page.locator('#creditPackModalClose')).toBeFocused();
-  await page.keyboard.press('Shift+Tab');
-  await expect(page.locator('#creditPackModalConfirm')).toBeFocused();
-  await page.keyboard.press('Escape');
-  await expect(page.locator('#creditPackConfirmModal')).not.toHaveClass(/open/);
-  await expect(buyButton).toBeFocused();
+  const modal = page.locator('#creditPackConfirmModal');
+  const dismissals = [
+    {
+      label: 'close button',
+      act: () => page.locator('#creditPackModalClose').click()
+    },
+    {
+      label: 'cancel button',
+      act: () => page.locator('#creditPackModalCancel').click()
+    },
+    {
+      label: 'backdrop',
+      act: () => modal.click({ position: { x: 4, y: 4 } })
+    },
+    {
+      label: 'Escape',
+      act: () => page.keyboard.press('Escape')
+    }
+  ];
+
+  for (const [index, dismissal] of dismissals.entries()) {
+    await buyButton.click();
+    await expect(modal, dismissal.label).toHaveClass(/open/);
+    await expect(page.locator('#creditPackModalClose')).toBeFocused();
+    if (index === 0) {
+      await page.keyboard.press('Shift+Tab');
+      await expect(page.locator('#creditPackModalConfirm')).toBeFocused();
+      await page.keyboard.press('Tab');
+      await expect(page.locator('#creditPackModalClose')).toBeFocused();
+    }
+
+    const actionPromise = dismissal.act();
+    await expect(modal, dismissal.label).toHaveClass(/open/);
+    await expect(modal, dismissal.label).toHaveAttribute('aria-busy', 'true');
+    await actionPromise;
+    await expect.poll(() => fixture.cancelRequests.length).toBe(index + 1);
+    await expect(modal, dismissal.label).not.toHaveClass(/open/);
+    await expect(buyButton, dismissal.label).toBeFocused();
+  }
+
+  expect(fixture.purchaseRequests).toEqual([]);
+  expect(fixture.providerChargeAttempts).toBe(0);
+  expect(fixture.cancelRequests.map(request => request.body)).toEqual([
+    { reason: 'client_cancelled' },
+    { reason: 'client_cancelled' },
+    { reason: 'client_cancelled' },
+    { reason: 'client_cancelled' }
+  ]);
 });
 
 test('all six locales disclose expiry and post-cancellation usage locking', async ({ page }) => {
@@ -817,6 +1779,44 @@ test('all six locales disclose expiry and post-cancellation usage locking', asyn
     await expect(page.locator('html')).toHaveAttribute('lang', locale);
     const expectedNote = MESSAGES[locale]['pricing.addons.note'].replace('{days}', '365');
     await expect(page.locator('#creditPackNote')).toHaveText(expectedNote);
+  }
+});
+
+test('sales-off review banner wraps safely at 375px in all six locales', async ({ page }) => {
+  await installPaymentFixture(page, {
+    session: PAID_SESSION,
+    plan: 'pro',
+    storedRequestId: PURCHASE_REQUEST_ID,
+    initialPurchaseStatus: 'withheld',
+    creditPackPurchasesEnabled: false
+  });
+  await page.setViewportSize({ width: 375, height: 812 });
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await expect.poll(
+    () => page.locator('#creditPackStatus').getAttribute('data-state')
+  ).toBe('error');
+  await expect(page.locator('#creditPackPanel')).toBeHidden();
+
+  for (const locale of LOCALES) {
+    await page.locator('[data-locale-select]').selectOption(locale);
+    await expect(page.locator('html')).toHaveAttribute('lang', locale);
+    await expect(page.locator('#creditPackStatus')).toHaveText(
+      MESSAGES[locale]['pricing.addons.status.withheld']
+    );
+    const layout = await page.evaluate(() => {
+      const status = document.getElementById('creditPackStatus');
+      const rect = status.getBoundingClientRect();
+      return {
+        documentOverflow:
+          document.documentElement.scrollWidth - document.documentElement.clientWidth,
+        statusWithinViewport:
+          rect.left >= -1 && rect.right <= window.innerWidth + 1,
+        statusContentFits: status.scrollWidth <= status.clientWidth + 1
+      };
+    });
+    expect(layout.documentOverflow).toBeLessThanOrEqual(2);
+    expect(layout.statusWithinViewport).toBe(true);
+    expect(layout.statusContentFits).toBe(true);
   }
 });
 

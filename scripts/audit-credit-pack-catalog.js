@@ -4,12 +4,15 @@ require('dotenv').config();
 const {
   getCreditPackCatalogMetadata
 } = require('../lib/credit-pack-catalog');
+const { getPaddleApiBase } = require('../lib/paddle-api');
 
 const LEGACY_PRICE_VARIABLES = Object.freeze({
   usage_600: 'PADDLE_CREDIT_PACK_600_LEGACY_PRICE_IDS',
   usage_1500: 'PADDLE_CREDIT_PACK_1500_LEGACY_PRICE_IDS',
   usage_3000: 'PADDLE_CREDIT_PACK_3000_LEGACY_PRICE_IDS'
 });
+const INVENTORY_NOT_AUDITED_CODE =
+  'PADDLE_CREDIT_PACK_LEGACY_INVENTORY_NOT_AUDITED';
 
 function parsePriceIds(value) {
   return [...new Set(
@@ -69,7 +72,14 @@ async function auditCreditPackCatalog({ env = process.env, fetchImpl = fetch } =
   getCreditPackCatalogMetadata(env);
 
   const legacyPrices = collectLegacyPriceIds(env);
-  if (legacyPrices.length === 0) return [];
+  if (legacyPrices.length === 0) {
+    const error = new Error(
+      'Legacy reusable Paddle Price inventory is not audited; manual inventory required. ' +
+      'No legacy Price IDs are declared, and this audit does not enumerate the full Paddle catalog.'
+    );
+    error.code = INVENTORY_NOT_AUDITED_CODE;
+    throw error;
+  }
 
   const apiKey = env.PADDLE_API_KEY;
   if (!apiKey) {
@@ -78,7 +88,7 @@ async function auditCreditPackCatalog({ env = process.env, fetchImpl = fetch } =
     );
   }
 
-  const apiBase = env.PADDLE_API_BASE || 'https://api.paddle.com';
+  const apiBase = getPaddleApiBase(env);
   const mismatches = [];
   for (const { priceId, packKey } of legacyPrices) {
     const price = await getPaddlePrice(priceId, apiKey, apiBase, fetchImpl);
@@ -98,7 +108,7 @@ if (require.main === module) {
       console.log(JSON.stringify({
         success: true,
         pricingMode: 'subscription_charge_non_catalog',
-        legacyReusablePrices: 'archived-or-none',
+        legacyReusablePrices: 'declared-and-archived',
         mode: 'read-only'
       }));
     })
@@ -110,6 +120,7 @@ if (require.main === module) {
 
 module.exports = {
   LEGACY_PRICE_VARIABLES,
+  INVENTORY_NOT_AUDITED_CODE,
   parsePriceIds,
   collectLegacyPriceIds,
   collectArchivedPriceMismatches,

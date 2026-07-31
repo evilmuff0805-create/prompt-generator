@@ -154,6 +154,7 @@ describe('read-only Paddle catalog audit', () => {
 
   test('full staged audit fetches and validates every current and legacy price', async () => {
     const env = {
+      NODE_ENV: 'test',
       PADDLE_API_KEY: 'test-api-key',
       PADDLE_API_BASE: 'https://sandbox-api.paddle.test',
       PRO_PRICE_1099_ENABLED: 'true',
@@ -192,5 +193,19 @@ describe('read-only Paddle catalog audit', () => {
       '/prices/pri_pro_999',
       '/prices/pri_pro_899'
     ]);
+  });
+
+  test('rejects an untrusted bearer-token destination before any catalog read', async () => {
+    const fetchImpl = jest.fn();
+    await expect(auditPaddleCatalog({
+      env: {
+        PADDLE_API_KEY: 'test-api-key',
+        PADDLE_API_BASE: 'https://sandbox-api.paddle.com.attacker.example',
+        PADDLE_PRO_PRICE_ID: 'pri_pro',
+        PADDLE_ENTERPRISE_PRICE_ID: 'pri_enterprise'
+      },
+      fetchImpl
+    })).rejects.toThrow('PADDLE_API_BASE');
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 });

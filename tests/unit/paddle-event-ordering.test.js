@@ -91,7 +91,10 @@ describe('Paddle semantic event ordering', () => {
     expect(sql).toContain('CREATE OR REPLACE FUNCTION public.complete_paddle_event_order');
     expect(sql).toContain('CREATE OR REPLACE FUNCTION public.fail_paddle_event_order');
     expect(sql).toMatch(
-      /REVOKE ALL ON TABLE public\.paddle_event_watermarks FROM PUBLIC, anon, authenticated;/
+      /REVOKE ALL ON TABLE public\.paddle_event_watermarks[\s\S]{0,80}FROM PUBLIC, anon, authenticated, service_role;/
+    );
+    expect(sql).toMatch(
+      /GRANT SELECT ON TABLE public\.paddle_event_watermarks TO service_role;/
     );
     expect(sql).toMatch(
       /GRANT EXECUTE ON FUNCTION public\.claim_paddle_event_order\([\s\S]*?\) TO service_role;/
