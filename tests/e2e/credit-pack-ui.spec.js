@@ -1506,6 +1506,24 @@ test('a delayed purchase response is stored only for its original account', asyn
     session: PAID_SESSION,
     plan: 'pro'
   });
+  const pendingRecoveryAuthorizations = [];
+  // The real pending-purchase endpoint is authenticated and user-scoped. The
+  // shared fixture keeps one in-memory purchase for most single-account tests,
+  // so override discovery here to avoid returning the first account's row to
+  // the second account during this account-isolation scenario.
+  await page.route(
+    /\/api\/payment\/credit-packs\/purchase\/pending(?:\?.*)?$/,
+    async route => {
+      pendingRecoveryAuthorizations.push(
+        route.request().headers().authorization
+      );
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ success: true, purchase: null })
+      });
+    }
+  );
   const purchaseStarted = createDeferred();
   const purchaseResponded = createDeferred();
   let purchasePosts = 0;
@@ -1543,6 +1561,9 @@ test('a delayed purchase response is stored only for its original account', asyn
   await expect.poll(() => page.evaluate(userId => (
     window.localStorage.getItem(`promptgen:credit-pack-purchase:${userId}`)
   ), SECOND_PAID_SESSION.user.id)).toBeNull();
+  await expect.poll(() => pendingRecoveryAuthorizations).toContain(
+    `Bearer ${SECOND_PAID_SESSION.access_token}`
+  );
   await expect(page.locator('#creditPackConfirmModal')).not.toHaveClass(/open/);
   await expect.poll(async () => page.locator('#planBadge').textContent()).toBe('Pro');
   await expect(
@@ -1714,7 +1735,7 @@ test('confirmation modal traps focus and closes only after each server-confirmed
   const fixture = await installPaymentFixture(page, {
     session: PAID_SESSION,
     plan: 'pro',
-    cancelDelayMs: 100
+    cancelDelayMs: 500
   });
   await page.goto('/', { waitUntil: 'domcontentloaded' });
   await expect.poll(async () => page.locator('#planBadge').textContent()).toBe('Pro');
@@ -1752,10 +1773,10 @@ test('confirmation modal traps focus and closes only after each server-confirmed
     }
 
     const actionPromise = dismissal.act();
+    await expect.poll(() => fixture.cancelRequests.length).toBe(index + 1);
     await expect(modal, dismissal.label).toHaveClass(/open/);
     await expect(modal, dismissal.label).toHaveAttribute('aria-busy', 'true');
     await actionPromise;
-    await expect.poll(() => fixture.cancelRequests.length).toBe(index + 1);
     await expect(modal, dismissal.label).not.toHaveClass(/open/);
     await expect(buyButton, dismissal.label).toBeFocused();
   }
