@@ -348,6 +348,19 @@ Before any production migration:
 
 - test backup and restore;
 - apply all four migrations to a clone of the actual production schema;
+- prove every non-null Paddle subscription/customer ID is already trimmed,
+  non-empty, and at most 255 characters before migration 024;
+- prove every profile with a Paddle subscription also has a Paddle customer,
+  uses exactly one of the lowercase canonical values `free`, `paid`, `pro`, or
+  `enterprise`, and has been reconciled against Paddle before the bootstrap
+  reducer is created;
+- allow a `free` profile with a retained subscription ID only when Paddle
+  confirms that subscription is terminal; if Paddle reports `active` or
+  `trialing`, correct the profile/ownership before migration 024 or stop the
+  rollout, because a terminal bootstrap row cannot be reactivated in place;
+- keep profile/payment writers frozen while migration 024 holds its profile
+  bootstrap lock, and set an operator-reviewed session `lock_timeout` so a
+  conflicting writer stops the rollout instead of waiting indefinitely;
 - run migration invariants and inspect RLS, grants, constraints, and function
   signatures;
 - test concurrent checkout attempts, add-on requests, renewal/cancellation

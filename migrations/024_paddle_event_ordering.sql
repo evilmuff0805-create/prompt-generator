@@ -13,6 +13,66 @@
 
 BEGIN;
 
+LOCK TABLE public.profiles IN SHARE ROW EXCLUSIVE MODE;
+
+-- Fail before creating reducer state if legacy profile bindings cannot be
+-- represented by the canonical Paddle identifiers used by every runtime RPC.
+-- Do not silently trim or reinterpret ambiguous billing ownership during a
+-- migration; reconcile the profile against Paddle and rerun the migration.
+DO $preflight$
+BEGIN
+  IF EXISTS (
+    SELECT 1
+      FROM public.profiles
+     WHERE paddle_subscription_id IS NOT NULL
+       AND (
+         paddle_subscription_id <> btrim(paddle_subscription_id)
+         OR btrim(paddle_subscription_id) = ''
+         OR length(btrim(paddle_subscription_id)) > 255
+       )
+  ) THEN
+    RAISE EXCEPTION 'PADDLE_SUBSCRIPTION_BOOTSTRAP_INVALID_ID'
+      USING ERRCODE = '22023';
+  END IF;
+
+  IF EXISTS (
+    SELECT 1
+      FROM public.profiles
+     WHERE paddle_customer_id IS NOT NULL
+       AND (
+         paddle_customer_id <> btrim(paddle_customer_id)
+         OR btrim(paddle_customer_id) = ''
+         OR length(btrim(paddle_customer_id)) > 255
+       )
+  ) THEN
+    RAISE EXCEPTION 'PADDLE_CUSTOMER_BOOTSTRAP_INVALID_ID'
+      USING ERRCODE = '22023';
+  END IF;
+
+  IF EXISTS (
+    SELECT 1
+      FROM public.profiles
+     WHERE paddle_subscription_id IS NOT NULL
+       AND btrim(paddle_subscription_id) <> ''
+       AND paddle_customer_id IS NULL
+  ) THEN
+    RAISE EXCEPTION 'PADDLE_SUBSCRIPTION_BOOTSTRAP_CUSTOMER_REQUIRED'
+      USING ERRCODE = '23502';
+  END IF;
+
+  IF EXISTS (
+    SELECT 1
+      FROM public.profiles
+     WHERE paddle_subscription_id IS NOT NULL
+       AND btrim(paddle_subscription_id) <> ''
+       AND COALESCE(plan, '') NOT IN ('free', 'paid', 'pro', 'enterprise')
+  ) THEN
+    RAISE EXCEPTION 'PADDLE_SUBSCRIPTION_BOOTSTRAP_INVALID_PLAN'
+      USING ERRCODE = '22023';
+  END IF;
+END;
+$preflight$;
+
 CREATE TABLE public.paddle_event_watermarks (
   entity_type text NOT NULL,
   entity_id text NOT NULL,
@@ -266,20 +326,20 @@ BEGIN
     updated_at
   )
   SELECT
-    p.paddle_subscription_id,
+    btrim(p.paddle_subscription_id),
     p.id,
     NULLIF(btrim(p.paddle_customer_id), ''),
     CASE
-      WHEN lower(COALESCE(p.plan, 'free')) IN ('pro', 'enterprise', 'paid')
+      WHEN COALESCE(p.plan, 'free') IN ('pro', 'enterprise', 'paid')
         THEN 'active'
       ELSE 'canceled'
     END,
-    lower(COALESCE(p.plan, 'free')) NOT IN ('pro', 'enterprise', 'paid'),
-    left('migration-bootstrap:' || p.paddle_subscription_id, 255),
+    COALESCE(p.plan, 'free') NOT IN ('pro', 'enterprise', 'paid'),
+    left('migration-bootstrap:' || btrim(p.paddle_subscription_id), 255),
     'migration.bootstrap',
     v_bootstrap,
     CASE
-      WHEN lower(COALESCE(p.plan, 'free')) IN ('pro', 'enterprise', 'paid')
+      WHEN COALESCE(p.plan, 'free') IN ('pro', 'enterprise', 'paid')
         THEN NULL
       ELSE v_bootstrap
     END,

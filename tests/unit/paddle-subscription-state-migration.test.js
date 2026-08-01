@@ -58,13 +58,61 @@ describe('Paddle subscription state migration safety contract', () => {
       /FROM public\.profiles p[\s\S]{0,180}p\.paddle_subscription_id IS NOT NULL/
     );
     expect(sql).toContain(
-      "lower(COALESCE(p.plan, 'free')) IN ('pro', 'enterprise', 'paid')"
+      "COALESCE(p.plan, 'free') IN ('pro', 'enterprise', 'paid')"
     );
     expect(sql).toContain(
-      "lower(COALESCE(p.plan, 'free')) NOT IN ('pro', 'enterprise', 'paid')"
+      "COALESCE(p.plan, 'free') NOT IN ('pro', 'enterprise', 'paid')"
     );
     expect(sql).toMatch(
       /'migration\.bootstrap',\s+v_bootstrap,[\s\S]{0,180}ELSE v_bootstrap/
+    );
+    expect(sql).toContain('btrim(p.paddle_subscription_id),');
+    expect(sql).toContain(
+      "left('migration-bootstrap:' || btrim(p.paddle_subscription_id), 255)"
+    );
+  });
+
+  test('fails closed on noncanonical legacy Paddle profile bindings', () => {
+    const transactionStart = sql.indexOf('BEGIN;');
+    const profileLock = sql.indexOf(
+      'LOCK TABLE public.profiles IN SHARE ROW EXCLUSIVE MODE;'
+    );
+    const preflightStart = sql.indexOf('DO $preflight$');
+    const preflightEnd = sql.indexOf('$preflight$;', preflightStart);
+    const firstTable = sql.indexOf(
+      'CREATE TABLE public.paddle_event_watermarks'
+    );
+    const preflightSql = sql.slice(preflightStart, preflightEnd);
+
+    expect(transactionStart).toBeGreaterThan(-1);
+    expect(profileLock).toBeGreaterThan(transactionStart);
+    expect(preflightStart).toBeGreaterThan(profileLock);
+    expect(preflightEnd).toBeGreaterThan(preflightStart);
+    expect(preflightEnd).toBeLessThan(firstTable);
+    expect(preflightSql).toContain(
+      'paddle_subscription_id <> btrim(paddle_subscription_id)'
+    );
+    expect(preflightSql).toContain(
+      'length(btrim(paddle_subscription_id)) > 255'
+    );
+    expect(preflightSql).toContain(
+      'PADDLE_SUBSCRIPTION_BOOTSTRAP_INVALID_ID'
+    );
+    expect(preflightSql).toContain(
+      'paddle_customer_id <> btrim(paddle_customer_id)'
+    );
+    expect(preflightSql).toContain(
+      'length(btrim(paddle_customer_id)) > 255'
+    );
+    expect(preflightSql).toContain('PADDLE_CUSTOMER_BOOTSTRAP_INVALID_ID');
+    expect(preflightSql).toContain(
+      'PADDLE_SUBSCRIPTION_BOOTSTRAP_CUSTOMER_REQUIRED'
+    );
+    expect(preflightSql).toContain(
+      "COALESCE(plan, '') NOT IN ('free', 'paid', 'pro', 'enterprise')"
+    );
+    expect(preflightSql).toContain(
+      'PADDLE_SUBSCRIPTION_BOOTSTRAP_INVALID_PLAN'
     );
   });
 
