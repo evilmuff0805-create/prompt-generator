@@ -81,18 +81,22 @@ describe('secure subscription checkout migration', () => {
     expect(sql).toContain('it is never automatically retried');
   });
 
-  test('makes the table service-role-only with RLS enabled', () => {
+  test('makes the table read-only to service_role with all writes behind RPCs', () => {
     expect(sql).toContain(
       'ALTER TABLE public.subscription_checkout_attempts ENABLE ROW LEVEL SECURITY;'
     );
     expect(sql).toContain(
       'REVOKE ALL ON TABLE public.subscription_checkout_attempts\n' +
-      '  FROM PUBLIC, anon, authenticated;'
+      '  FROM PUBLIC, anon, authenticated, service_role;'
     );
     expect(sql).toContain(
-      'GRANT SELECT, INSERT, UPDATE, DELETE\n' +
+      'GRANT SELECT\n' +
       '  ON TABLE public.subscription_checkout_attempts TO service_role;'
     );
+    expect(sql).not.toMatch(
+      /GRANT\s+(?:[A-Z]+\s*,\s*)*(?:INSERT|UPDATE|DELETE)(?:\s*,\s*[A-Z]+)*\s+ON TABLE public\.subscription_checkout_attempts TO service_role;/i
+    );
+    expect(sql).toContain('Every write must pass through the SECURITY DEFINER RPCs');
     expect(sql).not.toMatch(
       /CREATE POLICY[\s\S]{0,180}subscription_checkout_attempts/
     );

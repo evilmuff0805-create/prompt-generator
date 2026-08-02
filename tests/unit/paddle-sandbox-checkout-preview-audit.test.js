@@ -192,6 +192,21 @@ describe('Paddle Sandbox checkout preview audit', () => {
     ]);
   });
 
+  test.each(['24.50', '19.99usd', ' 19.99'])(
+    'rejects Enterprise amount drift %s before any provider request',
+    async (enterprisePrice) => {
+      const fetchImpl = jest.fn();
+
+      await expect(auditPaddleSandboxCheckoutPreview({
+        env: baseEnv({ PADDLE_ENTERPRISE_PRICE_USD: enterprisePrice }),
+        fetchImpl
+      })).rejects.toMatchObject({
+        code: 'PADDLE_SANDBOX_PREVIEW_ENTERPRISE_AMOUNT_INVALID'
+      });
+      expect(fetchImpl).not.toHaveBeenCalled();
+    }
+  );
+
   test('previews all three prices without creating a transaction entity', async () => {
     const env = baseEnv();
     const targets = buildSandboxCheckoutPreviewTargets(env);

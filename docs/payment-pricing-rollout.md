@@ -352,6 +352,10 @@ Before any production migration:
 
 - test backup and restore;
 - apply all four migrations to a clone of the actual production schema;
+- inventory every positive legacy `profiles.credits` balance and explicitly
+  classify it as subscription carry-in or manual/carryover credit against an
+  operator-reviewed snapshot. Plan, Paddle binding, and arithmetic history are
+  supporting evidence only and must never auto-classify provenance;
 - prove every non-null Paddle subscription/customer ID is already trimmed,
   non-empty, and at most 255 characters before migration 024;
 - prove every profile with a Paddle subscription also has a Paddle customer,
@@ -417,9 +421,18 @@ approval is recorded:
   wrong Supabase project, key/API-base mismatch, wrong Paddle seller, failed
   subscription binding, incomplete pagination, and malformed provider evidence
   all prove zero reconciliation writes.
-- [ ] Production backup/restore is tested and migrations 023 through 026 pass
-  against a clone of the actual production schema, including race and rollback
-  tests.
+- [ ] A prior local run recorded migrations 023 through 026 passing against an
+  isolated PostgreSQL 17 clone built from a read-only production `public`
+  schema dump and anonymized, production-shaped data. Repeat the full run with
+  retained command/output evidence before closing the failure, race, and
+  rollback gate.
+- [ ] A full production backup/restore rehearsal, including Auth, Storage, and
+  Supabase platform metadata, is tested before any target-database migration.
+- [ ] Migration 023 requires a complete operator-reviewed legacy-balance
+  classification manifest, rejects missing/extra/duplicate or drifted rows,
+  and keeps manual/carryover lots out of subscription renewal, plan-change,
+  and cancellation expiry. The current generic `migration`-lot backfill does
+  not satisfy this gate.
 - [ ] Paddle Sandbox proves checkout, preview, explicit total confirmation,
   receipt, renewal, retry, refund, partial refund quarantine, chargeback,
   cancellation, expiry, and reconciliation behavior.
@@ -428,7 +441,11 @@ approval is recorded:
   portal, and legal pages in all six supported locales.
 - [ ] Monitoring, durable incident records, and an operator escalation path
   exist for withheld direct payments, `provider_unknown`, stale leases,
-  duplicate/missing grants, refunds, and balance divergence.
+  duplicate/missing grants, refunds, and balance divergence. A subscription
+  checkout `provider_unknown` attempt may be terminalized only after two
+  independent complete Paddle scans and a 72-hour delay, with immutable
+  evidence, CAS, and a late-payment webhook path that grants no entitlement and
+  creates a durable refund-review incident. A status-only release is forbidden.
 - [ ] External alert webhooks receive only minimal event metadata; customer,
   user, subscription, transaction, request, message, and incident context stay
   in PromptGen's internal incident store.
@@ -460,14 +477,50 @@ Latest local evidence (2026-08-02):
 - changed/new JavaScript syntax check: 30 files passed;
 - `npm run test:unit`: 68 suites and 1,091 tests passed;
 - `npm audit --omit=dev --audit-level=high`: 0 vulnerabilities;
-- Playwright discovery: 114 E2E tests parsed successfully;
-- targeted credit-pack E2E: not executed because the Windows runner failed
-  before test startup with `spawn EPERM`; this is not a passing result;
+- current local unit run: all 68 suites / 1,094 tests passed;
+- current full local Playwright run under an unavailable local Supabase and
+  initial parallel page-load delays was not clean: 109 passed, 3 flaky, and 2
+  timed out. The two final timeout cases passed 2/2 when rerun with one worker;
+- GitHub Actions run 30757192139: Linux Node 24 dependency audit, all 68 unit
+  suites / 1,091 tests, and all 114 Playwright tests passed;
+- an isolated PostgreSQL transaction proved the migration-026 table boundary:
+  `service_role` SELECT succeeds while direct INSERT/UPDATE/DELETE fail, and
+  its SECURITY DEFINER create/transition/bind RPCs still write successfully;
 - build/lint: not applicable because the repository defines neither script;
-- production-schema clone, migrations 023 through 026, deployment runtime, and
-  live/Sandbox Checkout remain unverified and deployment-blocking.
+- a prior isolated production-public-schema clone run recorded migrations 023
+  through 026 passing, and its retained final database invariants passed again;
+  the full replay evidence, production backup/restore, target application,
+  deployment runtime, and live/Sandbox Checkout remain deployment-blocking.
 
 ### 2. Production-schema clone verification
+
+Recorded isolated run (2026-08-01; partially rechecked 2026-08-02):
+
+- the retained report states that a read-only production `public` schema-only
+  dump and an anonymized,
+  production-shaped fixture were restored into disposable Supabase-compatible
+  PostgreSQL 17.6.1 stacks;
+- the report records migrations 023, 024, 025, and 026 applying in order;
+- the report records 13 new tables and 40 secured functions passing existence, RLS, owner,
+  `search_path`, role-grant, signature, and validated-constraint checks;
+- the report records a PostgREST schema reload returning HTTP 200 with the expected payment and
+  credit surfaces;
+- the report records failure injection for missing dependencies, active-work preflight,
+  invalid subscription bootstrap data, lock timeout, and transactional
+  rollback;
+- the report records behavior tests for credit reservation/completion idempotency, Paddle
+  ordering and stale leases, add-on preview contention, subscription checkout
+  contention, immutable binding, and single entitlement consumption;
+- after the host reboot, the retained isolated failure-injection database was
+  started and its final invariant SQL returned exit code 0: profile credits and
+  active lots both 1,198; zero open add-on requests and zero open subscription
+  checkout attempts.
+
+This reduces schema-shaped migration risk but does not close the replay evidence
+gate. Raw transcripts for every 2026-08-01 step were not retained, so the full
+run must be repeated with durable command/output evidence. The exercise also did
+not restore a full Supabase physical backup. Auth, Storage, platform metadata,
+the deployment runtime, and the target database therefore remain unproven.
 
 1. Restore an actual production backup into an isolated clone.
 2. Apply migrations 023, 024, 025, and 026 in sequence.
@@ -516,6 +569,9 @@ price name, USD unit amount, monthly billing cycle, no trial, quantity 1,
 product linkage, tax mode, and Paddle-calculated subtotal/tax/total. It rejects
 an unexpected transaction ID, reused provider request evidence, any contract
 drift, or any non-Sandbox credential before continuing.
+It also rejects `PADDLE_ENTERPRISE_PRICE_USD` unless it is unset or exactly
+`19.99`, and independently requires the approved 1,999-cent contract, before
+the first provider request.
 
 Use a generic non-sensitive location and a temporary process environment:
 

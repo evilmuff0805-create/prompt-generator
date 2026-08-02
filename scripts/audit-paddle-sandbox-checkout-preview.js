@@ -23,6 +23,7 @@ const PRODUCT_ID_PATTERN = /^pro_[a-z\d]{26}$/;
 const COUNTRY_CODE_PATTERN = /^[A-Z]{2}$/;
 const POSTAL_CODE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9 -]{0,19}$/;
 const MONEY_PATTERN = /^\d+$/;
+const EXPECTED_ENTERPRISE_UNIT_AMOUNT = '1999';
 
 class PaddleSandboxCheckoutPreviewError extends Error {
   constructor(code, message, details = {}) {
@@ -112,6 +113,15 @@ function readSandboxCheckoutPreviewConfig(env = process.env) {
 }
 
 function buildSandboxCheckoutPreviewTargets(env = process.env) {
+  if (
+    env.PADDLE_ENTERPRISE_PRICE_USD !== undefined
+    && env.PADDLE_ENTERPRISE_PRICE_USD !== '19.99'
+  ) {
+    throw previewError(
+      'PADDLE_SANDBOX_PREVIEW_ENTERPRISE_AMOUNT_INVALID',
+      'PADDLE_ENTERPRISE_PRICE_USD must be unset or exactly match the approved USD 19.99 Sandbox contract.'
+    );
+  }
   const stableEnv = {
     ...env,
     PRO_PRICE_1099_ENABLED: 'false'
@@ -124,6 +134,12 @@ function buildSandboxCheckoutPreviewTargets(env = process.env) {
 
   const stableMetadata = getPaddleCatalogMetadata(stableEnv);
   const stagedMetadata = getPaddleCatalogMetadata(stagedEnv);
+  if (stableMetadata.enterprise.unitAmount !== EXPECTED_ENTERPRISE_UNIT_AMOUNT) {
+    throw previewError(
+      'PADDLE_SANDBOX_PREVIEW_ENTERPRISE_AMOUNT_INVALID',
+      'The Enterprise amount must match the approved USD 19.99 Sandbox contract.'
+    );
+  }
   const currentTaxMode = parseExpectedTaxMode(
     env.PADDLE_CATALOG_EXPECTED_TAX_MODE,
     'PADDLE_CATALOG_EXPECTED_TAX_MODE'

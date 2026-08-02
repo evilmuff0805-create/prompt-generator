@@ -157,8 +157,11 @@ CREATE INDEX subscription_checkout_attempts_user_created_idx
 
 ALTER TABLE public.subscription_checkout_attempts ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON TABLE public.subscription_checkout_attempts
-  FROM PUBLIC, anon, authenticated;
-GRANT SELECT, INSERT, UPDATE, DELETE
+  FROM PUBLIC, anon, authenticated, service_role;
+-- Application reads are direct so webhook reconciliation can locate the
+-- immutable attempt. Every write must pass through the SECURITY DEFINER RPCs
+-- below, which enforce lock order, state transitions, and contract checks.
+GRANT SELECT
   ON TABLE public.subscription_checkout_attempts TO service_role;
 
 CREATE OR REPLACE FUNCTION public.create_subscription_checkout_attempt(
