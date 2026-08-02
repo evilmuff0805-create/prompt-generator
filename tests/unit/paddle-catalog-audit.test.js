@@ -19,6 +19,7 @@ describe('read-only Paddle catalog audit', () => {
     priceStatus: 'active',
     priceType: 'standard',
     priceTaxMode: 'account_setting',
+    unitPriceOverrides: [],
     trialPeriod: null
   };
 
@@ -31,6 +32,7 @@ describe('read-only Paddle catalog audit', () => {
         status: contract.priceStatus,
         type: contract.priceType,
         tax_mode: contract.priceTaxMode,
+        unit_price_overrides: [...contract.unitPriceOverrides],
         trial_period: contract.trialPeriod,
         unit_price: { amount: contract.unitAmount, currency_code: contract.currencyCode },
         billing_cycle: { ...contract.billingCycle },
@@ -130,6 +132,39 @@ describe('read-only Paddle catalog audit', () => {
         priceStatus: 'active'
       })
     );
+  });
+
+  test('supports Paddle automatic-tax normalization with a separate stable-price expectation', () => {
+    const targets = buildPaddleAuditTargets({
+      PRO_PRICE_1099_ENABLED: 'true',
+      PADDLE_PRO_PRICE_ID: 'pri_pro_999',
+      PADDLE_PRO_1099_PRICE_ID: 'pri_pro_1099',
+      PADDLE_PRO_999_EXPECTED_STATUS: 'active',
+      PADDLE_CATALOG_EXPECTED_TAX_MODE: 'location',
+      PADDLE_PRO_999_EXPECTED_TAX_MODE: 'account_setting',
+      PADDLE_ENTERPRISE_PRICE_ID: 'pri_enterprise'
+    });
+
+    expect(targets.find(({ plan }) => plan === 'pro.current').expected.priceTaxMode)
+      .toBe('location');
+    expect(targets.find(({ plan }) => plan === 'enterprise.current').expected.priceTaxMode)
+      .toBe('location');
+    expect(targets.find(({ plan }) => plan === 'pro.stable_999').expected.priceTaxMode)
+      .toBe('account_setting');
+  });
+
+  test('rejects an unknown expected tax mode before any audit request', async () => {
+    const fetchImpl = jest.fn();
+    await expect(auditPaddleCatalog({
+      env: {
+        PADDLE_API_KEY: 'test-api-key',
+        PADDLE_CATALOG_EXPECTED_TAX_MODE: 'unknown',
+        PADDLE_PRO_PRICE_ID: 'pri_pro',
+        PADDLE_ENTERPRISE_PRICE_ID: 'pri_enterprise'
+      },
+      fetchImpl
+    })).rejects.toThrow('PADDLE_CATALOG_EXPECTED_TAX_MODE');
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 
   test('legacy expectations must exactly cover explicit legacy IDs', () => {

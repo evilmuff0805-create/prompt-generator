@@ -16,6 +16,12 @@ const PADDLE_CUSTOMER_ID_PATTERN = /^ctm_[a-z\d]{26}$/;
 const PADDLE_SUBSCRIPTION_ID_PATTERN = /^sub_[a-z\d]{26}$/;
 const PADDLE_PRICE_ID_PATTERN = /^pri_[a-z\d]{26}$/;
 const DEFAULT_EXPECTED_SUPABASE_PROJECT_REF = 'kzlovmcghswprasjaeeo';
+const PADDLE_SANDBOX_API_BASE = 'https://sandbox-api.paddle.com';
+const SANDBOX_SUPABASE_PROJECT_REFS_ENV =
+  'CREDIT_PACK_RECONCILIATION_SANDBOX_PROJECT_REFS';
+const SUPABASE_PROJECT_REF_PATTERN =
+  /^[a-z\d](?:[a-z\d-]{0,61}[a-z\d])?$/;
+const MAX_SANDBOX_SUPABASE_PROJECT_REFS = 32;
 const PADDLE_BINDING_TIMEOUT_MS = 10_000;
 const RECONCILABLE_STATUSES = new Set([
   'charging',
@@ -117,6 +123,41 @@ function getPaddleApiKeyEnvironment(apiKey) {
   return 'legacy';
 }
 
+function parseSandboxSupabaseProjectRefAllowlist(value) {
+  if (typeof value !== 'string' || !value.trim()) {
+    fail(
+      'RECONCILIATION_SANDBOX_PROJECT_ALLOWLIST_REQUIRED',
+      `${SANDBOX_SUPABASE_PROJECT_REFS_ENV} must explicitly allow the Sandbox Supabase project.`
+    );
+  }
+  if (value.length > 2048) {
+    fail(
+      'RECONCILIATION_SANDBOX_PROJECT_ALLOWLIST_INVALID',
+      `${SANDBOX_SUPABASE_PROJECT_REFS_ENV} must contain only exact Supabase project refs.`
+    );
+  }
+
+  const projectRefs = value
+    .split(',')
+    .map((projectRef) => projectRef.trim().toLowerCase());
+  if (
+    projectRefs.length > MAX_SANDBOX_SUPABASE_PROJECT_REFS
+    || projectRefs.some(
+      (projectRef) => (
+        !SUPABASE_PROJECT_REF_PATTERN.test(projectRef)
+        || projectRef === DEFAULT_EXPECTED_SUPABASE_PROJECT_REF
+      )
+    )
+  ) {
+    fail(
+      'RECONCILIATION_SANDBOX_PROJECT_ALLOWLIST_INVALID',
+      `${SANDBOX_SUPABASE_PROJECT_REFS_ENV} must contain only exact non-production Supabase project refs.`
+    );
+  }
+
+  return new Set(projectRefs);
+}
+
 function readRequiredEnvironment(env, { apply = false } = {}) {
   const supabaseUrl = normalizeNonEmptyString(env?.SUPABASE_URL, 2048);
   const serviceRoleKey = normalizeNonEmptyString(
@@ -159,12 +200,6 @@ function readRequiredEnvironment(env, { apply = false } = {}) {
   const supabaseProjectRef = parsedSupabaseUrl.hostname
     .split('.')[0]
     .toLowerCase();
-  if (supabaseProjectRef !== DEFAULT_EXPECTED_SUPABASE_PROJECT_REF) {
-    fail(
-      'RECONCILIATION_SUPABASE_PROJECT_MISMATCH',
-      'The reconciliation operator is restricted to the PromptGen Supabase project.'
-    );
-  }
 
   let paddleApiBase;
   try {
@@ -175,15 +210,27 @@ function readRequiredEnvironment(env, { apply = false } = {}) {
       'PADDLE_API_BASE must be an exact trusted Paddle API origin.'
     );
   }
+  if (
+    paddleApiBase !== DEFAULT_PADDLE_API_BASE
+    && paddleApiBase !== PADDLE_SANDBOX_API_BASE
+  ) {
+    fail(
+      'RECONCILIATION_ENVIRONMENT_INVALID',
+      'PADDLE_API_BASE must be the exact production or Sandbox Paddle API origin.'
+    );
+  }
   const paddleKeyEnvironment = getPaddleApiKeyEnvironment(paddleApiKey);
   const expectedPaddleApiBase = paddleKeyEnvironment === 'live'
     ? DEFAULT_PADDLE_API_BASE
     : paddleKeyEnvironment === 'sandbox'
-      ? 'https://sandbox-api.paddle.com'
+      ? PADDLE_SANDBOX_API_BASE
       : null;
   if (
-    expectedPaddleApiBase
-    && paddleApiBase !== expectedPaddleApiBase
+    (expectedPaddleApiBase && paddleApiBase !== expectedPaddleApiBase)
+    || (
+      paddleApiBase === PADDLE_SANDBOX_API_BASE
+      && paddleKeyEnvironment !== 'sandbox'
+    )
   ) {
     fail(
       'RECONCILIATION_PADDLE_ENVIRONMENT_MISMATCH',
@@ -195,12 +242,39 @@ function readRequiredEnvironment(env, { apply = false } = {}) {
     && (
       paddleKeyEnvironment !== 'live'
       || paddleApiBase !== DEFAULT_PADDLE_API_BASE
+      || supabaseProjectRef !== DEFAULT_EXPECTED_SUPABASE_PROJECT_REF
     )
   ) {
     fail(
       'RECONCILIATION_APPLY_ENVIRONMENT_UNSAFE',
-      'Applying reconciliation requires a modern live Paddle API key and the production Paddle API origin.'
+      'Applying reconciliation requires the PromptGen production Supabase project, a modern live Paddle API key, and the production Paddle API origin.'
     );
+  }
+  if (!apply && paddleApiBase === DEFAULT_PADDLE_API_BASE) {
+    if (supabaseProjectRef !== DEFAULT_EXPECTED_SUPABASE_PROJECT_REF) {
+      fail(
+        'RECONCILIATION_SUPABASE_PROJECT_MISMATCH',
+        'The live reconciliation operator is restricted to the PromptGen Supabase project.'
+      );
+    }
+  }
+  if (!apply && paddleApiBase === PADDLE_SANDBOX_API_BASE) {
+    if (supabaseProjectRef === DEFAULT_EXPECTED_SUPABASE_PROJECT_REF) {
+      fail(
+        'RECONCILIATION_SUPABASE_PROJECT_MISMATCH',
+        'Sandbox reconciliation cannot read the PromptGen production Supabase project.'
+      );
+    }
+    const allowedSandboxProjectRefs =
+      parseSandboxSupabaseProjectRefAllowlist(
+        env?.[SANDBOX_SUPABASE_PROJECT_REFS_ENV]
+      );
+    if (!allowedSandboxProjectRefs.has(supabaseProjectRef)) {
+      fail(
+        'RECONCILIATION_SUPABASE_PROJECT_MISMATCH',
+        'The Sandbox Supabase project is not explicitly allowlisted.'
+      );
+    }
   }
 
   return Object.freeze({
@@ -938,7 +1012,11 @@ async function runCreditPackReconciliation(options = {}) {
       mode: 'dry-run',
       outcome: 'definitive_no_match',
       requestId,
-      readyToApply: true,
+      readyToApply: (
+        config.supabaseProjectRef === DEFAULT_EXPECTED_SUPABASE_PROJECT_REF
+        && config.paddleKeyEnvironment === 'live'
+        && config.paddleApiBase === DEFAULT_PADDLE_API_BASE
+      ),
       paddleBindingRequestId: paddleBinding.providerRequestId,
       evidence: evidenceSummary(firstEvidence)
     });
@@ -1092,6 +1170,7 @@ if (require.main === module) {
 module.exports = {
   MAX_EVIDENCE_AGE_MS,
   DEFAULT_EXPECTED_SUPABASE_PROJECT_REF,
+  SANDBOX_SUPABASE_PROJECT_REFS_ENV,
   PADDLE_BINDING_TIMEOUT_MS,
   PURCHASE_REQUEST_COLUMNS,
   RECONCILIATION_DELAY_MS,
@@ -1103,6 +1182,7 @@ module.exports = {
   normalizePurchaseContract,
   normalizePersistedNoMatch,
   parseCliArguments,
+  parseSandboxSupabaseProjectRefAllowlist,
   readRequiredEnvironment,
   readPurchaseRequest,
   reconciliationScanOptions,

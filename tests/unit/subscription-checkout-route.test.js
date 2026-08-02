@@ -472,6 +472,24 @@ describe('authenticated server-created subscription checkout', () => {
     expect(global.fetch).not.toHaveBeenCalled();
   });
 
+  test('blocks Paddle Sandbox checkout until the operator explicitly confirms it', async () => {
+    process.env.PADDLE_API_BASE = 'https://sandbox-api.paddle.com';
+    process.env.PADDLE_SANDBOX_CHECKOUT_CONFIRMED = 'false';
+    const adminClient = makeAdminClient();
+    const res = makeResponse();
+
+    await handleSubscriptionCheckout(makeRequest(adminClient), res);
+
+    expect(res.statusCode).toBe(503);
+    expect(res.body).toEqual({
+      success: false,
+      error: 'Checkout is temporarily unavailable.',
+      code: 'SANDBOX_CHECKOUT_NOT_CONFIRMED'
+    });
+    expect(adminClient.rpc).not.toHaveBeenCalled();
+    expect(global.fetch).not.toHaveBeenCalled();
+  });
+
   test('fails closed when the DB rejects an active or reconciling subscription', async () => {
     const adminClient = makeAdminClient({
       createError: {

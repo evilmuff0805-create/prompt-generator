@@ -78,7 +78,8 @@ const CATALOG = {
     }
   },
   paddle: {
-    clientToken: 'credit-pack-e2e-client-token'
+    clientToken: 'live_credit-pack-e2e-client-token',
+    environment: 'production'
   },
   creditPacks: {
     enabled: true,
@@ -119,6 +120,101 @@ function createDeferred() {
   return { promise, resolve };
 }
 
+const CREDIT_PACK_STORAGE_CHANGED_EVENT =
+  'promptgen-e2e:credit-pack-storage-changed';
+
+async function navigateAndWaitForProfileHydration(
+  page,
+  expectedPlan,
+  gotoOptions = { waitUntil: 'domcontentloaded' }
+) {
+  const profileResponse = page.waitForResponse(response => (
+    new URL(response.url()).pathname === '/api/user/profile'
+    && response.status() === 200
+  ));
+
+  await page.goto('/', gotoOptions);
+  await profileResponse;
+  await page.evaluate(({ plan, expectedName }) => new Promise(resolve => {
+    const matchesHydratedProfile = () => (
+      document.getElementById('planBadge')?.textContent?.trim() === plan
+      && document.getElementById('userName')?.textContent?.trim() === expectedName
+    );
+    if (matchesHydratedProfile()) {
+      resolve();
+      return;
+    }
+
+    const observer = new MutationObserver(() => {
+      if (!matchesHydratedProfile()) return;
+      observer.disconnect();
+      resolve();
+    });
+    observer.observe(document.documentElement, {
+      childList: true,
+      subtree: true,
+      characterData: true
+    });
+  }), {
+    plan: expectedPlan,
+    expectedName: 'Credit Pack Creator'
+  });
+}
+
+async function emitAuthStateAndWaitForStoredCreditPackRequest(
+  page,
+  nextSession,
+  requestId
+) {
+  await page.evaluate(({
+    eventName,
+    session,
+    expectedRequestId
+  }) => new Promise((resolve, reject) => {
+    const storageKey = `promptgen:credit-pack-purchase:${session.user.id}`;
+    const matchesStoredRequest = () => (
+      window.localStorage.getItem(storageKey) === expectedRequestId
+    );
+    const cleanup = () => {
+      window.removeEventListener(eventName, handleStorageChange);
+    };
+    const handleStorageChange = event => {
+      if (
+        event.detail?.key !== storageKey
+        || event.detail?.value !== expectedRequestId
+      ) {
+        return;
+      }
+      cleanup();
+      resolve();
+    };
+
+    window.addEventListener(eventName, handleStorageChange);
+    if (matchesStoredRequest()) {
+      cleanup();
+      resolve();
+      return;
+    }
+
+    try {
+      window.__emitAuthStateChange('SIGNED_IN', session);
+    } catch (error) {
+      cleanup();
+      reject(error);
+      return;
+    }
+
+    if (matchesStoredRequest()) {
+      cleanup();
+      resolve();
+    }
+  }), {
+    eventName: CREDIT_PACK_STORAGE_CHANGED_EVENT,
+    session: nextSession,
+    expectedRequestId: requestId
+  });
+}
+
 async function installPaymentFixture(page, {
   session = null,
   plan = 'free',
@@ -134,10 +230,12 @@ async function installPaymentFixture(page, {
   previewDelayMs = 0,
   cancelMode = 'success',
   cancelDelayMs = 0,
+  paddle = CATALOG.paddle,
   sharedState = null
 } = {}) {
   const publicCatalog = {
     ...CATALOG,
+    paddle: { ...paddle },
     creditPacks: {
       ...CATALOG.creditPacks,
       enabled: creditPackPurchasesEnabled,
@@ -190,23 +288,30 @@ async function installPaymentFixture(page, {
   await page.addInitScript(({
     fakeSession,
     pendingRequestId,
-    shouldFailRecoveryStorage
+    shouldFailRecoveryStorage,
+    storageChangedEventName
   }) => {
-    if (shouldFailRecoveryStorage) {
-      const originalSetItem = Storage.prototype.setItem;
-      Storage.prototype.setItem = function setItem(key, value) {
-        if (
-          this === window.localStorage
-          && String(key).startsWith('promptgen:credit-pack-purchase:')
-        ) {
-          throw new DOMException(
-            'Credit pack recovery storage is unavailable.',
-            'QuotaExceededError'
-          );
-        }
-        return originalSetItem.call(this, key, value);
-      };
-    }
+    const originalSetItem = Storage.prototype.setItem;
+    Storage.prototype.setItem = function setItem(key, value) {
+      const normalizedKey = String(key);
+      const isCreditPackRecoveryKey = (
+        this === window.localStorage
+        && normalizedKey.startsWith('promptgen:credit-pack-purchase:')
+      );
+      if (shouldFailRecoveryStorage && isCreditPackRecoveryKey) {
+        throw new DOMException(
+          'Credit pack recovery storage is unavailable.',
+          'QuotaExceededError'
+        );
+      }
+      const result = originalSetItem.call(this, key, value);
+      if (isCreditPackRecoveryKey) {
+        window.dispatchEvent(new CustomEvent(storageChangedEventName, {
+          detail: { key: normalizedKey, value: String(value) }
+        }));
+      }
+      return result;
+    };
     if (fakeSession && pendingRequestId) {
       window.localStorage.setItem(
         `promptgen:credit-pack-purchase:${fakeSession.user.id}`,
@@ -241,14 +346,24 @@ async function installPaymentFixture(page, {
       value: supabaseDouble
     });
     window.__paddleCheckoutCalls = [];
+    window.__paddleEnvironmentCalls = [];
     window.__paddleInitializeCount = 0;
+    window.__paddleCallOrder = [];
     const paddleDouble = {
+      Environment: {
+        set: environment => {
+          window.__paddleEnvironmentCalls.push(environment);
+          window.__paddleCallOrder.push(`environment:${environment}`);
+        }
+      },
       Initialize: options => {
         window.__paddleInitializeCount += 1;
+        window.__paddleCallOrder.push('initialize');
         window.__paddleCallback = options.eventCallback;
       },
       Checkout: {
         open: options => {
+          window.__paddleCallOrder.push('checkout');
           window.__paddleCheckoutCalls.push(options);
         }
       }
@@ -262,7 +377,8 @@ async function installPaymentFixture(page, {
   }, {
     fakeSession: session,
     pendingRequestId: storedRequestId,
-    shouldFailRecoveryStorage: storageWriteFails
+    shouldFailRecoveryStorage: storageWriteFails,
+    storageChangedEventName: CREDIT_PACK_STORAGE_CHANGED_EVENT
   });
 
   // Register the fail-closed API fallback first. Playwright evaluates newer,
@@ -724,6 +840,11 @@ test('subscription checkout sends only the plan to the server and opens only its
   await expect.poll(() => page.evaluate(() => window.__paddleCheckoutCalls)).toEqual([
     { transactionId: 'txn_subscription_e2e' }
   ]);
+  expect(await page.evaluate(() => window.__paddleEnvironmentCalls)).toEqual([]);
+  expect(await page.evaluate(() => window.__paddleCallOrder)).toEqual([
+    'initialize',
+    'checkout'
+  ]);
   await expect(page.locator('#proPlanBtn')).toBeDisabled();
 
   await page.evaluate(() => window.__paddleCallback({ name: 'checkout.closed' }));
@@ -736,6 +857,51 @@ test('subscription checkout sends only the plan to the server and opens only its
     { transactionId: 'txn_subscription_e2e' },
     { transactionId: 'txn_subscription_e2e' }
   ]);
+});
+
+test('Sandbox checkout sets Paddle environment before initialization', async ({ page }) => {
+  await installPaymentFixture(page, {
+    session: PAID_SESSION,
+    plan: 'free',
+    paddle: {
+      clientToken: 'test_credit-pack-e2e-client-token',
+      environment: 'sandbox'
+    }
+  });
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await expect.poll(async () => page.locator('#planBadge').textContent()).toBe('Free');
+
+  await page.locator('#proPlanBtn').click();
+
+  await expect.poll(() => page.evaluate(() => window.__paddleCallOrder)).toEqual([
+    'environment:sandbox',
+    'initialize',
+    'checkout'
+  ]);
+  expect(await page.evaluate(() => window.__paddleEnvironmentCalls)).toEqual(['sandbox']);
+  expect(await page.evaluate(() => window.__paddleInitializeCount)).toBe(1);
+});
+
+test('a mismatched public Paddle environment fails closed before any SDK call', async ({ page }) => {
+  const fixture = await installPaymentFixture(page, {
+    session: PAID_SESSION,
+    plan: 'free',
+    paddle: {
+      clientToken: 'live_wrong-environment',
+      environment: 'sandbox'
+    }
+  });
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await expect.poll(async () => page.locator('#planBadge').textContent()).toBe('Free');
+
+  await page.locator('#proPlanBtn').click();
+
+  await expect.poll(() => fixture.subscriptionRequests).toHaveLength(1);
+  await expect(page.locator('#proPlanBtn')).toHaveText('Resume checkout');
+  expect(await page.evaluate(() => window.__paddleEnvironmentCalls)).toEqual([]);
+  expect(await page.evaluate(() => window.__paddleInitializeCount)).toBe(0);
+  expect(await page.evaluate(() => window.__paddleCheckoutCalls)).toEqual([]);
+  expect(await page.evaluate(() => window.__paddleCallOrder)).toEqual([]);
 });
 
 test('paid users explicitly confirm the tax-inclusive total and complete only from server status', async ({ page }) => {
@@ -879,8 +1045,7 @@ test('a lost cancellation response keeps a storage-failed reservation locked', a
     storageWriteFails: true,
     cancelMode: 'lost_response'
   });
-  await page.goto('/', { waitUntil: 'domcontentloaded' });
-  await expect.poll(async () => page.locator('#planBadge').textContent()).toBe('Pro');
+  await navigateAndWaitForProfileHydration(page, 'Pro');
 
   await page.locator('[data-credit-pack-key="usage_600"]').click();
 
@@ -1632,13 +1797,11 @@ test('a delayed status response cannot reset the next account purchase state', a
     createdAt: '2026-07-29T00:00:02.000Z',
     completedAt: null
   };
-  await page.evaluate(nextSession => {
-    window.__emitAuthStateChange('SIGNED_IN', nextSession);
-  }, SECOND_PAID_SESSION);
-
-  await expect.poll(() => page.evaluate(userId => (
-    window.localStorage.getItem(`promptgen:credit-pack-purchase:${userId}`)
-  ), SECOND_PAID_SESSION.user.id)).toBe(SECOND_PURCHASE_REQUEST_ID);
+  await emitAuthStateAndWaitForStoredCreditPackRequest(
+    page,
+    SECOND_PAID_SESSION,
+    SECOND_PURCHASE_REQUEST_ID
+  );
   await oldStatusResponded.promise;
 
   await expect(page.locator('#creditPackStatus')).toHaveAttribute(

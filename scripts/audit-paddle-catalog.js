@@ -11,6 +11,7 @@ const {
 } = require('../lib/paddle-api');
 
 const ALLOWED_STATUSES = new Set(['active', 'archived']);
+const ALLOWED_TAX_MODES = new Set(['account_setting', 'external', 'internal', 'location']);
 const DEFAULT_AUDIT_CONTRACT = Object.freeze({
   productStatus: 'active',
   productType: 'standard',
@@ -18,6 +19,7 @@ const DEFAULT_AUDIT_CONTRACT = Object.freeze({
   priceStatus: 'active',
   priceType: 'standard',
   priceTaxMode: 'account_setting',
+  unitPriceOverrides: Object.freeze([]),
   trialPeriod: null
 });
 
@@ -55,7 +57,17 @@ function parseExpectedStatus(value, variableName) {
   return status;
 }
 
-function parseLegacyPriceExpectations(env, legacyPriceIds) {
+function parseExpectedTaxMode(value, variableName, fallback = 'account_setting') {
+  const taxMode = String(value || fallback).trim().toLowerCase();
+  if (!ALLOWED_TAX_MODES.has(taxMode)) {
+    throw new Error(
+      `${variableName} must be account_setting, external, internal, or location.`
+    );
+  }
+  return taxMode;
+}
+
+function parseLegacyPriceExpectations(env, legacyPriceIds, defaultTaxMode = 'account_setting') {
   const variableName = 'PADDLE_PRO_LEGACY_PRICE_EXPECTATIONS';
   const raw = String(env[variableName] || '').trim();
   let parsed = {};
@@ -88,7 +100,9 @@ function parseLegacyPriceExpectations(env, legacyPriceIds) {
       throw new Error(`${variableName}.${priceId} must be an object.`);
     }
     const unknownFields = Object.keys(expectation)
-      .filter((field) => !['status', 'unitAmount', 'productStatus'].includes(field));
+      .filter((field) => ![
+        'status', 'unitAmount', 'productStatus', 'taxMode'
+      ].includes(field));
     if (unknownFields.length > 0) {
       throw new Error(
         `${variableName}.${priceId} has unsupported fields: ${unknownFields.join(', ')}.`
@@ -111,7 +125,12 @@ function parseLegacyPriceExpectations(env, legacyPriceIds) {
         : parseExpectedStatus(
           expectation.productStatus,
           `${variableName}.${priceId}.productStatus`
-        )
+        ),
+      priceTaxMode: parseExpectedTaxMode(
+        expectation.taxMode,
+        `${variableName}.${priceId}.taxMode`,
+        defaultTaxMode
+      )
     }];
   }));
 }
@@ -124,7 +143,13 @@ function withAuditContract(expected, overrides = {}) {
   };
 }
 
-function withProUnitAmount(expected, { priceId, unitAmount, priceStatus, productStatus }) {
+function withProUnitAmount(expected, {
+  priceId,
+  unitAmount,
+  priceStatus,
+  productStatus,
+  priceTaxMode
+}) {
   const monthlyPriceUsd = Number(unitAmount) / 100;
   return withAuditContract({
     ...expected,
@@ -137,15 +162,20 @@ function withProUnitAmount(expected, { priceId, unitAmount, priceStatus, product
     )
   }, {
     priceStatus,
-    productStatus
+    productStatus,
+    priceTaxMode
   });
 }
 
 function buildPaddleAuditTargets(env = process.env) {
+  const currentTaxMode = parseExpectedTaxMode(
+    env.PADDLE_CATALOG_EXPECTED_TAX_MODE,
+    'PADDLE_CATALOG_EXPECTED_TAX_MODE'
+  );
   const currentMetadata = getPaddleCatalogMetadata(env);
   const targets = Object.entries(currentMetadata).map(([plan, expected]) => ({
     plan: `${plan}.current`,
-    expected: withAuditContract(expected)
+    expected: withAuditContract(expected, { priceTaxMode: currentTaxMode })
   }));
 
   if (!isPro1099Enabled(env)) return targets;
@@ -175,11 +205,20 @@ function buildPaddleAuditTargets(env = process.env) {
         env.PADDLE_PRO_999_EXPECTED_STATUS,
         'PADDLE_PRO_999_EXPECTED_STATUS'
       ),
-      productStatus: DEFAULT_AUDIT_CONTRACT.productStatus
+      productStatus: DEFAULT_AUDIT_CONTRACT.productStatus,
+      priceTaxMode: parseExpectedTaxMode(
+        env.PADDLE_PRO_999_EXPECTED_TAX_MODE,
+        'PADDLE_PRO_999_EXPECTED_TAX_MODE',
+        currentTaxMode
+      )
     })
   });
 
-  const legacyExpectations = parseLegacyPriceExpectations(env, legacyPriceIds);
+  const legacyExpectations = parseLegacyPriceExpectations(
+    env,
+    legacyPriceIds,
+    currentTaxMode
+  );
   for (const priceId of legacyPriceIds) {
     targets.push({
       plan: `pro.legacy:${priceId}`,
@@ -206,6 +245,11 @@ function collectMismatches(plan, expected, price, product) {
     ['price.type', price.type, expected.priceType],
     ['price.tax_mode', price.tax_mode, expected.priceTaxMode],
     ['price.trial_period', price.trial_period, expected.trialPeriod],
+    [
+      'price.unit_price_overrides.length',
+      Array.isArray(price.unit_price_overrides) ? price.unit_price_overrides.length : null,
+      expected.unitPriceOverrides.length
+    ],
     ['price.unit_price.amount', price.unit_price?.amount, expected.unitAmount],
     ['price.unit_price.currency_code', price.unit_price?.currency_code, expected.currencyCode],
     ['price.billing_cycle.interval', price.billing_cycle?.interval, expected.billingCycle.interval],
@@ -260,5 +304,6 @@ module.exports = {
   auditPaddleCatalog,
   buildPaddleAuditTargets,
   collectMismatches,
+  parseExpectedTaxMode,
   parseLegacyPriceExpectations
 };

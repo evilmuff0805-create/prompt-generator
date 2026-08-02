@@ -7,12 +7,15 @@
 const crypto = require('crypto');
 const {
   classifyTransactionOrigin,
+  classifyChargebackAdjustment,
   priceIdToPlan,
   isActiveSubscription,
   isTestAccount,
   recordPlanUpgradePurchase,
   syncPlanFromSubscription,
   applyPlanChange,
+  handleNonCreditPackAdjustment,
+  reportNonCreditPackChargebackAdjustment,
   saveSubscriptionIds,
   verifyPaddleSignature
 } = require('../../routes/paddle');
@@ -150,10 +153,9 @@ describe('expireSubscription', () => {
 });
 
 describe('adjustment.created 이벤트 필터링', () => {
-  test('action이 refund가 아닌 경우 처리하지 않아야 한다', () => {
-    const action = 'chargeback';
-    const isHandled = action === 'refund' || action === 'credit';
-    expect(isHandled).toBe(false);
+  test('chargeback 계열은 무시 대상이 아니라 수동 검토 대상이다', () => {
+    expect(classifyChargebackAdjustment({ action: 'chargeback', status: 'approved' }))
+      .toMatchObject({ action: 'chargeback', isReversal: false });
   });
 
   test('action이 refund 또는 credit이면 처리해야 한다', () => {
@@ -169,6 +171,248 @@ describe('adjustment.created 이벤트 필터링', () => {
   test('status가 approved이면 처리해야 한다', () => {
     expect('approved' === 'approved').toBe(true);
   });
+});
+
+describe('non-credit-pack chargeback manual review', () => {
+  const opaqueIds = {
+    adjustmentId: 'opaque-adjustment-id',
+    transactionId: 'opaque-transaction-id',
+    subscriptionId: 'opaque-subscription-id',
+    customerId: 'opaque-customer-id',
+    notificationId: 'opaque-notification-id',
+    providerEventId: 'opaque-provider-event-id'
+  };
+
+  test.each([
+    ['chargeback', 'chargeback', false, false, null],
+    ['chargeback_warning', 'chargeback_warning', true, false, null],
+    ['chargeback_reverse', 'chargeback', false, true, 'reverse_action'],
+    ['chargeback_warning_reverse', 'chargeback_warning', true, true, 'reverse_action']
+  ])(
+    'Paddle action=%s을 명시적으로 분류한다',
+    (action, family, isWarning, isReversal, reversalSource) => {
+      expect(classifyChargebackAdjustment({ action, status: 'approved' })).toEqual({
+        action,
+        family,
+        isWarning,
+        isReversal,
+        reversalSource
+      });
+    }
+  );
+
+  test.each(['chargeback', 'chargeback_warning'])(
+    'action=%s 원본 adjustment가 status=reversed로 갱신된 형태도 역전으로 분류한다',
+    (action) => {
+      expect(classifyChargebackAdjustment({ action, status: 'reversed' }))
+        .toMatchObject({ isReversal: true, reversalSource: 'reversed_status' });
+    }
+  );
+
+  test.each(['refund', 'credit', 'credit_reverse', undefined])(
+    'action=%s는 chargeback 수동 검토 분류에 속하지 않는다',
+    (action) => {
+      expect(classifyChargebackAdjustment({ action, status: 'approved' })).toBeNull();
+    }
+  );
+
+  test.each([
+    'chargeback',
+    'chargeback_warning',
+    'chargeback_reverse',
+    'chargeback_warning_reverse'
+  ])(
+    '%s을 critical/manual-review로 내구적 기록하고 크레딧·entitlement mutation을 명시적으로 금지한다',
+    async (action) => {
+      const incidentReporter = jest.fn().mockResolvedValue({ persisted: true, incidentId: 42 });
+      const result = await reportNonCreditPackChargebackAdjustment(
+        {
+          id: opaqueIds.adjustmentId,
+          transaction_id: opaqueIds.transactionId,
+          subscription_id: opaqueIds.subscriptionId,
+          customer_id: opaqueIds.customerId,
+          action,
+          type: 'full',
+          status: 'approved'
+        },
+        {
+          requestId: 'opaque-http-request-id',
+          eventId: opaqueIds.notificationId,
+          providerEventId: opaqueIds.providerEventId,
+          eventType: 'adjustment.created',
+          occurredAt: '2026-08-01T00:00:00Z',
+          incidentReporter
+        }
+      );
+
+      expect(result).toMatchObject({ handled: true, manualReviewRequired: true });
+      expect(incidentReporter).toHaveBeenCalledWith(expect.objectContaining({
+        severity: 'critical',
+        eventCode: 'NON_CREDIT_PACK_CHARGEBACK_REQUIRES_REVIEW',
+        fingerprint:
+          `paddle-webhook:NON_CREDIT_PACK_CHARGEBACK_REQUIRES_REVIEW:opaque-adjustment-id:${action}:${action.endsWith('_reverse') ? 'reversal' : 'forward'}`,
+        context: expect.objectContaining({
+          adjustmentId: opaqueIds.adjustmentId,
+          transactionId: opaqueIds.transactionId,
+          subscriptionId: opaqueIds.subscriptionId,
+          customerId: opaqueIds.customerId,
+          eventId: opaqueIds.notificationId,
+          providerEventId: opaqueIds.providerEventId,
+          action,
+          manualReviewRequired: true,
+          creditMutationApplied: false,
+          entitlementMutationApplied: false
+        })
+      }));
+    }
+  );
+
+  test('same adjustment redelivery는 event ID를 보존하면서 같은 open-incident fingerprint를 사용한다', async () => {
+    const incidentReporter = jest.fn().mockResolvedValue({ persisted: true });
+    const data = {
+      id: opaqueIds.adjustmentId,
+      transaction_id: opaqueIds.transactionId,
+      subscription_id: opaqueIds.subscriptionId,
+      action: 'chargeback_warning',
+      status: 'approved'
+    };
+
+    await reportNonCreditPackChargebackAdjustment(data, {
+      eventId: 'notification-first',
+      providerEventId: 'event-first',
+      incidentReporter
+    });
+    await reportNonCreditPackChargebackAdjustment(data, {
+      eventId: 'notification-second',
+      providerEventId: 'event-second',
+      incidentReporter
+    });
+
+    const first = incidentReporter.mock.calls[0][0];
+    const second = incidentReporter.mock.calls[1][0];
+    expect(first.fingerprint).toBe(second.fingerprint);
+    expect(first.context).toMatchObject({
+      eventId: 'notification-first',
+      providerEventId: 'event-first'
+    });
+    expect(second.context).toMatchObject({
+      eventId: 'notification-second',
+      providerEventId: 'event-second'
+    });
+  });
+
+  test('same adjustment의 forward/reversal 금융 상태는 서로 다른 incident fingerprint로 보존한다', async () => {
+    const incidentReporter = jest.fn().mockResolvedValue({ persisted: true });
+    const base = {
+      id: opaqueIds.adjustmentId,
+      transaction_id: opaqueIds.transactionId,
+      subscription_id: opaqueIds.subscriptionId
+    };
+
+    await reportNonCreditPackChargebackAdjustment(
+      { ...base, action: 'chargeback_warning', status: 'approved' },
+      { providerEventId: 'event-forward', incidentReporter }
+    );
+    await reportNonCreditPackChargebackAdjustment(
+      { ...base, action: 'chargeback_warning', status: 'reversed' },
+      { providerEventId: 'event-reversed-status', incidentReporter }
+    );
+    await reportNonCreditPackChargebackAdjustment(
+      { ...base, action: 'chargeback_warning_reverse', status: 'approved' },
+      { providerEventId: 'event-reverse-action', incidentReporter }
+    );
+
+    const fingerprints = incidentReporter.mock.calls.map(([incident]) => incident.fingerprint);
+    expect(new Set(fingerprints).size).toBe(3);
+    expect(fingerprints[0]).toMatch(/:chargeback_warning:forward$/);
+    expect(fingerprints[1]).toMatch(/:chargeback_warning:reversal$/);
+    expect(fingerprints[2]).toMatch(/:chargeback_warning_reverse:reversal$/);
+  });
+
+  test('critical incident가 내구적으로 저장되지 않으면 webhook ACK를 막는다', async () => {
+    const incidentReporter = jest.fn().mockResolvedValue({ persisted: false });
+
+    await expect(reportNonCreditPackChargebackAdjustment(
+      {
+        id: opaqueIds.adjustmentId,
+        transaction_id: opaqueIds.transactionId,
+        action: 'chargeback_reverse',
+        status: 'approved'
+      },
+      { incidentReporter }
+    )).rejects.toMatchObject({
+      code: 'NON_CREDIT_PACK_CHARGEBACK_INCIDENT_PERSIST_FAILED'
+    });
+  });
+
+  test('refund/credit은 기존 자동 환불 경로를 위해 chargeback helper에서 처리하지 않는다', async () => {
+    const incidentReporter = jest.fn();
+
+    await expect(reportNonCreditPackChargebackAdjustment(
+      { action: 'refund', status: 'approved' },
+      { incidentReporter }
+    )).resolves.toEqual({ handled: false });
+    expect(incidentReporter).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    'chargeback',
+    'chargeback_warning',
+    'chargeback_reverse',
+    'chargeback_warning_reverse'
+  ])(
+    '%s manual-review 경로는 refund handler를 호출하지 않는다',
+    async (action) => {
+      const refundHandler = jest.fn();
+      const incidentReporter = jest.fn().mockResolvedValue({ persisted: true });
+
+      await expect(handleNonCreditPackAdjustment(
+        {},
+        {
+          id: opaqueIds.adjustmentId,
+          transaction_id: opaqueIds.transactionId,
+          subscription_id: opaqueIds.subscriptionId,
+          action,
+          status: 'approved'
+        },
+        { refundHandler, incidentReporter }
+      )).resolves.toMatchObject({ handled: true, manualReviewRequired: true });
+
+      expect(refundHandler).not.toHaveBeenCalled();
+    }
+  );
+
+  test.each(['refund', 'credit'])(
+    'approved %s는 기존 refund handler 계약을 그대로 유지한다',
+    async (action) => {
+      const supabase = { marker: 'supabase' };
+      const refundResult = { reason: 'refunded' };
+      const refundHandler = jest.fn().mockResolvedValue(refundResult);
+      const incidentReporter = jest.fn();
+
+      await expect(handleNonCreditPackAdjustment(
+        supabase,
+        {
+          transaction_id: opaqueIds.transactionId,
+          action,
+          type: 'full',
+          status: 'approved'
+        },
+        { refundHandler, incidentReporter }
+      )).resolves.toEqual({
+        handled: true,
+        reason: 'refund_or_credit_applied',
+        result: refundResult
+      });
+
+      expect(incidentReporter).not.toHaveBeenCalled();
+      expect(refundHandler).toHaveBeenCalledWith(
+        supabase,
+        opaqueIds.transactionId,
+        'full'
+      );
+    }
+  );
 });
 
 describe('saveSubscriptionIds', () => {

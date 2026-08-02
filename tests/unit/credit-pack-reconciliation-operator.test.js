@@ -3,6 +3,7 @@
 const {
   PURCHASE_REQUEST_COLUMNS,
   ReconciliationOperatorError,
+  SANDBOX_SUPABASE_PROJECT_REFS_ENV,
   parseCliArguments,
   runCreditPackReconciliation
 } = require('../../scripts/reconcile-credit-pack-purchase');
@@ -26,6 +27,14 @@ const ENV = Object.freeze({
   SUPABASE_SERVICE_ROLE_KEY: 'service-role-test-value',
   PADDLE_API_KEY: 'pdl_live_apikey_test-only',
   PADDLE_API_BASE: 'https://api.paddle.com'
+});
+const SANDBOX_PROJECT_REF = 'sandboxpromptgen0001';
+const SANDBOX_ENV = Object.freeze({
+  SUPABASE_URL: `https://${SANDBOX_PROJECT_REF}.supabase.co`,
+  SUPABASE_SERVICE_ROLE_KEY: 'sandbox-service-role-test-value',
+  PADDLE_API_KEY: 'pdl_sdbx_apikey_test-only',
+  PADDLE_API_BASE: 'https://sandbox-api.paddle.com',
+  [SANDBOX_SUPABASE_PROJECT_REFS_ENV]: SANDBOX_PROJECT_REF
 });
 
 function purchaseRow(overrides = {}) {
@@ -182,7 +191,8 @@ function operatorOptions({
   confirmationResult = null,
   apply = false,
   rpcResponse = null,
-  now = CHECKED_AT
+  now = CHECKED_AT,
+  env = ENV
 } = {}) {
   const supabase = makeSupabase(row, rpcResponse);
   const createClientImpl = jest.fn().mockReturnValue(supabase.client);
@@ -210,7 +220,7 @@ function operatorOptions({
     options: {
       requestId: REQUEST_ID,
       apply,
-      env: ENV,
+      env,
       now: jest.fn(() => new Date(now)),
       createClientImpl,
       reconcileImpl,
@@ -336,6 +346,101 @@ describe('credit-pack reconciliation operator', () => {
       }
     });
     expect(context.supabase.rpc).not.toHaveBeenCalled();
+  });
+
+  test('an explicitly allowlisted Sandbox project supports read-only dry-run', async () => {
+    const context = operatorOptions({ env: SANDBOX_ENV });
+
+    const result = await runCreditPackReconciliation(context.options);
+
+    expect(result).toMatchObject({
+      ok: true,
+      mode: 'dry-run',
+      outcome: 'definitive_no_match',
+      requestId: REQUEST_ID,
+      readyToApply: false,
+      paddleBindingRequestId: BINDING_REQUEST_ID
+    });
+    expect(context.createClientImpl).toHaveBeenCalledWith(
+      `https://${SANDBOX_PROJECT_REF}.supabase.co`,
+      SANDBOX_ENV.SUPABASE_SERVICE_ROLE_KEY,
+      expect.objectContaining({
+        auth: expect.objectContaining({
+          persistSession: false
+        })
+      })
+    );
+    expect(context.fetchImpl).toHaveBeenCalledWith(
+      `https://sandbox-api.paddle.com/subscriptions/${SUBSCRIPTION_ID}`,
+      expect.objectContaining({
+        method: 'GET',
+        headers: expect.objectContaining({
+          Authorization: `Bearer ${SANDBOX_ENV.PADDLE_API_KEY}`
+        })
+      })
+    );
+    expect(context.reconcileImpl).toHaveBeenCalledWith(
+      expect.objectContaining({
+        apiBase: 'https://sandbox-api.paddle.com',
+        apiKey: SANDBOX_ENV.PADDLE_API_KEY
+      })
+    );
+    expect(context.reconcileImpl).toHaveBeenCalledTimes(1);
+    expect(context.supabase.rpc).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    [
+      'missing allowlist',
+      {
+        ...SANDBOX_ENV,
+        [SANDBOX_SUPABASE_PROJECT_REFS_ENV]: undefined
+      },
+      'RECONCILIATION_SANDBOX_PROJECT_ALLOWLIST_REQUIRED'
+    ],
+    [
+      'unlisted project',
+      {
+        ...SANDBOX_ENV,
+        [SANDBOX_SUPABASE_PROJECT_REFS_ENV]: 'othersandboxproject1'
+      },
+      'RECONCILIATION_SUPABASE_PROJECT_MISMATCH'
+    ],
+    [
+      'wildcard allowlist entry',
+      {
+        ...SANDBOX_ENV,
+        [SANDBOX_SUPABASE_PROJECT_REFS_ENV]: '*'
+      },
+      'RECONCILIATION_SANDBOX_PROJECT_ALLOWLIST_INVALID'
+    ],
+    [
+      'production project in the Sandbox allowlist',
+      {
+        ...SANDBOX_ENV,
+        [SANDBOX_SUPABASE_PROJECT_REFS_ENV]: [
+          SANDBOX_PROJECT_REF,
+          'kzlovmcghswprasjaeeo'
+        ].join(',')
+      },
+      'RECONCILIATION_SANDBOX_PROJECT_ALLOWLIST_INVALID'
+    ]
+  ])('%s fails before creating a privileged client', async (
+    _label,
+    env,
+    errorCode
+  ) => {
+    const createClientImpl = jest.fn();
+    const fetchImpl = jest.fn();
+
+    await expect(runCreditPackReconciliation({
+      requestId: REQUEST_ID,
+      env,
+      createClientImpl,
+      fetchImpl
+    })).rejects.toEqual(expectOperatorError(errorCode));
+    expect(createClientImpl).not.toHaveBeenCalled();
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 
   test('the real reconciler contract produces a read-only complete dry-run', async () => {
@@ -921,6 +1026,41 @@ describe('credit-pack reconciliation operator', () => {
 
   test.each([
     [
+      'production Supabase with Sandbox Paddle',
+      {
+        ...SANDBOX_ENV,
+        SUPABASE_URL: ENV.SUPABASE_URL
+      }
+    ],
+    [
+      'allowlisted Sandbox Supabase with live Paddle',
+      {
+        ...ENV,
+        SUPABASE_URL: SANDBOX_ENV.SUPABASE_URL,
+        [SANDBOX_SUPABASE_PROJECT_REFS_ENV]: SANDBOX_PROJECT_REF
+      }
+    ]
+  ])('%s is rejected before a privileged client is created', async (
+    _label,
+    env
+  ) => {
+    const createClientImpl = jest.fn();
+    const fetchImpl = jest.fn();
+
+    await expect(runCreditPackReconciliation({
+      requestId: REQUEST_ID,
+      env,
+      createClientImpl,
+      fetchImpl
+    })).rejects.toEqual(
+      expectOperatorError('RECONCILIATION_SUPABASE_PROJECT_MISMATCH')
+    );
+    expect(createClientImpl).not.toHaveBeenCalled();
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    [
       'live key against Sandbox',
       {
         PADDLE_API_KEY: 'pdl_live_apikey_test-only',
@@ -932,6 +1072,13 @@ describe('credit-pack reconciliation operator', () => {
       {
         PADDLE_API_KEY: 'pdl_sdbx_apikey_test-only',
         PADDLE_API_BASE: 'https://api.paddle.com'
+      }
+    ],
+    [
+      'legacy key against Sandbox',
+      {
+        PADDLE_API_KEY: 'legacy-test-only',
+        PADDLE_API_BASE: 'https://sandbox-api.paddle.com'
       }
     ]
   ])('%s is rejected before any client or provider request', async (
@@ -948,6 +1095,36 @@ describe('credit-pack reconciliation operator', () => {
       fetchImpl
     })).rejects.toEqual(
       expectOperatorError('RECONCILIATION_PADDLE_ENVIRONMENT_MISMATCH')
+    );
+    expect(createClientImpl).not.toHaveBeenCalled();
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    ['Sandbox Paddle', SANDBOX_ENV],
+    [
+      'live Paddle',
+      {
+        ...ENV,
+        SUPABASE_URL: SANDBOX_ENV.SUPABASE_URL,
+        [SANDBOX_SUPABASE_PROJECT_REFS_ENV]: SANDBOX_PROJECT_REF
+      }
+    ]
+  ])('--apply rejects an allowlisted staging project with %s', async (
+    _label,
+    env
+  ) => {
+    const createClientImpl = jest.fn();
+    const fetchImpl = jest.fn();
+
+    await expect(runCreditPackReconciliation({
+      requestId: REQUEST_ID,
+      apply: true,
+      env,
+      createClientImpl,
+      fetchImpl
+    })).rejects.toEqual(
+      expectOperatorError('RECONCILIATION_APPLY_ENVIRONMENT_UNSAFE')
     );
     expect(createClientImpl).not.toHaveBeenCalled();
     expect(fetchImpl).not.toHaveBeenCalled();
@@ -1021,6 +1198,24 @@ describe('credit-pack reconciliation operator', () => {
   ) => {
     const context = operatorOptions({ apply: true });
     context.fetchImpl.mockResolvedValueOnce(bindingResponse);
+
+    await expect(
+      runCreditPackReconciliation(context.options)
+    ).rejects.toEqual(
+      expectOperatorError('RECONCILIATION_PADDLE_BINDING_UNVERIFIED')
+    );
+    expect(context.fetchImpl).toHaveBeenCalledTimes(1);
+    expect(context.reconcileImpl).not.toHaveBeenCalled();
+    expect(context.supabase.rpc).not.toHaveBeenCalled();
+  });
+
+  test('a wrong Sandbox seller binding cannot scan or write', async () => {
+    const context = operatorOptions({ env: SANDBOX_ENV });
+    context.fetchImpl.mockResolvedValueOnce({
+      ok: false,
+      status: 404,
+      json: jest.fn()
+    });
 
     await expect(
       runCreditPackReconciliation(context.options)

@@ -482,10 +482,11 @@
       <h2 class="section-title" data-i18n="pricing.title">Simple Pricing</h2>
       <div class="pricing-grid">
 
+        <!-- catalog-plan:free:start -->
         <div class="pricing-card" data-catalog-plan="free">
           <div class="pricing-card__header">
             <h3 data-catalog-field="name">Free</h3>
-            <div class="pricing-card__price"><span class="price-amount" data-catalog-field="price">$0</span><span class="price-period" data-i18n="pricing.period.month">/month</span></div>
+            <div class="pricing-card__price"><span class="price-amount" data-catalog-field="price" data-catalog-price-fallback="free">$0</span><span class="price-period" data-i18n="pricing.period.month">/month</span></div>
             <p class="pricing-card__desc" data-catalog-field="description">For trying the core tools</p>
           </div>
           <ul class="pricing-card__features">
@@ -498,13 +499,15 @@
           </ul>
           <button id="freePlanBtn" class="btn btn--outline" data-i18n="common.action.getStarted">Get Started</button>
         </div>
+        <!-- catalog-plan:free:end -->
 
+        <!-- catalog-plan:pro:start -->
         <div class="pricing-card pricing-card--popular" data-catalog-plan="pro">
           <div class="popular-badge" data-i18n="pricing.badge.popular">POPULAR</div>
           <div class="pricing-card__header">
             <h3 data-catalog-field="name">Pro</h3>
             <div class="pricing-card__price">
-              <span class="price-amount" data-catalog-field="price">$9.99</span>
+              <span class="price-amount" data-catalog-field="price" data-catalog-price-fallback="pro">$9.99</span>
               <span class="price-period" data-i18n="pricing.period.month">/month</span>
             </div>
             <p class="pricing-card__desc" data-catalog-field="description">For individual creators</p>
@@ -520,11 +523,13 @@
           </ul>
           <button id="proPlanBtn" class="btn btn--primary" data-i18n="common.action.getStarted">Get Started</button>
         </div>
+        <!-- catalog-plan:pro:end -->
 
+        <!-- catalog-plan:enterprise:start -->
         <div class="pricing-card" data-catalog-plan="enterprise">
           <div class="pricing-card__header">
             <h3 data-catalog-field="name">Enterprise</h3>
-            <div class="pricing-card__price"><span class="price-amount" data-catalog-field="price">$19.99</span><span class="price-period" data-i18n="pricing.period.month">/month</span></div>
+            <div class="pricing-card__price"><span class="price-amount" data-catalog-field="price" data-catalog-price-fallback="enterprise">$19.99</span><span class="price-period" data-i18n="pricing.period.month">/month</span></div>
             <p class="pricing-card__desc" data-catalog-field="description">For high-volume individual creators</p>
           </div>
           <ul class="pricing-card__features">
@@ -536,6 +541,7 @@
           </ul>
           <button id="enterprisePlanBtn" class="btn btn--lavender" data-i18n="common.action.getStarted">Get Started</button>
         </div>
+        <!-- catalog-plan:enterprise:end -->
 
       </div>
       <p class="pricing-note" data-i18n="pricing.note">Pro and Enterprise are monthly subscriptions. Credits reset to the plan allotment at renewal and do not roll over. PromptGen does not currently include API access, team workspaces, custom models, or managed support.</p>
@@ -913,6 +919,7 @@
   <script src="/analytics.js?v=__ASSET_VERSION__"></script>
   <script src="/google-auth.js?v=__ASSET_VERSION__"></script>
   <script src="/js/changePlan-helpers.js?v=__ASSET_VERSION__"></script>
+  <script src="/runtime-config.js?v=__ASSET_VERSION__"></script>
   <script src="/app.js?v=__ASSET_VERSION__"></script>
   <script src="/hero-storyboards.js?v=__ASSET_VERSION__"></script>
   <script src="/navbar-shared.js?v=__ASSET_VERSION__"></script>

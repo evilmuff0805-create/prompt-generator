@@ -10,6 +10,14 @@ if (environmentReport.missingFeatureVariables.length > 0) {
     missingFeatures: environmentReport.missingFeatures
   }));
 }
+if (environmentReport.paddleWarnings.length > 0) {
+  console.warn(JSON.stringify({
+    timestamp: new Date().toISOString(),
+    level: 'warn',
+    event: 'environment.paddle_credentials_warning',
+    warnings: environmentReport.paddleWarnings
+  }));
+}
 
 const express = require('express');
 const fs = require('fs');
@@ -20,8 +28,12 @@ const logger = require('./lib/logger');
 const { getPublicProductCatalog } = require('./lib/product-catalog');
 const { getPublicCreditPackCatalog } = require('./lib/credit-pack-catalog');
 const {
-  applyProductCatalogToStructuredData
+  applyProductCatalogToStructuredData,
+  applyProductCatalogToVisiblePricing
 } = require('./lib/product-structured-data');
+const {
+  buildPublicRuntimeConfigScript
+} = require('./lib/public-runtime-config');
 const { redactShareTokenPath } = require('./lib/storyboard-sharing');
 const {
   getAssetVersion,
@@ -31,9 +43,13 @@ const {
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const indexHtmlTemplate = applyProductCatalogToStructuredData(
-  fs.readFileSync(path.join(__dirname, 'public', 'index.html'), 'utf8'),
-  getPublicProductCatalog()
+const publicProductCatalog = getPublicProductCatalog();
+const indexHtmlTemplate = applyProductCatalogToVisiblePricing(
+  applyProductCatalogToStructuredData(
+    fs.readFileSync(path.join(__dirname, 'public', 'index.html'), 'utf8'),
+    publicProductCatalog
+  ),
+  publicProductCatalog
 );
 const versionedHtmlTemplates = new Map([
   ['index.html', indexHtmlTemplate],
@@ -246,6 +262,18 @@ app.get(['/terms.html', '/privacy.html', '/refund.html'], (req, res) => {
 app.get('/storyboard-share.html', (req, res) => {
   res.status(404).type('text').send('Not found');
 });
+app.get('/runtime-config.js', (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  res.type('application/javascript');
+  try {
+    return res.send(buildPublicRuntimeConfigScript(process.env));
+  } catch (error) {
+    logger.error('runtime_config.public.failed', { error });
+    return res.status(503).send(
+      "'use strict';\nthrow new Error('[runtime-config] Public configuration is unavailable');\n"
+    );
+  }
+});
 app.use(express.static('public', {
   index: false,
   setHeaders: setStaticCacheHeaders
@@ -281,7 +309,7 @@ app.get('/api/catalog', (req, res) => {
   res.json({
     success: true,
     catalog: {
-      ...getPublicProductCatalog(),
+      ...publicProductCatalog,
       creditPacks: getPublicCreditPackCatalog()
     }
   });

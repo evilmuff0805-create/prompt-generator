@@ -319,6 +319,10 @@ never debit an unrelated lot.
 - A full refund after spending, a chargeback, or any state that cannot be
   mapped exactly creates a critical reconciliation incident rather than
   subtracting unrelated credits.
+- A non-credit-pack `chargeback`, `chargeback_warning`, or corresponding
+  reverse action is always persisted as a critical manual-review incident.
+  Forward and reversal states remain distinct, no automatic credit or plan
+  mutation is inferred, and a failed incident write keeps the webhook retryable.
 - An approved partial refund immediately changes the remaining source lot to
   `quarantined`. Quarantined credits cannot be consumed and are excluded from
   the spendable profile balance until an operator performs source-aware
@@ -376,7 +380,9 @@ must not be blindly replayed.
 
 ## Blocking gates
 
-No feature flag or production checkout may be enabled until all items pass:
+No merge, production deployment, production migration, production feature flag,
+or production Checkout activation may proceed until all items pass and explicit
+approval is recorded:
 
 - [ ] Paddle provides written approval that PromptGen's expiring,
   non-transferable, non-cash usage-credit model and subscription-attached
@@ -438,10 +444,28 @@ No feature flag or production checkout may be enabled until all items pass:
 2. Run focused unit tests for catalog selection, server checkout, add-on
    preview/purchase/status, webhook signature/fulfillment, migrations,
    refunds, event ordering, environment validation, and audits.
-3. Run the complete unit suite, build, dependency audit, and diff/secret scan.
+3. Run the complete unit suite, every repository-defined build/lint command,
+   dependency audit, and diff/secret scan. This repository currently defines no
+   build or lint script, so record those checks as not applicable rather than
+   claiming they passed.
 4. Confirm the public catalog/API responses contain no Paddle Price IDs or
    server-owned custom data.
-5. Confirm all three flags remain `false` in the release configuration.
+5. Confirm `PRO_PRICE_1099_ENABLED`, `CREDIT_LEDGER_V2_ENABLED`, and
+   `CREDIT_PACK_PURCHASES_ENABLED` remain `false`, and confirm
+   `PADDLE_SANDBOX_CHECKOUT_CONFIRMED=false` in the production release
+   configuration.
+
+Latest local evidence (2026-08-02):
+
+- changed/new JavaScript syntax check: 30 files passed;
+- `npm run test:unit`: 68 suites and 1,091 tests passed;
+- `npm audit --omit=dev --audit-level=high`: 0 vulnerabilities;
+- Playwright discovery: 114 E2E tests parsed successfully;
+- targeted credit-pack E2E: not executed because the Windows runner failed
+  before test startup with `spawn EPERM`; this is not a passing result;
+- build/lint: not applicable because the repository defines neither script;
+- production-schema clone, migrations 023 through 026, deployment runtime, and
+  live/Sandbox Checkout remain unverified and deployment-blocking.
 
 ### 2. Production-schema clone verification
 
@@ -457,6 +481,110 @@ No feature flag or production checkout may be enabled until all items pass:
    ledger/payment evidence.
 
 ### 3. Paddle Sandbox verification
+
+Verified Sandbox catalog snapshot (2026-08-02, no checkout or customer
+transaction created):
+
+| Contract | Paddle Sandbox ID | Verified state |
+| --- | --- | --- |
+| PromptGen AI Pro product | `pro_01kz1c63973n5dhe85zzwem8sk` | active, standard, `saas` |
+| Pro USD 9.99 monthly | `pri_01kz1c64mvgy2g77zh9sa42xj9` | active, USD 999, quantity 1-1, no trial |
+| Pro USD 10.99 monthly | `pri_01kz1ced16q6831vgfqabavydb` | active, USD 1099, quantity 1-1, no trial |
+| PromptGen AI Enterprise product | `pro_01kz1cee379z4e1ajk8tbxq2ks` | active, standard, `saas` |
+| Enterprise USD 19.99 monthly | `pri_01kz1ceey4eeaktcjf9pw7qb7t` | active, USD 1999, quantity 1-1, no trial |
+
+All three prices have no unit-price overrides and are linked to the expected
+product. The create request used `tax_mode=account_setting`; Paddle persisted
+`tax_mode=location` because automatic tax localization is the Sandbox account
+default. This is Paddle's documented normalization behavior, not catalog
+drift: <https://developer.paddle.com/changelog/2025/default-automatic-tax-setting/>.
+Set `PADDLE_CATALOG_EXPECTED_TAX_MODE=location` and
+`PADDLE_PRO_999_EXPECTED_TAX_MODE=location` only in the temporary Sandbox
+catalog-audit process. Do not copy these Sandbox IDs into production
+configuration. All release feature flags remain `false`.
+
+**Current gate: BLOCKED.** The 2026-08-02 request returned HTTP 403, so no
+price/tax total was verified and no entity was created.
+
+Before opening Checkout, validate the exact customer-facing contract through
+Paddle's official transaction-preview endpoint. Paddle documents this POST as
+requiring only `transaction.read`, creating no transaction entity, and
+returning no transaction ID:
+<https://developer.paddle.com/api-reference/transactions/preview-transaction-create/>.
+The operator verifies all three prices independently, including product name,
+price name, USD unit amount, monthly billing cycle, no trial, quantity 1,
+product linkage, tax mode, and Paddle-calculated subtotal/tax/total. It rejects
+an unexpected transaction ID, reused provider request evidence, any contract
+drift, or any non-Sandbox credential before continuing.
+
+Use a generic non-sensitive location and a temporary process environment:
+
+```text
+PADDLE_SANDBOX_PREVIEW_CONFIRMED=true
+PADDLE_API_BASE=https://sandbox-api.paddle.com
+PADDLE_API_KEY=<modern Sandbox key with transaction.read>
+PADDLE_PRO_PRICE_ID=pri_01kz1c64mvgy2g77zh9sa42xj9
+PADDLE_PRO_1099_PRICE_ID=pri_01kz1ced16q6831vgfqabavydb
+PADDLE_ENTERPRISE_PRICE_ID=pri_01kz1ceey4eeaktcjf9pw7qb7t
+PADDLE_CATALOG_EXPECTED_TAX_MODE=location
+PADDLE_PRO_999_EXPECTED_TAX_MODE=location
+PADDLE_SANDBOX_PREVIEW_COUNTRY_CODE=US
+PADDLE_SANDBOX_PREVIEW_POSTAL_CODE=10001
+npm run audit:paddle-sandbox-checkout-preview
+```
+
+This preview does not prove the hosted Checkout or PDF/email receipt. Those
+still require a completed Sandbox payment. Do not use the PromptGen app for
+that payment yet. This branch removes the hardcoded production browser
+configuration, but the isolated deployment values, migrations 023 through 026,
+dedicated test user, alerts, and Sandbox notification destination have not been
+verified together. Subscription checkout writes an attempt before contacting
+Paddle, and a completed webhook writes subscription, purchase, and profile
+bindings, so a real app Checkout remains blocked until all of those isolation
+requirements are proven.
+
+The server also fails startup when Paddle Sandbox is paired with the PromptGen
+production Supabase project or with a project that is not explicitly listed in
+`PADDLE_SANDBOX_ALLOWED_SUPABASE_PROJECT_REFS`. This guard is necessary but not
+sufficient for app Checkout. The browser configuration is now runtime-injected
+from the same server environment, but its isolated deployment values must still
+be proven before use. In addition, `PADDLE_SANDBOX_CHECKOUT_CONFIRMED` defaults
+to `false`; while false, subscription checkout returns before any attempt RPC or
+Paddle request. Set it to `true` only for the bounded isolated E2E window.
+The inverse boundary is also enforced: a configured Paddle Production boundary
+may use only the PromptGen production Supabase project. Browser runtime config
+accepts only an `sb_publishable_` key or a matching legacy `anon` JWT, and server
+startup rejects secret/service-role credentials in the public-key variable.
+
+Latest provider-side check (2026-08-02): the operator audit made one Preview
+request and stopped without retry when Paddle returned HTTP 403 because the
+temporary Sandbox key lacked `transaction.read`. No transaction entity,
+Checkout, payment, webhook, or receipt was created or verified. Repeat the
+no-entity Preview audit with a least-privilege Sandbox key that includes
+`transaction.read` before opening any Checkout window; do not record the key in
+the repository or operator output.
+
+Before any purchase/refund scenario, inventory the Sandbox account with the
+dedicated read-only command. Inject credentials through a temporary local
+environment rather than CLI arguments or committed files:
+
+```text
+PADDLE_SANDBOX_AUDIT_CONFIRMED=true
+PADDLE_API_BASE=https://sandbox-api.paddle.com
+PADDLE_API_KEY=<modern Sandbox read-only key>
+npm run audit:paddle-sandbox
+```
+
+The key needs `product.read`, `price.read`, `transaction.read`,
+`subscription.read`, `notification_setting.read`, and `notification.read`.
+The command performs only authenticated `GET` requests. Products and prices
+are emitted as a constrained catalog inventory; transaction, subscription,
+notification-setting, and notification results are aggregate-only. Any
+missing scope, malformed/incomplete pagination, non-Sandbox base/key, or
+unavailable endpoint makes the audit incomplete and exits nonzero. Never copy
+the key, raw Paddle response, customer data, portal URL, webhook destination,
+endpoint secret, or notification payload into the repository or release
+evidence.
 
 | Scenario | Required result |
 | --- | --- |
@@ -535,6 +663,21 @@ The operator is dry-run by default:
 ```text
 npm run reconcile:credit-pack -- --request-id=<opaque UUID>
 ```
+
+For a Sandbox rehearsal, use a separate non-production Supabase project and
+explicitly allow only its exact project ref. The Paddle base and modern API key
+must both be Sandbox values:
+
+```text
+CREDIT_PACK_RECONCILIATION_SANDBOX_PROJECT_REFS=<exact staging project ref>
+PADDLE_API_BASE=https://sandbox-api.paddle.com
+PADDLE_API_KEY=pdl_sdbx_apikey_<redacted>
+npm run reconcile:credit-pack -- --request-id=<opaque UUID>
+```
+
+This Sandbox path is read-only and always reports `readyToApply: false`.
+Never include the PromptGen production ref in the allowlist and never add
+`--apply` to a Sandbox or staging run.
 
 It scans only after the request is at least 72 hours past authorization,
 validates every Paddle page and provider request ID, and never prints keys or
@@ -633,7 +776,9 @@ blocking gates and an explicit production approval:
    `CREDIT_LEDGER_V2_ENABLED=false`, and
    `CREDIT_PACK_PURCHASES_ENABLED=false`. Also keep
    `PADDLE_CREDIT_PACK_TAX_CATEGORY_CONFIRMED=false` and
-   `PADDLE_SUBSCRIPTION_HISTORY_CONFIRMED=false`.
+   `PADDLE_SUBSCRIPTION_HISTORY_CONFIRMED=false`,
+   `PADDLE_TRANSACTION_READ_CONFIRMED=false`, and
+   `PADDLE_SANDBOX_CHECKOUT_CONFIRMED=false`.
 2. Freeze payment/credit mutations, take and verify a backup, and confirm no
    active credit reservations or pending storyboard jobs.
 3. Apply migrations 023, 024, 025, and 026 in order.
@@ -651,9 +796,13 @@ blocking gates and an explicit production approval:
    `PADDLE_CREDIT_PACK_TAX_CATEGORY_CONFIRMED=true`. Prove the production API
    key's paginated Subscription History reads against the exact release
    configuration, and only then set
-   `PADDLE_SUBSCRIPTION_HISTORY_CONFIRMED=true`.
-9. Re-run the complete Sandbox matrix with both confirmation gates enabled and
-   `CREDIT_PACK_PURCHASES_ENABLED=false`.
+   `PADDLE_SUBSCRIPTION_HISTORY_CONFIRMED=true`. Prove a complete paginated
+   transaction scan with the exact release key, and only then set
+   `PADDLE_TRANSACTION_READ_CONFIRMED=true`.
+9. Re-run the complete Sandbox matrix with all three credit-pack confirmation
+   gates enabled and `CREDIT_PACK_PURCHASES_ENABLED=false`. Set
+   `PADDLE_SANDBOX_CHECKOUT_CONFIRMED=true` only during the bounded, isolated
+   Checkout E2E window, then restore it to `false` immediately afterward.
 10. After notice and price gates pass, enable `PRO_PRICE_1099_ENABLED` and
    only after reconciling all open checkout attempts; then verify a new
    USD 10.99 checkout/receipt plus a USD 9.99 renewal.

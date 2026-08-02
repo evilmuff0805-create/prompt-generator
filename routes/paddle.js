@@ -1851,6 +1851,141 @@ async function applyCreditPackAdjustment(
   return result;
 }
 
+// Paddle exposes chargeback lifecycle events through adjustment.data.action.
+// A reversal may arrive either as its own *_reverse adjustment or as an update
+// that marks the original adjustment status as reversed. Neither shape is safe
+// to translate into an entitlement mutation without source-aware reconciliation.
+const PADDLE_CHARGEBACK_ADJUSTMENT_ACTIONS = Object.freeze({
+  chargeback: Object.freeze({ family: 'chargeback', isWarning: false, reverseAction: false }),
+  chargeback_warning: Object.freeze({ family: 'chargeback_warning', isWarning: true, reverseAction: false }),
+  chargeback_reverse: Object.freeze({ family: 'chargeback', isWarning: false, reverseAction: true }),
+  chargeback_warning_reverse: Object.freeze({ family: 'chargeback_warning', isWarning: true, reverseAction: true })
+});
+
+function classifyChargebackAdjustment(data) {
+  const action = data?.action;
+  const definition = PADDLE_CHARGEBACK_ADJUSTMENT_ACTIONS[action];
+  if (!definition) return null;
+
+  const reversedStatus = data?.status === 'reversed';
+  return {
+    action,
+    family: definition.family,
+    isWarning: definition.isWarning,
+    isReversal: definition.reverseAction || reversedStatus,
+    reversalSource: definition.reverseAction
+      ? 'reverse_action'
+      : (reversedStatus ? 'reversed_status' : null)
+  };
+}
+
+async function reportNonCreditPackChargebackAdjustment(
+  data,
+  {
+    requestId = null,
+    eventId = null,
+    providerEventId = null,
+    eventType = null,
+    occurredAt = null,
+    incidentReporter = reportIncident
+  } = {}
+) {
+  const classification = classifyChargebackAdjustment(data);
+  if (!classification) return { handled: false };
+
+  const adjustmentId = data?.id || null;
+  const transactionId = data?.transaction_id || null;
+  const subscriptionId = data?.subscription_id || null;
+  const incidentIdentity = adjustmentId || transactionId || providerEventId || eventId || 'unknown';
+  const incidentState = classification.isReversal ? 'reversal' : 'forward';
+  const incident = await incidentReporter({
+    severity: 'critical',
+    source: 'paddle-webhook',
+    eventCode: 'NON_CREDIT_PACK_CHARGEBACK_REQUIRES_REVIEW',
+    message: 'A non-credit-pack chargeback-family adjustment requires manual review',
+    fingerprint:
+      `paddle-webhook:NON_CREDIT_PACK_CHARGEBACK_REQUIRES_REVIEW:${incidentIdentity}:${classification.action}:${incidentState}`,
+    context: {
+      requestId,
+      eventId,
+      providerEventId,
+      eventType,
+      occurredAt,
+      adjustmentId,
+      transactionId,
+      subscriptionId,
+      customerId: data?.customer_id || null,
+      action: classification.action,
+      adjustmentType: data?.type || null,
+      status: data?.status || null,
+      family: classification.family,
+      isWarning: classification.isWarning,
+      isReversal: classification.isReversal,
+      reversalSource: classification.reversalSource,
+      manualReviewRequired: true,
+      creditMutationApplied: false,
+      entitlementMutationApplied: false
+    }
+  });
+
+  // The event must remain retryable until the idempotent incident fingerprint
+  // is durable. No credit debit or entitlement restoration occurs on this path.
+  if (incident?.persisted !== true) {
+    throw webhookProcessingError(
+      'NON_CREDIT_PACK_CHARGEBACK_INCIDENT_PERSIST_FAILED',
+      'Non-credit-pack chargeback incident could not be persisted'
+    );
+  }
+
+  console.error(
+    '[paddle/webhook] [CRITICAL] Non-credit-pack chargeback held for manual review |',
+    'adjustment_id=' + (adjustmentId || 'n/a'),
+    '| transaction_id=' + (transactionId || 'n/a'),
+    '| subscription_id=' + (subscriptionId || 'n/a'),
+    '| action=' + classification.action
+  );
+  return { handled: true, manualReviewRequired: true, classification };
+}
+
+async function handleNonCreditPackAdjustment(
+  supabase,
+  data,
+  {
+    refundHandler = revokeCreditsForRefund,
+    ...incidentOptions
+  } = {}
+) {
+  const chargebackReview = await reportNonCreditPackChargebackAdjustment(
+    data,
+    incidentOptions
+  );
+  if (chargebackReview.handled) return chargebackReview;
+
+  const action = data?.action;
+  const status = data?.status;
+  const transactionId = data?.transaction_id;
+
+  // Preserve the existing approved refund/credit behavior unchanged.
+  if (action !== 'refund' && action !== 'credit') {
+    console.log('[paddle/webhook] Adjustment action \'' + action + '\' is not a refund/credit, ignoring');
+    return { handled: false, reason: 'unsupported_action' };
+  }
+  if (status !== 'approved') {
+    console.log('[paddle/webhook] Adjustment status \'' + status + '\' is not approved, ignoring');
+    return { handled: false, reason: 'not_approved' };
+  }
+  if (!transactionId) {
+    console.error('[paddle/webhook] No transaction_id in adjustment payload — cannot process refund');
+    throw webhookProcessingError(
+      'REFUND_TRANSACTION_ID_MISSING',
+      'Approved refund is missing a transaction ID'
+    );
+  }
+
+  const result = await refundHandler(supabase, transactionId, data?.type);
+  return { handled: true, reason: 'refund_or_credit_applied', result };
+}
+
 /* ── Derive the plan in effect BEFORE a given plan-change row ── */
 // previous_plan = result plan of the immediately-prior ledger row for the same
 // subscription_id (ordered by the monotonic purchase id). No prior row → 'free'. This avoids
@@ -2889,9 +3024,6 @@ router.post('/webhook',
         // approved). Try that ledger first; unmatched subscription adjustments
         // continue through the legacy purchase-refund path below.
         const data = payload?.data;
-        const action = data?.action;
-        const status = data?.status;
-        const transactionId = data?.transaction_id;
         const supabase = adminClient;
 
         const packAdjustment = await applyCreditPackAdjustment(supabase, data, {
@@ -2902,24 +3034,17 @@ router.post('/webhook',
           return;
         }
 
-        // Only process approved credit refunds
-        if (action !== 'refund' && action !== 'credit') {
-          console.log('[paddle/webhook] Adjustment action \'' + action + '\' is not a refund/credit, ignoring');
-          return;
-        }
-        if (status !== 'approved') {
-          console.log('[paddle/webhook] Adjustment status \'' + status + '\' is not approved, ignoring');
-          return;
-        }
-        if (!transactionId) {
-          console.error('[paddle/webhook] No transaction_id in adjustment payload — cannot process refund');
-          throw webhookProcessingError(
-            'REFUND_TRANSACTION_ID_MISSING',
-            'Approved refund is missing a transaction ID'
-          );
-        }
-
-        await revokeCreditsForRefund(supabase, transactionId, data?.type);
+        // Chargebacks and their warning/reversal variants are financially
+        // significant even when they do not belong to a credit pack. Preserve
+        // the opaque provider IDs for idempotent manual review, but never infer
+        // a credit debit or entitlement restoration from the monetary event.
+        await handleNonCreditPackAdjustment(supabase, data, {
+          requestId: req.id,
+          eventId,
+          providerEventId: payload?.event_id,
+          eventType,
+          occurredAt: payload?.occurred_at
+        });
 
       } else if (eventType === 'subscription.updated' || eventType === 'subscription.canceled') {
         const data = payload?.data;
@@ -3082,4 +3207,8 @@ module.exports.verifyCreditPackSubscriptionHistory =
 module.exports.loadCreditPackTemporalContext = loadCreditPackTemporalContext;
 module.exports.grantCreditsForPack = grantCreditsForPack;
 module.exports.applyCreditPackAdjustment = applyCreditPackAdjustment;
+module.exports.classifyChargebackAdjustment = classifyChargebackAdjustment;
+module.exports.reportNonCreditPackChargebackAdjustment =
+  reportNonCreditPackChargebackAdjustment;
+module.exports.handleNonCreditPackAdjustment = handleNonCreditPackAdjustment;
 module.exports.expireSubscription = expireSubscription;

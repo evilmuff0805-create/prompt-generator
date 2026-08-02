@@ -77,7 +77,8 @@ describe('public product catalog', () => {
     const catalog = getPublicProductCatalog(env);
 
     expect(catalog.paddle).toEqual({
-      clientToken: 'live_public_test_token'
+      clientToken: 'live_public_test_token',
+      environment: 'production'
     });
     expect(catalog.paddle).not.toHaveProperty('priceIds');
     expect(catalog.plans.pro.monthlyPriceUsd).toBe(9.99);
@@ -85,6 +86,31 @@ describe('public product catalog', () => {
     expect(catalog.plans.enterprise.storyboards).toBe(50);
     expect(catalog.storyboardCreditCost).toBe(30);
     expect(getPaddlePriceId('pro', env)).toBe('pri_pro_live');
+  });
+
+  test('public checkout environment comes only from the trusted Paddle API base', () => {
+    const sandboxCatalog = getPublicProductCatalog({
+      PADDLE_API_BASE: 'https://sandbox-api.paddle.com',
+      PADDLE_API_KEY: 'pdl_sdbx_apikey_server-only',
+      PADDLE_CLIENT_TOKEN: 'test_public-checkout-token'
+    });
+
+    expect(sandboxCatalog.paddle).toEqual({
+      clientToken: 'test_public-checkout-token',
+      environment: 'sandbox'
+    });
+    expect(JSON.stringify(sandboxCatalog)).not.toContain('pdl_sdbx_apikey_server-only');
+    expect(getPublicProductCatalog({}).paddle.environment).toBe('production');
+  });
+
+  test('Sandbox catalog generation fails closed without its explicit matching token', () => {
+    expect(() => getPublicProductCatalog({
+      PADDLE_API_BASE: 'https://sandbox-api.paddle.com'
+    })).toThrow('PADDLE_CLIENT_TOKEN must be explicitly configured');
+    expect(() => getPublicProductCatalog({
+      PADDLE_API_BASE: 'https://sandbox-api.paddle.com',
+      PADDLE_CLIENT_TOKEN: 'live_wrong-environment'
+    })).toThrow('PADDLE_CLIENT_TOKEN does not match PADDLE_API_BASE');
   });
 
   test('disabled cutover keeps USD 9.99 outbound while all configured Pro IDs remain inbound', () => {

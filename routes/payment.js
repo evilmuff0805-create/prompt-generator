@@ -19,7 +19,10 @@ const {
   parseExpiryDays
 } = require('../lib/credit-pack-catalog');
 const { parsePaddleTimestamp } = require('../lib/paddle-time');
-const { getPaddleApiBase } = require('../lib/paddle-api');
+const {
+  getPaddleApiBase,
+  PADDLE_SANDBOX_API_BASE
+} = require('../lib/paddle-api');
 const {
   MAX_POSTGRES_INTEGER,
   isPostgresMinorUnitAmount
@@ -31,6 +34,11 @@ const PADDLE_CHARGE_TIMEOUT_MS = 15000;
 const CREDIT_PACK_REQUEST_ID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const CREDIT_PACK_TERMINAL_RECOVERY_WINDOW_MS = 60 * 60 * 1000;
+
+function isSandboxSubscriptionCheckoutConfirmed(env = process.env) {
+  return getPaddleApiBase(env) !== PADDLE_SANDBOX_API_BASE
+    || String(env.PADDLE_SANDBOX_CHECKOUT_CONFIRMED || '').trim().toLowerCase() === 'true';
+}
 
 function makePaymentAdminClient() {
   return createClient(
@@ -875,6 +883,13 @@ router.get('/status', async (req, res) => {
 // selected catalog price, and API origin have been durably bound.
 async function handleSubscriptionCheckout(req, res) {
   res.set('Cache-Control', 'no-store');
+  if (!isSandboxSubscriptionCheckoutConfirmed(process.env)) {
+    return res.status(503).json({
+      success: false,
+      error: 'Checkout is temporarily unavailable.',
+      code: 'SANDBOX_CHECKOUT_NOT_CONFIRMED'
+    });
+  }
   const plan = String(req.body?.plan || '').toLowerCase();
   if (!VALID_PLANS.includes(plan)) {
     return res.status(400).json({
@@ -2468,6 +2483,8 @@ module.exports.bindSubscriptionCheckoutTransaction =
   bindSubscriptionCheckoutTransaction;
 module.exports.transitionSubscriptionCheckoutAttempt =
   transitionSubscriptionCheckoutAttempt;
+module.exports.isSandboxSubscriptionCheckoutConfirmed =
+  isSandboxSubscriptionCheckoutConfirmed;
 module.exports.buildSubscriptionUpdateBody = buildSubscriptionUpdateBody;
 module.exports.extractPaddleErrorCode = extractPaddleErrorCode;
 module.exports.sanitizeChangePlanPreview = sanitizeChangePlanPreview;
