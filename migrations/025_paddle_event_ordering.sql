@@ -1,5 +1,5 @@
 -- ============================================================
--- Migration 024: Paddle immutable-event ordering and subscription state reducer
+-- Migration 025: Paddle immutable-event ordering and subscription state reducer
 --
 -- Paddle does not guarantee webhook delivery order. This migration adds a
 -- per-entity lease/watermark for immutable transaction/adjustment edges and a
@@ -12,6 +12,8 @@
 -- ============================================================
 
 BEGIN;
+
+SET LOCAL lock_timeout = '5s';
 
 LOCK TABLE public.profiles IN SHARE ROW EXCLUSIVE MODE;
 

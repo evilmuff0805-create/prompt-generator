@@ -30,6 +30,17 @@ describe('Paddle subscription route reducer contract', () => {
     expect(source).not.toContain('await saveSubscriptionIds(');
   });
 
+  test('subscription lifecycle mutations are reachable only through ordered RPCs', () => {
+    const source = fs.readFileSync(
+      path.join(__dirname, '../../routes/paddle.js'),
+      'utf8'
+    );
+
+    expect(source).toMatch(/\.rpc\(\s*['"]apply_paddle_subscription_snapshot['"]/);
+    expect(source).not.toMatch(/\.rpc\(\s*['"]apply_plan_change['"]/);
+    expect(source).not.toMatch(/\.rpc\(\s*['"]expire_subscription_credits['"]/);
+  });
+
   test('subscription payment uses the ordered lifecycle RPC and requires provider IDs', async () => {
     const client = {
       rpc: jest.fn().mockResolvedValue({

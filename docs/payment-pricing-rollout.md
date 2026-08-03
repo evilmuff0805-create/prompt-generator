@@ -36,7 +36,7 @@ lot, and its later refund or chargeback remains attributable.
 
 This static foundation is not release proof. The Paddle API key must be granted
 and verified for Subscription History reads, the complete temporal and
-adjustment matrix must pass in Paddle Sandbox, and migrations 023 through 026
+adjustment matrix must pass in Paddle Sandbox, and migrations 023 through 027
 must pass against a production-schema clone. All payment and ledger flags
 remain `false`; no production migration, deployment, or checkout activation is
 authorized by this document.
@@ -307,8 +307,10 @@ npm run audit:paddle-credit-packs
 
 ## Ledger, refunds, chargebacks, and expiry
 
-Migration 023 introduces source-aware credit lots and allocations. Plan-cycle,
-migration, and add-on credits remain separately attributable; a refund must
+Migration 023 creates the private, operator-reviewed legacy-balance manifest.
+Migration 024 introduces source-aware credit lots and allocations. Plan-cycle,
+subscription carry-in, manual carryover, and add-on credits remain separately
+attributable; a refund must
 never debit an unrelated lot.
 
 - A successful add-on lot expires at signed Paddle `occurred_at + 365 days`,
@@ -334,39 +336,208 @@ never debit an unrelated lot.
 
 Apply and verify the migrations exactly in this order:
 
-1. `migrations/023_credit_lot_ledger.sql`
-2. `migrations/024_paddle_event_ordering.sql`
-3. `migrations/025_secure_payment_requests.sql`
-4. `migrations/026_secure_subscription_checkout.sql`
+1. `migrations/023_legacy_credit_classification_manifest.sql`
+2. Populate and independently review the private manifest as described below.
+3. `migrations/024_credit_lot_ledger.sql`
+4. `migrations/025_paddle_event_ordering.sql`
+5. `migrations/026_secure_payment_requests.sql`
+6. `migrations/027_secure_subscription_checkout.sql`
 
-Do not skip or reorder them. Migration 025 depends on the ledger and ordered
-subscription state. Migration 026 depends on the payment-request foundation and
+Do not skip or reorder them. Migration 024 consumes the exact Migration 023
+snapshot. Migration 026 depends on the ledger and ordered subscription state.
+Migration 027 depends on the payment-request foundation and
 adds durable subscription checkout attempts.
 
+Before step 1, run both migration-history and schema-landmark checks against
+the exact target project. The history query must return zero rows and every
+landmark boolean must be `false`:
+
+```sql
+SELECT version, name
+FROM supabase_migrations.schema_migrations
+WHERE version IN ('023', '024', '025', '026', '027')
+   OR name IN (
+     'legacy_credit_classification_manifest',
+     'credit_lot_ledger',
+     'paddle_event_ordering',
+     'secure_payment_requests',
+     'secure_subscription_checkout'
+   )
+ORDER BY version;
+
+SELECT
+  to_regnamespace('promptgen_private') IS NOT NULL
+    AS private_schema_exists,
+  to_regclass(
+    'promptgen_private.legacy_credit_classification_manifest'
+  ) IS NOT NULL AS legacy_manifest_exists,
+  to_regclass('public.credit_lots') IS NOT NULL AS credit_lots_exists,
+  to_regclass('public.paddle_event_watermarks') IS NOT NULL
+    AS paddle_event_watermarks_exists,
+  to_regclass('public.credit_pack_purchase_requests') IS NOT NULL
+    AS credit_pack_purchase_requests_exists,
+  to_regclass('public.subscription_checkout_attempts') IS NOT NULL
+    AS subscription_checkout_attempts_exists;
+```
+
+This gate covers both tracked and manually applied SQL. If any row or landmark
+exists, stop: do not repair migration history, rename an applied migration, or
+rerun these files. First produce and independently review a forward-only
+reconciliation migration for the observed target state.
+
+### Private legacy-credit manifest
+
+Migration 023 creates `promptgen_private`, which is not included in the current
+Data API exposed schemas and grants no access to `PUBLIC`, `anon`,
+`authenticated`, or `service_role`. It
+does not contain email, name, or raw Paddle identifiers. Apply it first, freeze
+profile, purchase, ledger, analysis, and Storyboard writers, and prepare the
+manifest only from a restricted database-owner session. Do not save the
+production UUID values in this repository, CI output, Notion, or chat.
+
+The approved cutover decision is:
+
+- the reviewed 570-credit family test profile is `manual_carryover`;
+- the reviewed 30-credit Paddle-bound profile is `subscription_carry_in`.
+
+At the maintenance window, create a temporary decision table and enter the
+reviewed production UUIDs only in that database session. Every placeholder below
+is deliberately rejected until replaced:
+
+```sql
+BEGIN;
+
+LOCK TABLE public.profiles IN SHARE ROW EXCLUSIVE MODE;
+LOCK TABLE public.purchases IN SHARE ROW EXCLUSIVE MODE;
+LOCK TABLE public.credits_ledger IN SHARE ROW EXCLUSIVE MODE;
+
+CREATE TEMP TABLE legacy_credit_decisions (
+  user_id uuid PRIMARY KEY,
+  classification text NOT NULL CHECK (
+    classification IN ('subscription_carry_in', 'manual_carryover')
+  ),
+  review_reference text NOT NULL CHECK (
+    btrim(review_reference) <> ''
+    AND btrim(review_reference) !~ '^<[^>]+>$'
+  )
+) ON COMMIT DROP;
+
+INSERT INTO legacy_credit_decisions (
+  user_id,
+  classification,
+  review_reference
+) VALUES
+  ('<replace-with-reviewed-570-profile-uuid>'::uuid,
+   'manual_carryover',
+   '<opaque-review-reference>'),
+  ('<replace-with-reviewed-30-profile-uuid>'::uuid,
+   'subscription_carry_in',
+   '<opaque-review-reference>');
+
+WITH
+batch AS MATERIALIZED (
+  SELECT gen_random_uuid() AS batch_id, clock_timestamp() AS captured_at
+)
+INSERT INTO promptgen_private.legacy_credit_classification_manifest (
+  batch_id,
+  user_id,
+  snapshot_captured_at,
+  expected_plan,
+  expected_credits,
+  expected_has_paddle_customer,
+  expected_has_paddle_subscription,
+  expected_purchase_count,
+  expected_ledger_count,
+  expected_evidence_fingerprint,
+  classification,
+  review_reference,
+  reviewed_by,
+  reviewed_at
+)
+SELECT
+  batch.batch_id,
+  p.id,
+  batch.captured_at,
+  p.plan,
+  p.credits,
+  NULLIF(btrim(p.paddle_customer_id), '') IS NOT NULL,
+  NULLIF(btrim(p.paddle_subscription_id), '') IS NOT NULL,
+  (SELECT count(*) FROM public.purchases x WHERE x.user_id = p.id),
+  (SELECT count(*) FROM public.credits_ledger l WHERE l.user_id = p.id),
+  promptgen_private.legacy_credit_evidence_fingerprint(p.id),
+  d.classification,
+  d.review_reference,
+  '<opaque-operator-id>',
+  batch.captured_at
+FROM legacy_credit_decisions d
+JOIN public.profiles p ON p.id = d.user_id
+CROSS JOIN batch;
+
+-- Review only counts and totals. Both mismatch counts must be zero.
+SELECT
+  count(*) AS manifest_rows,
+  sum(expected_credits) AS manifest_credits,
+  count(*) FILTER (WHERE classification = 'manual_carryover') AS manual_rows,
+  sum(expected_credits) FILTER (
+    WHERE classification = 'manual_carryover'
+  ) AS manual_credits,
+  count(*) FILTER (
+    WHERE classification = 'subscription_carry_in'
+  ) AS subscription_rows,
+  sum(expected_credits) FILTER (
+    WHERE classification = 'subscription_carry_in'
+  ) AS subscription_credits
+FROM promptgen_private.legacy_credit_classification_manifest;
+
+SELECT count(*) AS missing_manifest_rows
+FROM public.profiles p
+LEFT JOIN promptgen_private.legacy_credit_classification_manifest m
+  ON m.user_id = p.id
+WHERE p.credits > 0 AND m.user_id IS NULL;
+
+SELECT count(*) AS extra_manifest_rows
+FROM promptgen_private.legacy_credit_classification_manifest m
+LEFT JOIN public.profiles p ON p.id = m.user_id
+WHERE p.id IS NULL OR p.credits <= 0;
+
+COMMIT;
+```
+
+Migration 024 accepts only one batch captured within the preceding 24 hours.
+It locks the full evidence boundary, rejects missing, extra, duplicate, mixed,
+stale, pre-consumed, or drifted decisions, then backfills and consumes the
+manifest in one transaction. `subscription_carry_in` follows subscription
+renewal/change/cancellation expiry; `manual_carryover` never expires with the
+subscription and is spent only after subscription and expiring credit-pack
+lots.
+
 `CREDIT_LEDGER_V2_ENABLED=false` is an application activation guard, not a
-database rollback. Migration 023 replaces existing consumption/refund RPCs and
+database rollback. Migration 024 replaces existing consumption/refund RPCs and
 triggers as soon as it is applied. A failed clone migration or concurrency test
 therefore blocks production migration even while every feature flag is false.
 
 Before any production migration:
 
 - test backup and restore;
-- apply all four migrations to a clone of the actual production schema;
+- repeat the migration-history and schema-landmark gate above against the exact
+  target project immediately before the maintenance window;
+- apply all five migrations, including the reviewed manifest population between
+  migrations 023 and 024, to a clone of the actual production schema;
 - inventory every positive legacy `profiles.credits` balance and explicitly
   classify it as subscription carry-in or manual/carryover credit against an
   operator-reviewed snapshot. Plan, Paddle binding, and arithmetic history are
   supporting evidence only and must never auto-classify provenance;
 - prove every non-null Paddle subscription/customer ID is already trimmed,
-  non-empty, and at most 255 characters before migration 024;
+  non-empty, and at most 255 characters before migration 025;
 - prove every profile with a Paddle subscription also has a Paddle customer,
   uses exactly one of the lowercase canonical values `free`, `paid`, `pro`, or
   `enterprise`, and has been reconciled against Paddle before the bootstrap
   reducer is created;
 - allow a `free` profile with a retained subscription ID only when Paddle
   confirms that subscription is terminal; if Paddle reports `active` or
-  `trialing`, correct the profile/ownership before migration 024 or stop the
+  `trialing`, correct the profile/ownership before migration 025 or stop the
   rollout, because a terminal bootstrap row cannot be reactivated in place;
-- keep profile/payment writers frozen while migration 024 holds its profile
+- keep profile/payment writers frozen while migration 025 holds its profile
   bootstrap lock, and set an operator-reviewed session `lock_timeout` so a
   conflicting writer stops the rollout instead of waiting indefinitely;
 - run migration invariants and inspect RLS, grants, constraints, and function
@@ -377,7 +548,7 @@ Before any production migration:
 - confirm no image-analysis reservations or pending/processing storyboard jobs
   exist at the cutover.
 
-After migration 024's bootstrap barrier, reconcile every stored Paddle
+After migration 025's bootstrap barrier, reconcile every stored Paddle
 subscription against a fresh Paddle response before reopening webhook-driven
 mutations. Events older than the barrier are intentionally stale-blocked and
 must not be blindly replayed.
@@ -421,18 +592,18 @@ approval is recorded:
   wrong Supabase project, key/API-base mismatch, wrong Paddle seller, failed
   subscription binding, incomplete pagination, and malformed provider evidence
   all prove zero reconciliation writes.
-- [ ] A prior local run recorded migrations 023 through 026 passing against an
+- [ ] A prior local run recorded the then-numbered migrations 023 through 026
+  (now 024 through 027) passing against an
   isolated PostgreSQL 17 clone built from a read-only production `public`
   schema dump and anonymized, production-shaped data. Repeat the full run with
   retained command/output evidence before closing the failure, race, and
   rollback gate.
 - [ ] A full production backup/restore rehearsal, including Auth, Storage, and
   Supabase platform metadata, is tested before any target-database migration.
-- [ ] Migration 023 requires a complete operator-reviewed legacy-balance
-  classification manifest, rejects missing/extra/duplicate or drifted rows,
-  and keeps manual/carryover lots out of subscription renewal, plan-change,
-  and cancellation expiry. The current generic `migration`-lot backfill does
-  not satisfy this gate.
+- [ ] Migrations 023 and 024 pass a complete operator-reviewed legacy-balance
+  manifest replay, reject missing/extra/duplicate, stale, pre-consumed, or
+  drifted rows, and keep `manual_carryover` lots out of subscription renewal,
+  plan-change, and cancellation expiry.
 - [ ] Paddle Sandbox proves checkout, preview, explicit total confirmation,
   receipt, renewal, retry, refund, partial refund quarantine, chargeback,
   cancellation, expiry, and reconciliation behavior.
@@ -472,35 +643,55 @@ approval is recorded:
    `PADDLE_SANDBOX_CHECKOUT_CONFIRMED=false` in the production release
    configuration.
 
-Latest local evidence (2026-08-02):
+Latest local evidence (2026-08-03):
 
-- changed/new JavaScript syntax check: 30 files passed;
-- `npm run test:unit`: 68 suites and 1,091 tests passed;
-- `npm audit --omit=dev --audit-level=high`: 0 vulnerabilities;
-- current local unit run: all 68 suites / 1,094 tests passed;
-- current full local Playwright run under an unavailable local Supabase and
-  initial parallel page-load delays was not clean: 109 passed, 3 flaky, and 2
-  timed out. The two final timeout cases passed 2/2 when rerun with one worker;
-- GitHub Actions run 30757192139: Linux Node 24 dependency audit, all 68 unit
-  suites / 1,091 tests, and all 114 Playwright tests passed;
-- an isolated PostgreSQL transaction proved the migration-026 table boundary:
-  `service_role` SELECT succeeds while direct INSERT/UPDATE/DELETE fail, and
-  its SECURITY DEFINER create/transition/bind RPCs still write successfully;
+- focused migration contracts: 5 suites and 96 tests passed;
+- focused payment/lifecycle regression after removing the obsolete direct
+  subscription-mutation helpers: 6 suites and 251 tests passed;
+- `npm run test:unit`: 69 suites and 1,091 tests passed;
+- `npm audit --omit=dev`: 0 vulnerabilities;
+- the full local Playwright run under an unavailable local Supabase and
+  parallel page-load pressure was not clean: 110 passed, 3 flaky, and 1 timed
+  out after retry. The final timeout case passed when rerun alone with one
+  worker, so this is recorded as an environment-sensitive result, not a clean
+  full-suite pass;
+- a fresh Supabase-compatible PostgreSQL 17.6.1 replay applied migration 023,
+  populated the two-row reviewed synthetic manifest, and applied migrations
+  024 through 027 in order;
+- a read-only target-project check found no migration-history rows for the five
+  current migration names and none of their landmark schemas/tables. The latest
+  tracked migration remained `atomic_analysis_credit_operations`; no target
+  data or schema was changed. Repeat this drift-sensitive gate at the actual
+  maintenance window;
+- the replay rejected raw Paddle-ID whitespace drift with
+  `LEGACY_CREDIT_MANIFEST_SNAPSHOT_DRIFT`, rejected a conflicting profile lock
+  after the five-second timeout, rejected a concurrent migration with
+  `CREDIT_LEDGER_MIGRATION_ALREADY_RUNNING`, and rejected a successful rerun
+  with `CREDIT_LEDGER_MIGRATION_ALREADY_APPLIED`; every failure left zero
+  partial ledger DDL and zero consumed manifest rows;
+- lifecycle replay preserved the 570-credit `manual_carryover` through plan
+  change, cancellation, and renewal while replacing the 30-credit
+  `subscription_carry_in` under subscription rules. Final profile and active-lot
+  totals both equaled 1,170, and final RPC privilege checks exposed only the
+  ordered runtime entry points;
 - build/lint: not applicable because the repository defines neither script;
-- a prior isolated production-public-schema clone run recorded migrations 023
-  through 026 passing, and its retained final database invariants passed again;
-  the full replay evidence, production backup/restore, target application,
-  deployment runtime, and live/Sandbox Checkout remain deployment-blocking.
+- prior GitHub Actions run 30757192139 passed the then-current Linux Node 24
+  dependency audit, all 68 unit suites / 1,091 tests, and all 114 Playwright
+  tests. Fresh CI is still required for this commit;
+- production backup/restore, target application, deployment runtime, the wider
+  payment concurrency matrix, and live/Sandbox Checkout remain
+  deployment-blocking.
 
 ### 2. Production-schema clone verification
 
-Recorded isolated run (2026-08-01; partially rechecked 2026-08-02):
+Recorded isolated runs (2026-08-01 through 2026-08-03):
 
 - the retained report states that a read-only production `public` schema-only
   dump and an anonymized,
   production-shaped fixture were restored into disposable Supabase-compatible
   PostgreSQL 17.6.1 stacks;
-- the report records migrations 023, 024, 025, and 026 applying in order;
+- the report records the then-numbered migrations 023, 024, 025, and 026
+  applying in order; it predates the new manifest migration;
 - the report records 13 new tables and 40 secured functions passing existence, RLS, owner,
   `search_path`, role-grant, signature, and validated-constraint checks;
 - the report records a PostgREST schema reload returning HTTP 200 with the expected payment and
@@ -515,16 +706,22 @@ Recorded isolated run (2026-08-01; partially rechecked 2026-08-02):
   started and its final invariant SQL returned exit code 0: profile credits and
   active lots both 1,198; zero open add-on requests and zero open subscription
   checkout attempts.
+- the fresh 2026-08-03 run used the same anonymized, production-shaped public
+  schema boundary and the current 023-to-027 chain. It proves the reviewed
+  legacy-balance cutover, failure rollback, migration lock guards, lifecycle
+  separation, balance invariants, and final RPC ACLs described above.
 
-This reduces schema-shaped migration risk but does not close the replay evidence
-gate. Raw transcripts for every 2026-08-01 step were not retained, so the full
-run must be repeated with durable command/output evidence. The exercise also did
-not restore a full Supabase physical backup. Auth, Storage, platform metadata,
-the deployment runtime, and the target database therefore remain unproven.
+This reduces schema-shaped migration risk but does not close the release gate.
+The exercise did not restore a full Supabase physical backup, and the current
+payment-request tables contain no real Sandbox scenarios. Auth, Storage,
+platform metadata, the deployment runtime, the target database, and the wider
+payment concurrency matrix therefore remain unproven.
 
 1. Restore an actual production backup into an isolated clone.
-2. Apply migrations 023, 024, 025, and 026 in sequence.
-3. Run invariant queries before and after each migration.
+2. Apply migration 023, populate and independently review the private manifest,
+   then apply migrations 024, 025, 026, and 027 in sequence.
+3. Run invariant queries before and after every migration and after manifest
+   population.
 4. Exercise concurrent create/bind/consume flows and ensure lock ordering is
    consistent.
 5. Verify duplicate events are idempotent, equal-timestamp conflicts fail
@@ -592,7 +789,7 @@ npm run audit:paddle-sandbox-checkout-preview
 This preview does not prove the hosted Checkout or PDF/email receipt. Those
 still require a completed Sandbox payment. Do not use the PromptGen app for
 that payment yet. This branch removes the hardcoded production browser
-configuration, but the isolated deployment values, migrations 023 through 026,
+configuration, but the isolated deployment values, migrations 023 through 027,
 dedicated test user, alerts, and Sandbox notification destination have not been
 verified together. Subscription checkout writes an attempt before contacting
 Paddle, and a completed webhook writes subscription, purchase, and profile
@@ -837,7 +1034,8 @@ blocking gates and an explicit production approval:
    `PADDLE_SANDBOX_CHECKOUT_CONFIRMED=false`.
 2. Freeze payment/credit mutations, take and verify a backup, and confirm no
    active credit reservations or pending storyboard jobs.
-3. Apply migrations 023, 024, 025, and 026 in order.
+3. Apply migration 023, populate and independently review the private manifest,
+   then apply migrations 024, 025, 026, and 027 in order.
 4. Run invariants, balance reconciliation, and the fresh Paddle subscription
    reconciliation.
 5. Deploy application code with all flags still disabled.
@@ -897,9 +1095,9 @@ status: the browser retains its request lock, disables another add-on attempt,
 and shows chargeback-specific copy instead of labeling it as a refund.
 
 After money has been accepted, do not drop migrations, revert to a
-profile-only credit balance, delete attempts/requests, or run the pre-024
-webhook implementation. Migration 024 changes ordering and reducer invariants;
-rolling application code back to the old webhook after 024 or later can bypass
+profile-only credit balance, delete attempts/requests, or run the pre-025
+webhook implementation. Migration 025 changes ordering and reducer invariants;
+rolling application code back to the old webhook after 025 or later can bypass
 those protections. Stop new requests, keep the compatible processors running,
 preserve evidence, and correct forward with an audited migration or application
 patch.

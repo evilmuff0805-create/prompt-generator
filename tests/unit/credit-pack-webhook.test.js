@@ -17,8 +17,7 @@ const {
   classifyCompletedTransactionRoute,
   reportUnboundSubscriptionCharge,
   grantCreditsForPack,
-  applyCreditPackAdjustment,
-  expireSubscription
+  applyCreditPackAdjustment
 } = require('../../routes/paddle');
 
 const REQUEST_ID = '123e4567-e89b-42d3-a456-426614174000';
@@ -1530,18 +1529,4 @@ describe('credit pack adjustment and subscription-expiry routing', () => {
     expect(supabase.rpc).not.toHaveBeenCalled();
   });
 
-  test('subscription cancellation expires only subscription lots through the ledger RPC', async () => {
-    const supabase = {
-      rpc: jest.fn().mockResolvedValue({
-        data: { applied: true, reason: 'subscription_expired', newBalance: 500 },
-        error: null
-      })
-    };
-
-    await expireSubscription(supabase, 'user_1');
-
-    expect(supabase.rpc).toHaveBeenCalledWith('expire_subscription_credits', {
-      p_user_id: 'user_1'
-    });
-  });
 });

@@ -8,7 +8,7 @@ const migrationPath = path.join(
   '..',
   '..',
   'migrations',
-  '023_credit_lot_ledger.sql'
+  '024_credit_lot_ledger.sql'
 );
 const sql = fs.readFileSync(migrationPath, 'utf8');
 const securePaymentSql = fs.readFileSync(
@@ -17,7 +17,7 @@ const securePaymentSql = fs.readFileSync(
     '..',
     '..',
     'migrations',
-    '025_secure_payment_requests.sql'
+    '026_secure_payment_requests.sql'
   ),
   'utf8'
 );
@@ -27,13 +27,14 @@ const orderedSubscriptionSql = fs.readFileSync(
     '..',
     '..',
     'migrations',
-    '024_paddle_event_ordering.sql'
+    '025_paddle_event_ordering.sql'
   ),
   'utf8'
 );
 
 describe('credit lot ledger migration safety contract', () => {
   test('secure payment requests preflight the current ordered-payment signature', () => {
+    expect(securePaymentSql).toContain("SET LOCAL lock_timeout = '5s';");
     expect(securePaymentSql).toContain(
       "'public.apply_ordered_subscription_payment(text,uuid,text,integer,text,text,timestamptz,boolean,boolean)'"
     );
@@ -46,7 +47,7 @@ describe('credit lot ledger migration safety contract', () => {
     expect(sql).toMatch(/\nCOMMIT;\s/);
   });
 
-  test('backfills current balances before replacing charging RPCs', () => {
+  test('backfills only reviewed manifest balances before replacing charging RPCs', () => {
     const backfill = sql.indexOf("INSERT INTO public.credit_lots (");
     const analysisOverride = sql.indexOf(
       'CREATE OR REPLACE FUNCTION public.reserve_analysis_operation'
@@ -58,7 +59,12 @@ describe('credit lot ledger migration safety contract', () => {
     expect(backfill).toBeGreaterThan(0);
     expect(analysisOverride).toBeGreaterThan(backfill);
     expect(storyboardOverride).toBeGreaterThan(backfill);
-    expect(sql).toContain("'migration:' || id::text");
+    expect(sql).toContain(
+      'JOIN promptgen_private.legacy_credit_classification_manifest m'
+    );
+    expect(sql).toContain('m.classification');
+    expect(sql).toContain('m.expected_credits');
+    expect(sql).not.toContain("'migration:' || id::text");
   });
 
   test('records exact operation-to-lot allocations and refunds only those lots', () => {
@@ -87,7 +93,14 @@ describe('credit lot ledger migration safety contract', () => {
 
   test('keeps subscription and pack sources independent at renewal and cancellation', () => {
     expect(sql).toMatch(
-      /source_kind IN \('subscription', 'migration'\)[\s\S]{0,220}status IN \('active', 'exhausted'\)/
+      /source_kind IN \('subscription', 'subscription_carry_in'\)[\s\S]{0,220}status IN \('active', 'exhausted'\)/
+    );
+    expect(sql).toContain("'manual_carryover'");
+    expect(sql).toContain(
+      "source_kind IN ('credit_pack', 'manual_carryover')"
+    );
+    expect(sql).not.toContain(
+      "source_kind IN ('subscription', 'subscription_carry_in', 'manual_carryover')"
     );
     expect(sql).toContain('CREATE OR REPLACE FUNCTION public.expire_subscription_credits');
     expect(sql).toContain("'credit_pack'");
@@ -1711,19 +1724,27 @@ describe('credit lot ledger migration safety contract', () => {
       'credit_pack_purchases',
       'credit_pack_adjustments'
     ]) {
-      expect(sql).toContain(
-        `REVOKE ALL ON TABLE public.${table} FROM PUBLIC, anon, authenticated;`
+      expect(sql).toMatch(
+        new RegExp(
+          `REVOKE ALL ON TABLE public\\.${table}` +
+          '[\\s\\S]{0,100}FROM PUBLIC, anon, authenticated, service_role;'
+        )
       );
-      expect(sql).toContain(`GRANT ALL ON TABLE public.${table} TO service_role;`);
+      expect(sql).toContain(
+        `GRANT SELECT ON TABLE public.${table} TO service_role;`
+      );
+      expect(sql).not.toContain(
+        `GRANT ALL ON TABLE public.${table} TO service_role;`
+      );
     }
 
     expect(sql).toMatch(
-      /REVOKE ALL ON FUNCTION public\.register_credit_pack_checkout_intent\([\s\S]*?\) FROM PUBLIC, anon, authenticated;/
+      /REVOKE ALL ON FUNCTION public\.register_credit_pack_checkout_intent\([\s\S]*?\) FROM PUBLIC, anon, authenticated, service_role;/
     );
     expect(sql).toMatch(
-      /REVOKE ALL ON FUNCTION public\.apply_credit_pack_purchase\([\s\S]*?\) FROM PUBLIC, anon, authenticated;/
+      /REVOKE ALL ON FUNCTION public\.apply_credit_pack_purchase\([\s\S]*?\) FROM PUBLIC, anon, authenticated, service_role;/
     );
-    expect(sql).toMatch(
+    expect(sql).not.toMatch(
       /GRANT EXECUTE ON FUNCTION public\.apply_credit_pack_purchase\([\s\S]*?\) TO service_role;/
     );
   });

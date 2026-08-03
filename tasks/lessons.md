@@ -45,3 +45,15 @@
 - Prevention rule: terminalization requires delayed independent provider
   scans, immutable evidence and CAS, plus a late-payment path that grants no
   entitlement and creates durable refund review.
+
+## 2026-08-03 — Never infer account identity from a balance
+
+- Failure mode: an aggregate 570-credit observation was initially associated
+  with the named owner account even though an exact-email lookup showed that
+  account had 30 credits and a live Paddle subscription.
+- Detection signal: query only the specifically authorized account identifier
+  and compare its plan, balance, Paddle-binding presence, and purchase count;
+  do not enumerate unrelated identities to explain an aggregate.
+- Prevention rule: verify the exact authorized account before classifying any
+  legacy balance, keep unrelated family/test identities private, and store only
+  opaque UUID-bound decisions in the restricted cutover manifest.

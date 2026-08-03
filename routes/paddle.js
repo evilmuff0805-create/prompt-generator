@@ -1707,81 +1707,6 @@ async function syncPlanFromSubscription(supabase, userId, plan) {
   console.log('[paddle/webhook] Synced plan=' + plan + ' for userId=' + userId + ' (subscription.updated)');
 }
 
-/* ── Apply plan change with credit recalculation (subscription.updated, Step 2) ── */
-// Calls the apply_plan_change Postgres RPC which atomically:
-//   - Reads current plan + credits (FOR UPDATE lock)
-//   - Upgrade  → resets credits to full allotment
-//   - Downgrade → credits = min(remaining, new allotment)
-//   - Same plan → credits unchanged (idempotent re-delivery safe)
-// Returns the new credits value.
-async function applyPlanChange(supabase, userId, plan) {
-  // Whitelist: frozen account — skip plan/credit recalculation.
-  if (isTestAccount(userId)) {
-    console.warn('[paddle/webhook] [TEST_ACCOUNT] apply_plan_change 스킵(plan 변경 무시) userId=' + userId + ' plan=' + plan);
-    return null;
-  }
-
-  const allotment = PLAN_CREDITS[plan];
-  const { data, error } = await supabase.rpc('apply_plan_change', {
-    p_user_id: userId,
-    p_new_plan: plan,
-    p_new_allotment: allotment
-  });
-
-  if (error) {
-    throw new Error('apply_plan_change RPC failed: ' + error.message);
-  }
-
-  console.log('[paddle/webhook] Plan change applied: plan=' + plan + ' credits=' + data + ' userId=' + userId);
-  return data;
-}
-
-/* ── Expire subscription at period end (subscription.canceled) ── */
-// Paddle fires subscription.canceled when an end-of-period cancellation actually
-// takes effect (status → canceled). At that point the user loses access:
-// plan → free, credits → 0.
-async function expireSubscription(supabase, userId) {
-  // Whitelist: frozen account — do not expire.
-  if (isTestAccount(userId)) {
-    console.warn('[paddle/webhook] [TEST_ACCOUNT] expireSubscription 스킵(취소돼도 plan/credits 유지) userId=' + userId);
-    return;
-  }
-
-  const { data: result, error: ledgerError } = await supabase.rpc(
-    'expire_subscription_credits',
-    { p_user_id: userId }
-  );
-
-  if (!ledgerError) {
-    console.log(
-      '[paddle/webhook] Subscription expired with source-aware ledger ' +
-      '(plan=free, remaining pack credits preserved but gated) for userId=' +
-      userId + ' credits=' + result?.newBalance
-    );
-    return result;
-  }
-
-  const ledgerRpcMissing = ledgerError.code === 'PGRST202'
-    || /expire_subscription_credits.*(not find|not exist)/i.test(ledgerError.message || '');
-  if (isCreditLedgerV2Enabled() || !ledgerRpcMissing) {
-    throw new Error('expire_subscription_credits RPC failed: ' + ledgerError.message);
-  }
-
-  // Backward-compatible pre-migration fallback only. Once migration 023 exists,
-  // the RPC above is used even while purchase flags remain disabled, preventing
-  // profile-only cancellation from leaving live lots that later resurrect.
-  const { error } = await supabase
-    .from('profiles')
-    .update({ plan: 'free', credits: 0 })
-    .eq('id', userId);
-
-  if (error) {
-    throw new Error('Failed to expire subscription: ' + error.message);
-  }
-
-  console.log('[paddle/webhook] Subscription expired (plan=free, credits=0) for userId=' + userId);
-}
-
 async function applyCreditPackAdjustment(
   supabase,
   data,
@@ -3185,7 +3110,6 @@ module.exports.resolveSubscriptionSnapshotOwner =
 module.exports.recordPlanUpgradePurchase = recordPlanUpgradePurchase;
 module.exports.derivePreviousPlan = derivePreviousPlan;
 module.exports.syncPlanFromSubscription = syncPlanFromSubscription;
-module.exports.applyPlanChange = applyPlanChange;
 module.exports.grantCreditsForPurchase = grantCreditsForPurchase;
 module.exports.applyPaddleSubscriptionSnapshot = applyPaddleSubscriptionSnapshot;
 module.exports.revokeCreditsForRefund = revokeCreditsForRefund;
@@ -3211,4 +3135,3 @@ module.exports.classifyChargebackAdjustment = classifyChargebackAdjustment;
 module.exports.reportNonCreditPackChargebackAdjustment =
   reportNonCreditPackChargebackAdjustment;
 module.exports.handleNonCreditPackAdjustment = handleNonCreditPackAdjustment;
-module.exports.expireSubscription = expireSubscription;

@@ -13,7 +13,6 @@ const {
   isTestAccount,
   recordPlanUpgradePurchase,
   syncPlanFromSubscription,
-  applyPlanChange,
   handleNonCreditPackAdjustment,
   reportNonCreditPackChargebackAdjustment,
   saveSubscriptionIds,
@@ -48,17 +47,6 @@ function makeSupabaseMock({ insertError = null, selectData = null, selectError =
     _updateFn: updateFn,
     _updateEqFn: updateEqFn
   };
-}
-
-async function expireSubscription(supabase, userId) {
-  if (isTestAccount(userId)) return;
-
-  const { error } = await supabase
-    .from('profiles')
-    .update({ plan: 'free', credits: 0 })
-    .eq('id', userId);
-
-  if (error) throw new Error('Failed to expire subscription: ' + error.message);
 }
 
 // ── Tests ──
@@ -132,23 +120,6 @@ describe('priceIdToPlan staged price compatibility', () => {
     expect(priceIdToPlan('pri_enterprise_current')).toBe('enterprise');
     expect(priceIdToPlan('pri_enterprise_legacy')).toBe('enterprise');
     expect(priceIdToPlan('pri_unknown')).toBeNull();
-  });
-});
-
-describe('expireSubscription', () => {
-  test('plan=free, credits=0으로 업데이트해야 한다', async () => {
-    const supabase = makeSupabaseMock();
-    await expireSubscription(supabase, 'user-uuid');
-
-    expect(supabase.from).toHaveBeenCalledWith('profiles');
-    expect(supabase._updateFn).toHaveBeenCalledWith({ plan: 'free', credits: 0 });
-    expect(supabase._updateEqFn).toHaveBeenCalledWith('id', 'user-uuid');
-  });
-
-  test('업데이트 실패 시 예외를 던져야 한다', async () => {
-    const supabase = makeSupabaseMock({ updateError: { message: 'db error' } });
-    await expect(expireSubscription(supabase, 'user-uuid'))
-      .rejects.toThrow('Failed to expire subscription');
   });
 });
 
@@ -610,38 +581,6 @@ describe('isTestAccount (env 파싱)', () => {
   });
 });
 
-describe('테스트 계정 화이트리스트 — mutation 스킵', () => {
-  const ORIGINAL = process.env.TEST_ACCOUNT_USER_IDS;
-  const WL = 'test-user-1';
-  beforeEach(() => { process.env.TEST_ACCOUNT_USER_IDS = WL; });
-  afterEach(() => {
-    if (ORIGINAL === undefined) delete process.env.TEST_ACCOUNT_USER_IDS;
-    else process.env.TEST_ACCOUNT_USER_IDS = ORIGINAL;
-  });
-
-  test('applyPlanChange(실제 함수): apply_plan_change RPC 스킵하고 null 반환', async () => {
-    const supabase = makeSupabaseMock();
-    const result = await applyPlanChange(supabase, WL, 'enterprise');
-
-    expect(result).toBeNull();
-    expect(supabase.rpc).not.toHaveBeenCalled();
-  });
-
-  test('expireSubscription: profiles UPDATE 스킵', async () => {
-    const supabase = makeSupabaseMock();
-    await expireSubscription(supabase, WL);
-
-    expect(supabase.from).not.toHaveBeenCalled();
-  });
-
-  test('화이트리스트가 아닌 계정은 정상 mutation (apply_plan_change 호출)', async () => {
-    const supabase = makeSupabaseMock();
-    await applyPlanChange(supabase, 'normal-user', 'pro');
-
-    expect(supabase.rpc).toHaveBeenCalledWith('apply_plan_change', expect.objectContaining({ p_user_id: 'normal-user' }));
-  });
-});
-
 describe('classifyTransactionOrigin', () => {
   test("'checkout'은 서버 바인딩 없는 직접 구매로 거부해야 한다", () => {
     expect(classifyTransactionOrigin('checkout')).toBe('reject');
@@ -708,45 +647,6 @@ describe('syncPlanFromSubscription', () => {
   });
 });
 
-describe('applyPlanChange', () => {
-  const USER_ID = 'user-uuid-123';
-
-  test('업그레이드: apply_plan_change RPC를 enterprise allotment(1500)으로 호출해야 한다', async () => {
-    const supabase = makeSupabaseMock();
-    await applyPlanChange(supabase, USER_ID, 'enterprise');
-
-    expect(supabase._rpcFn).toHaveBeenCalledWith('apply_plan_change', {
-      p_user_id: USER_ID,
-      p_new_plan: 'enterprise',
-      p_new_allotment: 1500
-    });
-  });
-
-  test('다운그레이드: apply_plan_change RPC를 pro allotment(600)으로 호출해야 한다', async () => {
-    const supabase = makeSupabaseMock();
-    await applyPlanChange(supabase, USER_ID, 'pro');
-
-    expect(supabase._rpcFn).toHaveBeenCalledWith('apply_plan_change', {
-      p_user_id: USER_ID,
-      p_new_plan: 'pro',
-      p_new_allotment: 600
-    });
-  });
-
-  test('동일 플랜 idempotent 재전송: RPC 호출은 정확히 1회 (DB 내 크레딧 결정은 RPC가 처리)', async () => {
-    const supabase = makeSupabaseMock();
-    await applyPlanChange(supabase, USER_ID, 'enterprise');
-
-    expect(supabase._rpcFn).toHaveBeenCalledTimes(1);
-  });
-
-  test('RPC 실패 시 예외를 던져야 한다', async () => {
-    const supabase = makeSupabaseMock({ rpcError: { message: 'RPC error' } });
-    await expect(applyPlanChange(supabase, USER_ID, 'enterprise'))
-      .rejects.toThrow('apply_plan_change RPC failed');
-  });
-});
-
 describe('isActiveSubscription', () => {
   test("'active'는 true를 반환해야 한다", () => {
     expect(isActiveSubscription('active')).toBe(true);
@@ -771,65 +671,6 @@ describe('isActiveSubscription', () => {
   test('undefined / null은 false를 반환해야 한다', () => {
     expect(isActiveSubscription(undefined)).toBe(false);
     expect(isActiveSubscription(null)).toBe(false);
-  });
-});
-
-describe('subscription.updated status 가드', () => {
-  // Mirrors the handler's status guard + applyPlanChange call for unit testing.
-  async function handleWithStatusGuard(supabase, status, userId, plan) {
-    if (!isActiveSubscription(status)) return 'skipped';
-    await applyPlanChange(supabase, userId, plan);
-    return 'applied';
-  }
-
-  const USER_ID = 'user-uuid-123';
-
-  test("status='canceled'이면 apply_plan_change를 호출하지 않아야 한다 (취소 레이스 방지)", async () => {
-    const supabase = makeSupabaseMock();
-    const result = await handleWithStatusGuard(supabase, 'canceled', USER_ID, 'enterprise');
-
-    expect(result).toBe('skipped');
-    expect(supabase._rpcFn).not.toHaveBeenCalled();
-  });
-
-  test("status='paused'이면 apply_plan_change를 호출하지 않아야 한다", async () => {
-    const supabase = makeSupabaseMock();
-    const result = await handleWithStatusGuard(supabase, 'paused', USER_ID, 'enterprise');
-
-    expect(result).toBe('skipped');
-    expect(supabase._rpcFn).not.toHaveBeenCalled();
-  });
-
-  test("status='past_due'이면 apply_plan_change를 호출하지 않아야 한다", async () => {
-    const supabase = makeSupabaseMock();
-    const result = await handleWithStatusGuard(supabase, 'past_due', USER_ID, 'pro');
-
-    expect(result).toBe('skipped');
-    expect(supabase._rpcFn).not.toHaveBeenCalled();
-  });
-
-  test("status='active'이면 apply_plan_change를 정상 호출해야 한다 (기존 업그레이드 동작 불변)", async () => {
-    const supabase = makeSupabaseMock();
-    const result = await handleWithStatusGuard(supabase, 'active', USER_ID, 'enterprise');
-
-    expect(result).toBe('applied');
-    expect(supabase._rpcFn).toHaveBeenCalledWith('apply_plan_change', {
-      p_user_id: USER_ID,
-      p_new_plan: 'enterprise',
-      p_new_allotment: 1500
-    });
-  });
-
-  test("status='trialing'이면 apply_plan_change를 정상 호출해야 한다", async () => {
-    const supabase = makeSupabaseMock();
-    const result = await handleWithStatusGuard(supabase, 'trialing', USER_ID, 'pro');
-
-    expect(result).toBe('applied');
-    expect(supabase._rpcFn).toHaveBeenCalledWith('apply_plan_change', {
-      p_user_id: USER_ID,
-      p_new_plan: 'pro',
-      p_new_allotment: 600
-    });
   });
 });
 

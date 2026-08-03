@@ -1,30 +1,32 @@
 -- ============================================================
--- Migration 025: server-bound subscription and add-on payments
+-- Migration 026: server-bound subscription and add-on payments
 --
--- Apply after 023_credit_lot_ledger.sql and
--- 024_paddle_event_ordering.sql. Money feature flags must remain false
+-- Apply after 024_credit_lot_ledger.sql and
+-- 025_paddle_event_ordering.sql. Money feature flags must remain false
 -- until the cloned-schema race suite and Paddle Sandbox purchase/refund
 -- matrix pass.
 -- ============================================================
 
 BEGIN;
 
+SET LOCAL lock_timeout = '5s';
+
 DO $preflight$
 BEGIN
   IF to_regprocedure(
     'public.apply_credit_pack_purchase(text,uuid,text,text,text,integer,integer,text,text,integer,timestamp with time zone)'
   ) IS NULL THEN
-    RAISE EXCEPTION 'SECURE_PAYMENT_REQUESTS_REQUIRES_MIGRATION_023';
+    RAISE EXCEPTION 'SECURE_PAYMENT_REQUESTS_REQUIRES_MIGRATION_024';
   END IF;
   IF to_regprocedure(
     'public.apply_ordered_subscription_payment(text,uuid,text,integer,text,text,timestamptz,boolean,boolean)'
   ) IS NULL THEN
-    RAISE EXCEPTION 'SECURE_PAYMENT_REQUESTS_REQUIRES_MIGRATION_024';
+    RAISE EXCEPTION 'SECURE_PAYMENT_REQUESTS_REQUIRES_MIGRATION_025';
   END IF;
 END;
 $preflight$;
 
--- Migration 023 exposed the internal ledger graph directly to service_role.
+-- Migration 024 exposes only the ledger reads needed by service_role.
 -- Every mutation now goes through a SECURITY DEFINER RPC that enforces the
 -- ledger lock order and invariants, so retain read-only diagnostics only.
 REVOKE ALL ON TABLE
@@ -59,7 +61,7 @@ REVOKE ALL ON FUNCTION public.apply_credit_pack_adjustment(
   text, text, text, text, text
 ) FROM service_role;
 -- These subscription helpers are internal implementation details of the
--- ordered snapshot/payment wrappers from migration 024. Direct service-role
+-- ordered snapshot/payment wrappers from migration 025. Direct service-role
 -- execution would bypass lifecycle ordering and terminal-state checks.
 REVOKE ALL ON FUNCTION public.apply_subscription_payment(
   text, uuid, text, integer, boolean
@@ -76,7 +78,7 @@ REVOKE ALL ON FUNCTION public.expire_subscription_credits(
 CREATE INDEX credit_pack_adjustments_transaction_idx
   ON public.credit_pack_adjustments (transaction_id);
 
--- Migration 023 intentionally starts with only fulfilled purchases. Extend its
+-- Migration 024 intentionally starts with only fulfilled purchases. Extend its
 -- audit graph before introducing request-bound charges so a paid transaction
 -- can be recorded without minting a credit lot.
 ALTER TABLE public.credit_pack_checkout_intents

@@ -8,12 +8,16 @@ const migrationPath = path.join(
   '..',
   '..',
   'migrations',
-  '024_paddle_event_ordering.sql'
+  '025_paddle_event_ordering.sql'
 );
 const sql = fs.readFileSync(migrationPath, 'utf8');
 const normalizedSql = sql.replace(/\s+/g, ' ');
 
 describe('Paddle subscription state migration safety contract', () => {
+  test('fails fast instead of waiting indefinitely for migration locks', () => {
+    expect(sql).toContain("SET LOCAL lock_timeout = '5s';");
+  });
+
   test('keeps immutable event watermarks separate from subscription snapshots', () => {
     expect(sql).toContain('CREATE TABLE public.paddle_event_watermarks');
     expect(sql).toContain("CHECK (entity_type IN ('transaction', 'adjustment'))");

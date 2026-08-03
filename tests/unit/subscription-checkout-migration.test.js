@@ -8,7 +8,7 @@ const migrationPath = path.join(
   '..',
   '..',
   'migrations',
-  '026_secure_subscription_checkout.sql'
+  '027_secure_subscription_checkout.sql'
 );
 const sql = fs.readFileSync(migrationPath, 'utf8');
 const normalizedSql = sql.replace(/\s+/g, ' ');
@@ -28,6 +28,10 @@ function functionSlice(functionName, nextFunctionName) {
 }
 
 describe('secure subscription checkout migration', () => {
+  test('fails fast instead of waiting indefinitely for migration locks', () => {
+    expect(sql).toContain("SET LOCAL lock_timeout = '5s';");
+  });
+
   test('preflights the ordered reducer and prior secure-payment migration', () => {
     expect(sql).toContain(
       "to_regclass('public.paddle_subscription_states')"
@@ -39,10 +43,10 @@ describe('secure subscription checkout migration', () => {
       "to_regclass('public.credit_pack_purchase_requests')"
     );
     expect(sql).toContain(
-      'SECURE_SUBSCRIPTION_CHECKOUT_REQUIRES_MIGRATION_024'
+      'SECURE_SUBSCRIPTION_CHECKOUT_REQUIRES_MIGRATION_025'
     );
     expect(sql).toContain(
-      'SECURE_SUBSCRIPTION_CHECKOUT_REQUIRES_MIGRATION_025'
+      'SECURE_SUBSCRIPTION_CHECKOUT_REQUIRES_MIGRATION_026'
     );
   });
 

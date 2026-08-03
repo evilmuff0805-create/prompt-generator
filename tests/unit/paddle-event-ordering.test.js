@@ -82,10 +82,11 @@ describe('Paddle semantic event ordering', () => {
 
   test('ordering migration is service-role only and exposes claim/complete/fail RPCs', () => {
     const sql = fs.readFileSync(
-      path.join(__dirname, '../../migrations/024_paddle_event_ordering.sql'),
+      path.join(__dirname, '../../migrations/025_paddle_event_ordering.sql'),
       'utf8'
     );
 
+    expect(sql).toContain("SET LOCAL lock_timeout = '5s';");
     expect(sql).toContain('CREATE TABLE public.paddle_event_watermarks');
     expect(sql).toContain('CREATE OR REPLACE FUNCTION public.claim_paddle_event_order');
     expect(sql).toContain('CREATE OR REPLACE FUNCTION public.complete_paddle_event_order');

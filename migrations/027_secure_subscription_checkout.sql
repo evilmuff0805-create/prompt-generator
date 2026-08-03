@@ -1,10 +1,11 @@
 -- ============================================================
--- Migration 026: server-bound subscription checkout attempts
+-- Migration 027: server-bound subscription checkout attempts
 --
 -- Apply after:
---   023_credit_lot_ledger.sql
---   024_paddle_event_ordering.sql
---   025_secure_payment_requests.sql
+--   023_legacy_credit_classification_manifest.sql
+--   024_credit_lot_ledger.sql
+--   025_paddle_event_ordering.sql
+--   026_secure_payment_requests.sql
 --
 -- Security contract:
 --   * The authenticated browser never selects a Paddle price or supplies the
@@ -23,17 +24,19 @@
 
 BEGIN;
 
+SET LOCAL lock_timeout = '5s';
+
 DO $preflight$
 BEGIN
   IF to_regclass('public.paddle_subscription_states') IS NULL
      OR to_regprocedure(
        'public.apply_ordered_subscription_payment(text,uuid,text,integer,text,text,timestamptz,boolean,boolean)'
      ) IS NULL THEN
-    RAISE EXCEPTION 'SECURE_SUBSCRIPTION_CHECKOUT_REQUIRES_MIGRATION_024';
+    RAISE EXCEPTION 'SECURE_SUBSCRIPTION_CHECKOUT_REQUIRES_MIGRATION_025';
   END IF;
 
   IF to_regclass('public.credit_pack_purchase_requests') IS NULL THEN
-    RAISE EXCEPTION 'SECURE_SUBSCRIPTION_CHECKOUT_REQUIRES_MIGRATION_025';
+    RAISE EXCEPTION 'SECURE_SUBSCRIPTION_CHECKOUT_REQUIRES_MIGRATION_026';
   END IF;
 END;
 $preflight$;

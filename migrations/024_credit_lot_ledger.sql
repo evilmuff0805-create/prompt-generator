@@ -1,8 +1,9 @@
 -- ============================================================
--- Migration 023: source-aware credit lots and exact refunds
+-- Migration 024: source-aware credit lots and exact refunds
 --
 -- Rollout contract:
 --   * Apply only during a billing maintenance window.
+--   * Migration 023 and a complete, operator-reviewed manifest are required.
 --   * The migration stops if an analysis reservation or Storyboard job is active.
 --   * CREDIT_LEDGER_V2_ENABLED and CREDIT_PACK_PURCHASES_ENABLED remain false
 --     until the post-migration invariants and Paddle Sandbox flow pass.
@@ -15,10 +16,34 @@
 
 BEGIN;
 
+SET LOCAL lock_timeout = '5s';
+
+DO $migration_lock$
+BEGIN
+  IF NOT pg_try_advisory_xact_lock(
+    hashtextextended('promptgen:credit-ledger-v2-migration', 0)
+  ) THEN
+    RAISE EXCEPTION 'CREDIT_LEDGER_MIGRATION_ALREADY_RUNNING'
+      USING ERRCODE = '55P03';
+  END IF;
+END;
+$migration_lock$;
+
 LOCK TABLE public.profiles IN SHARE ROW EXCLUSIVE MODE;
+LOCK TABLE public.purchases IN SHARE ROW EXCLUSIVE MODE;
+LOCK TABLE public.credits_ledger IN SHARE ROW EXCLUSIVE MODE;
+LOCK TABLE public.analysis_credit_operations IN SHARE ROW EXCLUSIVE MODE;
+LOCK TABLE public.storyboards IN SHARE ROW EXCLUSIVE MODE;
+LOCK TABLE promptgen_private.legacy_credit_classification_manifest
+  IN SHARE ROW EXCLUSIVE MODE;
 
 DO $preflight$
 BEGIN
+  IF to_regclass('public.credit_lots') IS NOT NULL THEN
+    RAISE EXCEPTION 'CREDIT_LEDGER_MIGRATION_ALREADY_APPLIED'
+      USING ERRCODE = '55000';
+  END IF;
+
   IF EXISTS (
     SELECT 1
       FROM public.analysis_credit_operations
@@ -35,6 +60,115 @@ BEGIN
   ) THEN
     RAISE EXCEPTION 'CREDIT_LEDGER_MIGRATION_BLOCKED_ACTIVE_STORYBOARD';
   END IF;
+
+  IF EXISTS (
+    SELECT 1
+      FROM public.profiles
+     WHERE credits < 0
+  ) THEN
+    RAISE EXCEPTION 'LEGACY_CREDIT_PROFILE_NEGATIVE_BALANCE'
+      USING ERRCODE = '23514';
+  END IF;
+
+  IF EXISTS (
+    SELECT 1
+      FROM promptgen_private.legacy_credit_classification_manifest
+     WHERE consumed_at IS NOT NULL
+  ) THEN
+    RAISE EXCEPTION 'LEGACY_CREDIT_MANIFEST_ALREADY_CONSUMED'
+      USING ERRCODE = '55000';
+  END IF;
+
+  IF EXISTS (
+    SELECT 1
+      FROM promptgen_private.legacy_credit_classification_manifest
+     WHERE snapshot_captured_at > clock_timestamp()
+        OR snapshot_captured_at < clock_timestamp() - interval '24 hours'
+        OR reviewed_at > clock_timestamp()
+  ) THEN
+    RAISE EXCEPTION 'LEGACY_CREDIT_MANIFEST_STALE_OR_FUTURE'
+      USING ERRCODE = '22023';
+  END IF;
+
+  IF (
+    SELECT count(DISTINCT batch_id)
+      FROM promptgen_private.legacy_credit_classification_manifest
+  ) > 1 OR (
+    SELECT count(DISTINCT snapshot_captured_at)
+      FROM promptgen_private.legacy_credit_classification_manifest
+  ) > 1 THEN
+    RAISE EXCEPTION 'LEGACY_CREDIT_MANIFEST_MIXED_SNAPSHOT'
+      USING ERRCODE = '22023';
+  END IF;
+
+  IF EXISTS (
+    SELECT 1
+      FROM public.profiles p
+      LEFT JOIN promptgen_private.legacy_credit_classification_manifest m
+        ON m.user_id = p.id
+     WHERE p.credits > 0
+       AND m.user_id IS NULL
+  ) THEN
+    RAISE EXCEPTION 'LEGACY_CREDIT_MANIFEST_MISSING'
+      USING ERRCODE = '23502';
+  END IF;
+
+  IF EXISTS (
+    SELECT 1
+      FROM promptgen_private.legacy_credit_classification_manifest m
+      LEFT JOIN public.profiles p ON p.id = m.user_id
+     WHERE p.id IS NULL
+        OR p.credits <= 0
+  ) THEN
+    RAISE EXCEPTION 'LEGACY_CREDIT_MANIFEST_EXTRA'
+      USING ERRCODE = '23514';
+  END IF;
+
+  IF (
+    SELECT count(*) FROM public.profiles WHERE credits > 0
+  ) IS DISTINCT FROM (
+    SELECT count(*)
+      FROM promptgen_private.legacy_credit_classification_manifest
+  ) OR (
+    SELECT COALESCE(sum(credits), 0)::bigint
+      FROM public.profiles
+     WHERE credits > 0
+  ) IS DISTINCT FROM (
+    SELECT COALESCE(sum(expected_credits), 0)::bigint
+      FROM promptgen_private.legacy_credit_classification_manifest
+  ) THEN
+    RAISE EXCEPTION 'LEGACY_CREDIT_MANIFEST_TOTAL_MISMATCH'
+      USING ERRCODE = '23514';
+  END IF;
+
+  IF EXISTS (
+    SELECT 1
+      FROM promptgen_private.legacy_credit_classification_manifest m
+      JOIN public.profiles p ON p.id = m.user_id
+     WHERE p.plan IS DISTINCT FROM m.expected_plan
+        OR p.credits IS DISTINCT FROM m.expected_credits
+        OR (
+          NULLIF(btrim(p.paddle_customer_id), '') IS NOT NULL
+        ) IS DISTINCT FROM m.expected_has_paddle_customer
+        OR (
+          NULLIF(btrim(p.paddle_subscription_id), '') IS NOT NULL
+        ) IS DISTINCT FROM m.expected_has_paddle_subscription
+        OR (
+          SELECT count(*)
+            FROM public.purchases x
+           WHERE x.user_id = p.id
+        ) IS DISTINCT FROM m.expected_purchase_count
+        OR (
+          SELECT count(*)
+            FROM public.credits_ledger l
+           WHERE l.user_id = p.id
+        ) IS DISTINCT FROM m.expected_ledger_count
+        OR promptgen_private.legacy_credit_evidence_fingerprint(p.id)
+             IS DISTINCT FROM m.expected_evidence_fingerprint
+  ) THEN
+    RAISE EXCEPTION 'LEGACY_CREDIT_MANIFEST_SNAPSHOT_DRIFT'
+      USING ERRCODE = '40001';
+  END IF;
 END;
 $preflight$;
 
@@ -42,7 +176,14 @@ CREATE TABLE public.credit_lots (
   id                 BIGSERIAL PRIMARY KEY,
   user_id            UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
   source_kind        TEXT NOT NULL
-                     CHECK (source_kind IN ('subscription', 'credit_pack', 'migration')),
+                     CHECK (
+                       source_kind IN (
+                         'subscription',
+                         'subscription_carry_in',
+                         'manual_carryover',
+                         'credit_pack'
+                       )
+                     ),
   source_id          TEXT NOT NULL UNIQUE CHECK (btrim(source_id) <> ''),
   credits_granted    INTEGER NOT NULL CHECK (credits_granted > 0),
   credits_remaining  INTEGER NOT NULL
@@ -70,6 +211,9 @@ CREATE TABLE public.credit_lots (
     (status = 'active' AND credits_remaining > 0 AND credits_expired = 0)
     OR (status = 'quarantined' AND credits_remaining > 0 AND credits_expired = 0)
     OR (status NOT IN ('active', 'quarantined') AND credits_remaining = 0)
+  ),
+  CONSTRAINT credit_lots_manual_carryover_non_expiring_check CHECK (
+    source_kind <> 'manual_carryover' OR expires_at IS NULL
   )
 );
 
@@ -193,23 +337,31 @@ ALTER TABLE public.credit_pack_checkout_intents ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.credit_pack_purchases ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.credit_pack_adjustments ENABLE ROW LEVEL SECURITY;
 
-REVOKE ALL ON TABLE public.credit_lots FROM PUBLIC, anon, authenticated;
-REVOKE ALL ON TABLE public.credit_operations FROM PUBLIC, anon, authenticated;
-REVOKE ALL ON TABLE public.credit_operation_allocations FROM PUBLIC, anon, authenticated;
-REVOKE ALL ON TABLE public.credit_pack_checkout_intents FROM PUBLIC, anon, authenticated;
-REVOKE ALL ON TABLE public.credit_pack_purchases FROM PUBLIC, anon, authenticated;
-REVOKE ALL ON TABLE public.credit_pack_adjustments FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON TABLE public.credit_lots
+  FROM PUBLIC, anon, authenticated, service_role;
+REVOKE ALL ON TABLE public.credit_operations
+  FROM PUBLIC, anon, authenticated, service_role;
+REVOKE ALL ON TABLE public.credit_operation_allocations
+  FROM PUBLIC, anon, authenticated, service_role;
+REVOKE ALL ON TABLE public.credit_pack_checkout_intents
+  FROM PUBLIC, anon, authenticated, service_role;
+REVOKE ALL ON TABLE public.credit_pack_purchases
+  FROM PUBLIC, anon, authenticated, service_role;
+REVOKE ALL ON TABLE public.credit_pack_adjustments
+  FROM PUBLIC, anon, authenticated, service_role;
 
-GRANT ALL ON TABLE public.credit_lots TO service_role;
-GRANT ALL ON TABLE public.credit_operations TO service_role;
-GRANT ALL ON TABLE public.credit_operation_allocations TO service_role;
-GRANT ALL ON TABLE public.credit_pack_checkout_intents TO service_role;
-GRANT ALL ON TABLE public.credit_pack_purchases TO service_role;
-GRANT ALL ON TABLE public.credit_pack_adjustments TO service_role;
-GRANT USAGE, SELECT ON SEQUENCE public.credit_lots_id_seq TO service_role;
+GRANT SELECT ON TABLE public.credit_lots TO service_role;
+GRANT SELECT ON TABLE public.credit_operations TO service_role;
+GRANT SELECT ON TABLE public.credit_operation_allocations TO service_role;
+GRANT SELECT ON TABLE public.credit_pack_checkout_intents TO service_role;
+GRANT SELECT ON TABLE public.credit_pack_purchases TO service_role;
+GRANT SELECT ON TABLE public.credit_pack_adjustments TO service_role;
 
--- Preserve every existing balance as a migration lot before any RPC switches
--- to source-aware accounting.
+REVOKE ALL ON SEQUENCE public.credit_lots_id_seq
+  FROM PUBLIC, anon, authenticated, service_role;
+
+-- Backfill only the exact operator-reviewed snapshot. Subscription carry-in
+-- follows subscription expiry. Manual carryover remains outside that lifecycle.
 INSERT INTO public.credit_lots (
   user_id,
   source_kind,
@@ -219,14 +371,17 @@ INSERT INTO public.credit_lots (
   status
 )
 SELECT
-  id,
-  'migration',
-  'migration:' || id::text,
-  credits,
-  credits,
+  p.id,
+  m.classification,
+  'legacy:' || m.batch_id::text || ':' || p.id::text,
+  m.expected_credits,
+  m.expected_credits,
   'active'
-FROM public.profiles
-WHERE credits > 0;
+FROM public.profiles p
+JOIN promptgen_private.legacy_credit_classification_manifest m
+  ON m.user_id = p.id
+WHERE p.credits > 0
+  AND m.consumed_at IS NULL;
 
 CREATE OR REPLACE FUNCTION public.sync_credit_lot_balance(
   p_user_id uuid
@@ -367,8 +522,10 @@ BEGIN
      ORDER BY
        CASE source_kind
          WHEN 'subscription' THEN 0
-         WHEN 'migration' THEN 1
-         ELSE 2
+         WHEN 'subscription_carry_in' THEN 1
+         WHEN 'credit_pack' THEN 2
+         WHEN 'manual_carryover' THEN 3
+         ELSE 4
        END,
        expires_at ASC NULLS LAST,
        created_at,
@@ -1141,7 +1298,7 @@ BEGIN
          status = 'expired',
          updated_at = clock_timestamp()
    WHERE user_id = p_user_id
-     AND source_kind IN ('subscription', 'migration')
+     AND source_kind IN ('subscription', 'subscription_carry_in')
      AND status IN ('active', 'exhausted');
 
   INSERT INTO public.credit_lots (
@@ -1218,7 +1375,7 @@ BEGIN
     INTO v_subscription_remaining
     FROM public.credit_lots
    WHERE user_id = p_user_id
-     AND source_kind IN ('subscription', 'migration')
+     AND source_kind IN ('subscription', 'subscription_carry_in')
      AND status = 'active';
 
   v_old_rank := CASE v_old_plan WHEN 'enterprise' THEN 2 WHEN 'pro' THEN 1 ELSE 0 END;
@@ -1235,7 +1392,7 @@ BEGIN
          status = 'expired',
          updated_at = clock_timestamp()
    WHERE user_id = p_user_id
-     AND source_kind IN ('subscription', 'migration')
+     AND source_kind IN ('subscription', 'subscription_carry_in')
      AND status IN ('active', 'exhausted');
 
   IF v_target > 0 THEN
@@ -1284,7 +1441,7 @@ BEGIN
          status = 'expired',
          updated_at = clock_timestamp()
    WHERE user_id = p_user_id
-     AND source_kind IN ('subscription', 'migration')
+     AND source_kind IN ('subscription', 'subscription_carry_in')
      AND status IN ('active', 'exhausted');
 
   UPDATE public.profiles
@@ -1319,14 +1476,14 @@ BEGIN
            status = 'expired',
            updated_at = clock_timestamp()
      WHERE user_id = NEW.id
-       AND source_kind IN ('subscription', 'migration')
+       AND source_kind IN ('subscription', 'subscription_carry_in')
        AND status IN ('active', 'exhausted');
 
     SELECT COALESCE(sum(credits_remaining), 0)::integer
       INTO NEW.credits
       FROM public.credit_lots
      WHERE user_id = NEW.id
-       AND source_kind = 'credit_pack'
+       AND source_kind IN ('credit_pack', 'manual_carryover')
        AND status = 'active'
        AND credits_remaining > 0
        AND (expires_at IS NULL OR expires_at > clock_timestamp());
@@ -2220,71 +2377,53 @@ END;
 $function$;
 
 REVOKE ALL ON FUNCTION public.sync_credit_lot_balance(uuid)
-  FROM PUBLIC, anon, authenticated;
+  FROM PUBLIC, anon, authenticated, service_role;
 REVOKE ALL ON FUNCTION public.consume_credit_lots(text, text, text, uuid, integer)
-  FROM PUBLIC, anon, authenticated;
+  FROM PUBLIC, anon, authenticated, service_role;
 REVOKE ALL ON FUNCTION public.complete_credit_operation(text, uuid)
-  FROM PUBLIC, anon, authenticated;
+  FROM PUBLIC, anon, authenticated, service_role;
 REVOKE ALL ON FUNCTION public.refund_credit_operation(text, uuid, text)
-  FROM PUBLIC, anon, authenticated;
+  FROM PUBLIC, anon, authenticated, service_role;
 REVOKE ALL ON FUNCTION public.register_credit_pack_checkout_intent(
   text, uuid, text, text, text, text, integer, integer, text, integer
-) FROM PUBLIC, anon, authenticated;
+) FROM PUBLIC, anon, authenticated, service_role;
 REVOKE ALL ON FUNCTION public.apply_credit_pack_purchase(
   text, uuid, text, text, text, integer, integer, text, text, integer, timestamptz
-) FROM PUBLIC, anon, authenticated;
+) FROM PUBLIC, anon, authenticated, service_role;
 REVOKE ALL ON FUNCTION public.apply_credit_pack_adjustment(text, text, text, text, text)
-  FROM PUBLIC, anon, authenticated;
+  FROM PUBLIC, anon, authenticated, service_role;
 REVOKE ALL ON FUNCTION public.expire_subscription_credits(uuid)
-  FROM PUBLIC, anon, authenticated;
+  FROM PUBLIC, anon, authenticated, service_role;
 REVOKE ALL ON FUNCTION public.bridge_legacy_subscription_cancellation()
-  FROM PUBLIC, anon, authenticated;
+  FROM PUBLIC, anon, authenticated, service_role;
 
 REVOKE ALL ON FUNCTION public.apply_subscription_payment(text, uuid, text, integer, boolean)
-  FROM PUBLIC, anon, authenticated;
+  FROM PUBLIC, anon, authenticated, service_role;
 REVOKE ALL ON FUNCTION public.apply_purchase_refund(text, text, integer, boolean)
-  FROM PUBLIC, anon, authenticated;
+  FROM PUBLIC, anon, authenticated, service_role;
 REVOKE ALL ON FUNCTION public.apply_plan_change(uuid, text, integer)
-  FROM PUBLIC, anon, authenticated;
+  FROM PUBLIC, anon, authenticated, service_role;
 REVOKE ALL ON FUNCTION public.reserve_analysis_operation(uuid, uuid, integer, integer)
-  FROM PUBLIC, anon, authenticated;
+  FROM PUBLIC, anon, authenticated, service_role;
 REVOKE ALL ON FUNCTION public.complete_analysis_operation(uuid, uuid, jsonb)
-  FROM PUBLIC, anon, authenticated;
+  FROM PUBLIC, anon, authenticated, service_role;
 REVOKE ALL ON FUNCTION public.refund_analysis_operation(uuid, uuid, text)
-  FROM PUBLIC, anon, authenticated;
+  FROM PUBLIC, anon, authenticated, service_role;
 REVOKE ALL ON FUNCTION public.refund_stale_analysis_operations(integer)
-  FROM PUBLIC, anon, authenticated;
+  FROM PUBLIC, anon, authenticated, service_role;
 REVOKE ALL ON FUNCTION public.enqueue_storyboard_job(
   text, uuid, text, text[], text, integer, text[], integer, integer, integer
-) FROM PUBLIC, anon, authenticated;
+) FROM PUBLIC, anon, authenticated, service_role;
 REVOKE ALL ON FUNCTION public.claim_storyboard_jobs(text, integer, integer)
-  FROM PUBLIC, anon, authenticated;
+  FROM PUBLIC, anon, authenticated, service_role;
 REVOKE ALL ON FUNCTION public.complete_storyboard_job(text, uuid, jsonb, jsonb, text)
-  FROM PUBLIC, anon, authenticated;
+  FROM PUBLIC, anon, authenticated, service_role;
 REVOKE ALL ON FUNCTION public.fail_storyboard_job(text, uuid, text, boolean, integer)
-  FROM PUBLIC, anon, authenticated;
+  FROM PUBLIC, anon, authenticated, service_role;
 
-GRANT EXECUTE ON FUNCTION public.sync_credit_lot_balance(uuid)
-  TO service_role;
-GRANT EXECUTE ON FUNCTION public.consume_credit_lots(text, text, text, uuid, integer)
-  TO service_role;
-GRANT EXECUTE ON FUNCTION public.complete_credit_operation(text, uuid)
-  TO service_role;
-GRANT EXECUTE ON FUNCTION public.refund_credit_operation(text, uuid, text)
-  TO service_role;
-GRANT EXECUTE ON FUNCTION public.register_credit_pack_checkout_intent(
-  text, uuid, text, text, text, text, integer, integer, text, integer
-) TO service_role;
-GRANT EXECUTE ON FUNCTION public.apply_credit_pack_purchase(
-  text, uuid, text, text, text, integer, integer, text, text, integer, timestamptz
-) TO service_role;
-GRANT EXECUTE ON FUNCTION public.apply_credit_pack_adjustment(text, text, text, text, text)
-  TO service_role;
 GRANT EXECUTE ON FUNCTION public.expire_subscription_credits(uuid)
   TO service_role;
 
-GRANT EXECUTE ON FUNCTION public.apply_subscription_payment(text, uuid, text, integer, boolean)
-  TO service_role;
 GRANT EXECUTE ON FUNCTION public.apply_purchase_refund(text, text, integer, boolean)
   TO service_role;
 GRANT EXECUTE ON FUNCTION public.apply_plan_change(uuid, text, integer)
@@ -2362,8 +2501,40 @@ BEGIN
   ) THEN
     RAISE EXCEPTION 'PROFILE_CREDIT_BALANCE_INVARIANT_FAILED';
   END IF;
+
+  IF EXISTS (
+    SELECT 1
+      FROM promptgen_private.legacy_credit_classification_manifest m
+      LEFT JOIN public.credit_lots l
+        ON l.user_id = m.user_id
+       AND l.source_id = 'legacy:' || m.batch_id::text || ':' || m.user_id::text
+     WHERE l.id IS NULL
+        OR l.source_kind IS DISTINCT FROM m.classification
+        OR l.credits_granted IS DISTINCT FROM m.expected_credits
+        OR l.credits_remaining IS DISTINCT FROM m.expected_credits
+        OR l.status IS DISTINCT FROM 'active'
+        OR l.expires_at IS NOT NULL
+  ) THEN
+    RAISE EXCEPTION 'LEGACY_CREDIT_BACKFILL_INVARIANT_FAILED';
+  END IF;
 END;
 $invariants$;
+
+UPDATE promptgen_private.legacy_credit_classification_manifest
+   SET consumed_at = clock_timestamp()
+ WHERE consumed_at IS NULL;
+
+DO $manifest_consumed$
+BEGIN
+  IF EXISTS (
+    SELECT 1
+      FROM promptgen_private.legacy_credit_classification_manifest
+     WHERE consumed_at IS NULL
+  ) THEN
+    RAISE EXCEPTION 'LEGACY_CREDIT_MANIFEST_CONSUMPTION_FAILED';
+  END IF;
+END;
+$manifest_consumed$;
 
 COMMIT;
 
