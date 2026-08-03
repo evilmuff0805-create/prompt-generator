@@ -361,6 +361,30 @@ describe('Paddle subscription route reducer contract', () => {
     );
   });
 
+  test('active snapshot RPC failures propagate so the durable webhook inbox can retry', async () => {
+    const client = {
+      rpc: jest.fn().mockResolvedValue({
+        data: null,
+        error: { message: 'temporary database failure' }
+      })
+    };
+
+    await expect(applyPaddleSubscriptionSnapshot(client, {
+      subscriptionId: 'sub_retry_1',
+      userId: USER_ID,
+      customerId: 'ctm_retry_1',
+      status: 'active',
+      plan: 'pro',
+      providerEventId: 'evt_retry_1',
+      eventType: 'subscription.updated',
+      occurredAt: '2026-07-28T12:34:56.123456Z'
+    })).rejects.toThrow(
+      'apply_paddle_subscription_snapshot RPC failed: temporary database failure'
+    );
+
+    expect(client.rpc).toHaveBeenCalledTimes(1);
+  });
+
   test('test accounts still record snapshots but explicitly skip entitlement mutation', async () => {
     process.env.TEST_ACCOUNT_USER_IDS = USER_ID;
     const client = {

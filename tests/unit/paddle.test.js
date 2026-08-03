@@ -25,10 +25,8 @@ function buildSignatureHeader(secret, rawBody, ts) {
 
 // ── Supabase mock helpers ──
 
-function makeSupabaseMock({ insertError = null, selectData = null, selectError = null, updateError = null, rpcError = null } = {}) {
+function makeSupabaseMock({ insertError = null, selectData = null, selectError = null, rpcError = null } = {}) {
   const singleFn = jest.fn().mockResolvedValue({ data: selectData, error: selectError });
-  const updateEqFn = jest.fn().mockResolvedValue({ error: updateError });
-  const updateFn = jest.fn().mockReturnValue({ eq: updateEqFn });
   const rpcFn = jest.fn().mockResolvedValue({ error: rpcError });
 
   return {
@@ -36,14 +34,11 @@ function makeSupabaseMock({ insertError = null, selectData = null, selectError =
       insert: jest.fn().mockResolvedValue({ error: insertError }),
       select: jest.fn().mockReturnValue({
         eq: jest.fn().mockReturnValue({ single: singleFn })
-      }),
-      update: updateFn
+      })
     }),
     rpc: rpcFn,
     _rpcFn: rpcFn,
-    _singleFn: singleFn,
-    _updateFn: updateFn,
-    _updateEqFn: updateEqFn
+    _singleFn: singleFn
   };
 }
 

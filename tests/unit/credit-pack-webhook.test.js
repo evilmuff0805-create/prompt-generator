@@ -1358,7 +1358,7 @@ describe('credit pack transaction.completed fulfillment', () => {
   });
 });
 
-describe('credit pack adjustment and subscription-expiry routing', () => {
+describe('credit pack adjustment routing', () => {
   const originalEnv = process.env;
 
   beforeEach(() => {
