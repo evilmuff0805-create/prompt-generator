@@ -1623,7 +1623,7 @@ async function applyPaddleSubscriptionSnapshot(
 
 /* ── Record plan-upgrade transaction in purchases ledger (defer branch) ── */
 // Inserts a ledger row for a plan-change transaction. Credits are NOT touched here —
-// apply_plan_change in subscription.updated handles credit recalculation exclusively.
+// the ordered subscription snapshot reducer handles recalculation exclusively.
 // UNIQUE(transaction_id) 23505 = idempotent skip (safe for Paddle re-delivery).
 async function recordPlanUpgradePurchase(supabase, { transactionId, userId, plan, subscriptionId }) {
   const credits = PLAN_CREDITS[plan] || 0;
@@ -1670,41 +1670,6 @@ async function recordPlanUpgradePurchase(supabase, { transactionId, userId, plan
 
   console.log('[paddle/webhook] Recorded plan_upgrade: transaction_id=' + transactionId + ' plan=' + plan + ' userId=' + userId);
   return expected;
-}
-
-/* ── Store Paddle customer/subscription IDs for future portal session use ── */
-async function saveSubscriptionIds(supabase, { userId, customerId, subscriptionId }) {
-  const updates = {};
-  if (customerId)     updates.paddle_customer_id     = customerId;
-  if (subscriptionId) updates.paddle_subscription_id = subscriptionId;
-  if (Object.keys(updates).length === 0) return;
-
-  const { error } = await supabase
-    .from('profiles')
-    .update(updates)
-    .eq('id', userId);
-
-  if (error) {
-    throw new Error('Failed to save Paddle subscription IDs: ' + error.message);
-  }
-}
-
-/* ── Sync plan on subscription change (subscription.updated) ── */
-// Fired on any subscription change, including plan up/downgrades. We update only
-// the plan column here; credit recalculation is intentionally deferred to a later
-// step. A downgrade may not emit a transaction.completed, so this keeps the DB
-// plan in sync regardless. Re-writing the same plan is harmless (idempotent).
-async function syncPlanFromSubscription(supabase, userId, plan) {
-  const { error } = await supabase
-    .from('profiles')
-    .update({ plan })
-    .eq('id', userId);
-
-  if (error) {
-    throw new Error('Failed to sync plan from subscription.updated: ' + error.message);
-  }
-
-  console.log('[paddle/webhook] Synced plan=' + plan + ' for userId=' + userId + ' (subscription.updated)');
 }
 
 async function applyCreditPackAdjustment(
@@ -2797,7 +2762,8 @@ router.post('/webhook',
         }
         if (transactionRoute === 'subscription_update') {
           // Record plan-change transaction in the purchases ledger for refund tracking.
-          // Credits are NOT changed here — apply_plan_change in subscription.updated handles that.
+          // Credits are NOT changed here; the ordered subscription snapshot
+          // reducer is the only lifecycle entitlement mutation path.
           const supabase = adminClient;
           const deferUserId = await resolveExistingSubscriptionOwner(supabase, {
             subscriptionId: data?.subscription_id,
@@ -3109,11 +3075,9 @@ module.exports.resolveSubscriptionSnapshotOwner =
   resolveSubscriptionSnapshotOwner;
 module.exports.recordPlanUpgradePurchase = recordPlanUpgradePurchase;
 module.exports.derivePreviousPlan = derivePreviousPlan;
-module.exports.syncPlanFromSubscription = syncPlanFromSubscription;
 module.exports.grantCreditsForPurchase = grantCreditsForPurchase;
 module.exports.applyPaddleSubscriptionSnapshot = applyPaddleSubscriptionSnapshot;
 module.exports.revokeCreditsForRefund = revokeCreditsForRefund;
-module.exports.saveSubscriptionIds = saveSubscriptionIds;
 module.exports.sanitizeWebhookError = sanitizeWebhookError;
 module.exports.claimPaddleWebhookEvent = claimPaddleWebhookEvent;
 module.exports.completePaddleWebhookEvent = completePaddleWebhookEvent;

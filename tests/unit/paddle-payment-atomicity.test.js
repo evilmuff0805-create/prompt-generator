@@ -12,7 +12,6 @@ const { reportIncident } = require('../../lib/incident-reporter');
 const {
   grantCreditsForPurchase,
   revokeCreditsForRefund,
-  saveSubscriptionIds,
   derivePreviousPlan
 } = require('../../routes/paddle');
 
@@ -146,21 +145,6 @@ describe('Paddle payment mutations use atomic database boundaries', () => {
       CUSTOMER_ID,
       { occurredAt: PAYMENT_OCCURRED_AT }
     )).rejects.toThrow('apply_ordered_subscription_payment RPC failed');
-  });
-
-  test('결제 후 Paddle ID 저장 실패도 durable inbox가 재시도할 예외가 된다', async () => {
-    const eq = jest.fn().mockResolvedValue({ error: { message: 'temporary profile error' } });
-    const client = {
-      from: jest.fn().mockReturnValue({
-        update: jest.fn().mockReturnValue({ eq })
-      })
-    };
-
-    await expect(saveSubscriptionIds(client, {
-      userId: USER_ID,
-      customerId: 'ctm_retry',
-      subscriptionId: 'sub_retry'
-    })).rejects.toThrow('Failed to save Paddle subscription IDs');
   });
 
   test('일반 환불은 status 변경과 credits revoke를 단일 RPC에 위임한다', async () => {

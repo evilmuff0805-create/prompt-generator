@@ -778,8 +778,8 @@ async function requestCreditPackPreview({
 /* ── Build the Paddle subscription-update request body ── */
 // Paddle requires the COMPLETE items list — omitted items are removed. Our
 // subscriptions carry a single plan item, so the full list is just this one.
-// Credits are NOT touched here; the subscription.updated webhook recalculates
-// them via apply_plan_change (single source for credit changes).
+// Credits are NOT touched here; the ordered subscription snapshot reducer is
+// the single lifecycle source for plan and credit changes.
 function buildSubscriptionUpdateBody(priceId) {
   return {
     items: [{ price_id: priceId, quantity: 1 }],

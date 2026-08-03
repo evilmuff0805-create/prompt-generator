@@ -646,9 +646,9 @@ approval is recorded:
 Latest local evidence (2026-08-03):
 
 - focused migration contracts: 5 suites and 96 tests passed;
-- focused payment/lifecycle regression after removing the obsolete direct
-  subscription-mutation helpers: 6 suites and 251 tests passed;
-- `npm run test:unit`: 69 suites and 1,091 tests passed;
+- focused payment/lifecycle regression after removing all obsolete direct
+  subscription/profile-mutation helpers: 4 suites and 112 tests passed;
+- `npm run test:unit`: 69 suites and 1,081 tests passed;
 - `npm audit --omit=dev`: 0 vulnerabilities;
 - the full local Playwright run under an unavailable local Supabase and
   parallel page-load pressure was not clean: 110 passed, 3 flaky, and 1 timed

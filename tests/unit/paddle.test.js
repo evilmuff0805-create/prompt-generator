@@ -12,10 +12,8 @@ const {
   isActiveSubscription,
   isTestAccount,
   recordPlanUpgradePurchase,
-  syncPlanFromSubscription,
   handleNonCreditPackAdjustment,
   reportNonCreditPackChargebackAdjustment,
-  saveSubscriptionIds,
   verifyPaddleSignature
 } = require('../../routes/paddle');
 
@@ -386,52 +384,6 @@ describe('non-credit-pack chargeback manual review', () => {
   );
 });
 
-describe('saveSubscriptionIds', () => {
-  const USER_ID = 'user-uuid-123';
-  const CUSTOMER_ID = 'ctm_01abc';
-  const SUBSCRIPTION_ID = 'sub_01xyz';
-
-  test('customer_id + subscription_id 둘 다 있으면 profiles UPDATE를 호출해야 한다', async () => {
-    const supabase = makeSupabaseMock();
-    await saveSubscriptionIds(supabase, { userId: USER_ID, customerId: CUSTOMER_ID, subscriptionId: SUBSCRIPTION_ID });
-
-    expect(supabase._updateFn).toHaveBeenCalledWith({
-      paddle_customer_id: CUSTOMER_ID,
-      paddle_subscription_id: SUBSCRIPTION_ID,
-    });
-  });
-
-  test('UPDATE .eq()에 userId가 정확히 전달돼야 한다 (customerId 혼용 방지)', async () => {
-    const supabase = makeSupabaseMock();
-    await saveSubscriptionIds(supabase, { userId: USER_ID, customerId: CUSTOMER_ID, subscriptionId: SUBSCRIPTION_ID });
-
-    expect(supabase._updateEqFn).toHaveBeenCalledWith('id', USER_ID);
-    expect(supabase._updateEqFn).not.toHaveBeenCalledWith('id', CUSTOMER_ID);
-  });
-
-  test('customer_id만 있을 때 paddle_subscription_id를 포함하지 않아야 한다', async () => {
-    const supabase = makeSupabaseMock();
-    await saveSubscriptionIds(supabase, { userId: USER_ID, customerId: CUSTOMER_ID, subscriptionId: undefined });
-
-    expect(supabase._updateFn).toHaveBeenCalledWith({ paddle_customer_id: CUSTOMER_ID });
-    expect(supabase._updateFn).not.toHaveBeenCalledWith(expect.objectContaining({ paddle_subscription_id: expect.anything() }));
-  });
-
-  test('둘 다 undefined이면 DB 호출 없이 종료해야 한다', async () => {
-    const supabase = makeSupabaseMock();
-    await saveSubscriptionIds(supabase, { userId: USER_ID, customerId: undefined, subscriptionId: undefined });
-
-    expect(supabase.from).not.toHaveBeenCalled();
-  });
-
-  test('UPDATE 실패 시 durable webhook 재시도를 위해 예외를 던져야 한다', async () => {
-    const supabase = makeSupabaseMock({ updateError: { message: 'db error' } });
-    await expect(
-      saveSubscriptionIds(supabase, { userId: USER_ID, customerId: CUSTOMER_ID, subscriptionId: SUBSCRIPTION_ID })
-    ).rejects.toThrow('Failed to save Paddle subscription IDs');
-  });
-});
-
 describe('recordPlanUpgradePurchase', () => {
   const TXN_ID = 'txn_upgrade_001';
   const USER_ID = 'user-uuid-123';
@@ -610,40 +562,6 @@ describe('classifyTransactionOrigin', () => {
     expect(classifyTransactionOrigin(undefined)).toBe('ignore');
     expect(classifyTransactionOrigin(null)).toBe('ignore');
     expect(classifyTransactionOrigin('some_future_origin')).toBe('ignore');
-  });
-});
-
-describe('syncPlanFromSubscription', () => {
-  const USER_ID = 'user-uuid-123';
-
-  test('profiles.plan을 새 플랜으로 UPDATE해야 한다', async () => {
-    const supabase = makeSupabaseMock();
-    await syncPlanFromSubscription(supabase, USER_ID, 'pro');
-
-    expect(supabase.from).toHaveBeenCalledWith('profiles');
-    expect(supabase._updateFn).toHaveBeenCalledWith({ plan: 'pro' });
-  });
-
-  test('UPDATE .eq()에 userId가 정확히 전달돼야 한다', async () => {
-    const supabase = makeSupabaseMock();
-    await syncPlanFromSubscription(supabase, USER_ID, 'enterprise');
-
-    expect(supabase._updateEqFn).toHaveBeenCalledWith('id', USER_ID);
-  });
-
-  test('크레딧은 건드리지 않아야 한다 (plan만 UPDATE)', async () => {
-    const supabase = makeSupabaseMock();
-    await syncPlanFromSubscription(supabase, USER_ID, 'pro');
-
-    const updateArg = supabase._updateFn.mock.calls[0][0];
-    expect(updateArg).toEqual({ plan: 'pro' });
-    expect(updateArg).not.toHaveProperty('credits');
-  });
-
-  test('UPDATE 실패 시 예외를 던져야 한다', async () => {
-    const supabase = makeSupabaseMock({ updateError: { message: 'db error' } });
-    await expect(syncPlanFromSubscription(supabase, USER_ID, 'pro'))
-      .rejects.toThrow('Failed to sync plan from subscription.updated');
   });
 });
 

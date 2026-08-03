@@ -27,7 +27,8 @@ describe('Paddle subscription route reducer contract', () => {
       'utf8'
     );
     expect(source).toContain('await grantCreditsForPurchase(');
-    expect(source).not.toContain('await saveSubscriptionIds(');
+    expect(source).not.toContain('async function saveSubscriptionIds(');
+    expect(source).not.toContain('async function syncPlanFromSubscription(');
   });
 
   test('subscription lifecycle mutations are reachable only through ordered RPCs', () => {
