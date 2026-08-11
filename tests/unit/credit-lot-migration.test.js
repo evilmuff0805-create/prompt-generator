@@ -505,19 +505,51 @@ describe('credit lot ledger migration safety contract', () => {
     );
   });
 
-  test('review-locks only aged charging uncertainty with exhaustive audited evidence', () => {
+  test('requires two immutable provider scans before CAS-closing credit-pack uncertainty', () => {
     const reconciliationStart = securePaymentSql.indexOf(
-      'CREATE OR REPLACE FUNCTION public.reconcile_credit_pack_purchase_no_match'
+      'CREATE OR REPLACE FUNCTION public.record_credit_pack_purchase_no_match_scan'
+    );
+    const finalizationStart = securePaymentSql.indexOf(
+      'CREATE OR REPLACE FUNCTION public.finalize_credit_pack_purchase_no_match'
     );
     const chargeStart = securePaymentSql.indexOf(
       'CREATE OR REPLACE FUNCTION public.apply_credit_pack_subscription_charge'
     );
-    const reconciliationSql = securePaymentSql.slice(
+    const firstScanSql = securePaymentSql.slice(
       reconciliationStart,
-      chargeStart
+      finalizationStart
     );
+    const finalScanSql = securePaymentSql.slice(finalizationStart, chargeStart);
 
     expect(reconciliationStart).toBeGreaterThan(0);
+    expect(finalizationStart).toBeGreaterThan(reconciliationStart);
+    expect(securePaymentSql).toContain(
+      'CREATE TABLE public.credit_pack_purchase_reconciliation_scans'
+    );
+    for (const field of [
+      'scan_ordinal SMALLINT',
+      'provider_request_ids TEXT[] NOT NULL',
+      'catalog_request_id TEXT NOT NULL',
+      'contract_fingerprint TEXT NOT NULL',
+      'evidence_hash TEXT NOT NULL',
+      'audit_reference TEXT NOT NULL'
+    ]) {
+      expect(securePaymentSql).toContain(field);
+    }
+    expect(securePaymentSql).toContain(
+      'PRIMARY KEY (request_id, scan_ordinal)'
+    );
+    expect(securePaymentSql).toContain(
+      'CREATE TRIGGER credit_pack_reconciliation_scans_immutable'
+    );
+    expect(securePaymentSql).toContain(
+      'ALTER TABLE public.credit_pack_purchase_reconciliation_scans\n' +
+      '  ENABLE ROW LEVEL SECURITY;'
+    );
+    expect(securePaymentSql).toContain(
+      'REVOKE ALL ON TABLE public.credit_pack_purchase_reconciliation_scans\n' +
+      '  FROM PUBLIC, anon, authenticated, service_role;'
+    );
     for (const field of [
       'reconciliation_decision TEXT',
       'reconciliation_previous_status TEXT',
@@ -542,43 +574,48 @@ describe('credit lot ledger migration safety contract', () => {
       /reconciliation_previous_status IN \(\s*'charging',\s*'submitted',\s*'provider_unknown'\s*\)/
     );
     expect(securePaymentSql).toContain(
-      "authorization_expires_at + interval '72 hours'"
+      "authorization_expires_at + interval '96 hours'"
     );
     expect(securePaymentSql).toContain(
       'credit_pack_purchase_requests_reconciliation_checked_idx'
     );
 
-    expect(reconciliationSql).toMatch(
+    expect(firstScanSql).toMatch(
       /v_expected_status NOT IN \(\s*'charging',\s*'submitted',\s*'provider_unknown'\s*\)/
     );
-    expect(reconciliationSql).toContain(
-      "v_evidence_result <> 'definitive_no_match'"
-    );
-    expect(reconciliationSql).toContain(
+    expect(firstScanSql).toContain(
       'OR p_pages_scanned IS NULL'
     );
-    expect(reconciliationSql).toContain(
+    expect(firstScanSql).toContain(
       'OR p_pages_scanned <= 0'
     );
-    expect(reconciliationSql).toContain(
+    expect(firstScanSql).toContain(
       'OR p_pages_scanned > 256'
     );
-    expect(reconciliationSql).toContain(
+    expect(firstScanSql).toContain(
       'p_transactions_scanned IS NULL OR p_transactions_scanned < 0'
     );
-    expect(reconciliationSql).toContain(
+    expect(firstScanSql).toContain(
       'p_transactions_scanned::bigint > p_pages_scanned::bigint * 30'
     );
-    expect(reconciliationSql).toContain(
+    expect(firstScanSql).toContain(
       'cardinality(p_provider_request_ids)'
     );
-    expect(reconciliationSql).toContain(
+    expect(firstScanSql).toContain(
       'v_audit_reference IS NULL'
     );
-    expect(reconciliationSql).toContain(
+    expect(firstScanSql).toContain(
       'v_provider_request_id = ANY(v_seen_provider_request_ids)'
     );
-    expect(reconciliationSql).toContain(
+    for (const rpcSql of [firstScanSql, finalScanSql]) {
+      expect(rpcSql).toContain(
+        'v_catalog_request_id IS DISTINCT FROM lower(v_catalog_request_id)'
+      );
+      expect(rpcSql).toContain(
+        'IS DISTINCT FROM lower(v_provider_request_id)'
+      );
+    }
+    expect(firstScanSql).toContain(
       "v_provider_request_id !~* '^[0-9a-f]{8}-[0-9a-f]{4}-"
     );
     expect(securePaymentSql).toContain(
@@ -596,52 +633,79 @@ describe('credit lot ledger migration safety contract', () => {
     expect(securePaymentSql).toContain(
       'reconciliation_audit_reference IS NOT NULL'
     );
-    expect(reconciliationSql).toContain(
-      "p_checked_at < v_now - interval '15 minutes'"
+    expect(firstScanSql).toContain(
+      "p_checked_at < v_now - interval '2 minutes'"
     );
-    expect(reconciliationSql).toContain(
+    expect(firstScanSql).toContain(
       'p_window_start > v_request.authorized_at'
     );
-    expect(reconciliationSql).toContain(
+    expect(firstScanSql).toContain(
       "v_request.authorization_expires_at + interval '72 hours'"
     );
-    expect(reconciliationSql).toMatch(
+    expect(firstScanSql).toMatch(
       /v_request.status NOT IN \(\s*'charging',\s*'submitted',\s*'provider_unknown'\s*\)/
     );
-    expect(reconciliationSql).toContain(
+    expect(firstScanSql).toContain(
       'v_request.authorized_user_id IS DISTINCT FROM p_user_id'
     );
-    expect(reconciliationSql).not.toContain(
+    expect(firstScanSql).not.toContain(
       'OR v_request.user_id IS NULL'
     );
-    expect(reconciliationSql).toContain(
+    expect(firstScanSql).toContain(
       'v_request.status IS DISTINCT FROM v_expected_status'
     );
-    expect(reconciliationSql).toContain(
-      "'reason', 'reconciliation_duplicate'"
+    expect(firstScanSql).toContain(
+      "'reason', 'reconciliation_scan_duplicate'"
     );
-    expect(reconciliationSql.indexOf(
-      'IF v_request.reconciliation_decision IS NOT NULL THEN'
-    )).toBeLessThan(reconciliationSql.indexOf(
-      "IF v_request.status NOT IN ("
-    ));
-    expect(reconciliationSql).toMatch(
-      /UPDATE public\.credit_pack_purchase_requests[\s\S]{0,1100}status = 'provider_unknown',[\s\S]{0,100}review_required = true,[\s\S]{0,120}provider_error_code = 'reconciled_no_match_review_locked'/
+    expect(firstScanSql).toContain(
+      'INSERT INTO public.credit_pack_purchase_reconciliation_scans'
     );
-    expect(reconciliationSql).toContain("'status', 'provider_unknown'");
-    expect(reconciliationSql).toContain("'reviewRequired', true");
-    expect(reconciliationSql).toContain(
+    expect(firstScanSql).toContain(
+      'RETURNING recorded_at INTO v_recorded_at'
+    );
+    expect(firstScanSql).toContain(
+      "'firstRecordedAt', v_existing.recorded_at"
+    );
+    expect(firstScanSql).toContain(
+      "'firstRecordedAt', v_recorded_at"
+    );
+    expect(firstScanSql).not.toContain(
+      'UPDATE public.credit_pack_purchase_requests'
+    );
+
+    expect(finalScanSql).toContain(
+      'GREATEST(v_first.checked_at, v_first.recorded_at)'
+    );
+    expect(finalScanSql).toContain("interval '24 hours'");
+    expect(finalScanSql).toContain(
+      'v_first.provider_request_ids && p_provider_request_ids'
+    );
+    expect(finalScanSql).toContain(
+      'v_first.catalog_request_id = v_catalog_request_id'
+    );
+    expect(finalScanSql).toContain(
+      'v_first.expected_status IS DISTINCT FROM v_expected_status'
+    );
+    const secondInsert = finalScanSql.indexOf(
+      'INSERT INTO public.credit_pack_purchase_reconciliation_scans'
+    );
+    const closeUpdate = finalScanSql.indexOf(
+      'UPDATE public.credit_pack_purchase_requests'
+    );
+    expect(secondInsert).toBeGreaterThan(-1);
+    expect(closeUpdate).toBeGreaterThan(secondInsert);
+    expect(finalScanSql).toMatch(
+      /SET reconciliation_decision = 'definitive_no_match'[\s\S]{0,900}status = 'failed',[\s\S]{0,120}review_required = true,[\s\S]{0,180}provider_error_code = 'reconciled_definitive_no_match'/
+    );
+    expect(finalScanSql).toContain(
       'AND status = v_expected_status'
     );
-    expect(reconciliationSql).toContain(
+    expect(finalScanSql).toContain(
       'AND reconciliation_decision IS NULL'
-    );
-    expect(reconciliationSql).not.toMatch(
-      /SET status = 'failed'[\s\S]{0,160}status = 'submitted'/
     );
   });
 
-  test('allows only exact review-locked or legacy no-match recovery and quarantines other failed requests', () => {
+  test('withholds every completion that arrives after final no-match closure', () => {
     const claimStart = securePaymentSql.indexOf(
       'CREATE OR REPLACE FUNCTION public.claim_credit_pack_purchase_request'
     );
@@ -667,20 +731,21 @@ describe('credit lot ledger migration safety contract', () => {
 
     expect(openIndexSql).not.toContain("'withheld'");
     expect(openIndexSql).toContain("'provider_unknown'");
+    expect(openIndexSql).not.toContain("'failed'");
     expect(chargeSql).toContain(
-      "v_reconciled_no_match_recovery boolean := false"
+      'v_reconciled_no_match_close boolean := false'
     );
     expect(chargeSql).toContain(
       "v_request.reconciliation_decision = 'definitive_no_match'"
     );
     expect(chargeSql).toContain(
-      "v_request.status = 'provider_unknown'"
+      "v_request.status = 'failed'"
     );
     expect(chargeSql).toContain(
       'v_request.review_required = true'
     );
     expect(chargeSql).toContain(
-      "'reconciled_no_match_review_locked'"
+      "'reconciled_definitive_no_match'"
     );
     expect(chargeSql).toMatch(
       /v_request\.provider_error_code =\s*'reconciled_definitive_no_match'/
@@ -689,10 +754,10 @@ describe('credit lot ledger migration safety contract', () => {
       'v_request.reconciliation_closed_at IS NOT NULL'
     );
     expect(chargeSql).toContain(
-      "ELSIF v_request.status = 'failed'"
+      "v_withheld_reason := 'late_payment_after_reconciled_no_match'"
     );
     expect(chargeSql).toContain(
-      'AND NOT v_reconciled_no_match_recovery THEN'
+      'AND NOT v_reconciled_no_match_close'
     );
     expect(chargeSql).toContain(
       "v_withheld_reason := 'request_previously_failed'"
@@ -700,11 +765,8 @@ describe('credit lot ledger migration safety contract', () => {
     expect(chargeSql).toMatch(
       /AND status IN \([\s\S]{0,100}'charging',[\s\S]{0,160}'provider_unknown',[\s\S]{0,100}'failed'/
     );
-    expect(chargeSql).toMatch(
-      /status IN \(\s*'charging',\s*'submitted',\s*'provider_unknown'\s*\)[\s\S]{0,520}status = 'failed'[\s\S]{0,320}provider_error_code = 'reconciled_definitive_no_match'/
-    );
     expect(chargeSql).toContain(
-      "'reconciliationSuperseded', v_reconciled_no_match_recovery"
+      "'reconciliationSuperseded', false"
     );
     expect(claimSql).toContain(
       "decision IN ('withheld', 'chargeback')"
@@ -746,11 +808,56 @@ describe('credit lot ledger migration safety contract', () => {
     expect(chargeSql).toContain(
       "status IN ('charging', 'submitted', 'provider_unknown')"
     );
-    expect(chargeSql).toContain(
-      "AND reconciliation_decision = 'definitive_no_match'"
-    );
     expect(chargeSql).not.toContain(
       "AND status IN ('created', 'submitted', 'provider_unknown')"
+    );
+  });
+
+  test('freezes unresolved status after scan one without blocking fulfillment', () => {
+    const transitionStart = securePaymentSql.indexOf(
+      'CREATE OR REPLACE FUNCTION public.transition_credit_pack_purchase_request'
+    );
+    const reconciliationStart = securePaymentSql.indexOf(
+      'CREATE OR REPLACE FUNCTION public.record_credit_pack_purchase_no_match_scan'
+    );
+    const chargeStart = securePaymentSql.indexOf(
+      'CREATE OR REPLACE FUNCTION public.apply_credit_pack_subscription_charge'
+    );
+    const adjustmentStart = securePaymentSql.indexOf(
+      'CREATE OR REPLACE FUNCTION public.apply_credit_pack_adjustment_v2'
+    );
+    const transitionSql = securePaymentSql.slice(
+      transitionStart,
+      reconciliationStart
+    );
+    const chargeSql = securePaymentSql.slice(chargeStart, adjustmentStart);
+    const submittedDuplicate = transitionSql.indexOf(
+      "v_request.status = 'submitted' AND v_status = 'submitted'"
+    );
+    const unknownDuplicate = transitionSql.indexOf(
+      "IF v_request.status = 'provider_unknown' THEN"
+    );
+    const scanGuard = transitionSql.indexOf(
+      "'reason', 'reconciliation_scan_in_progress'"
+    );
+    const transitionUpdate = transitionSql.indexOf(
+      'UPDATE public.credit_pack_purchase_requests'
+    );
+
+    expect(transitionSql).toContain(
+      'v_request.status IS DISTINCT FROM v_status'
+    );
+    expect(transitionSql).toContain(
+      'FROM public.credit_pack_purchase_reconciliation_scans'
+    );
+    expect(transitionSql).toContain('AND scan_ordinal = 1');
+    expect(submittedDuplicate).toBeGreaterThan(-1);
+    expect(unknownDuplicate).toBeGreaterThan(submittedDuplicate);
+    expect(scanGuard).toBeGreaterThan(unknownDuplicate);
+    expect(transitionUpdate).toBeGreaterThan(scanGuard);
+    expect(chargeSql).not.toContain('reconciliation_scan_in_progress');
+    expect(chargeSql).toContain(
+      "status IN ('charging', 'submitted', 'provider_unknown')"
     );
   });
 
@@ -790,7 +897,10 @@ describe('credit lot ledger migration safety contract', () => {
     expect(chargeSql.slice(grantStart)).toContain(
       "status IN ('charging', 'submitted', 'provider_unknown')"
     );
-    expect(chargeSql.slice(grantStart)).toContain(
+    expect(withheldSql).toContain(
+      "status = 'failed'"
+    );
+    expect(chargeSql.slice(grantStart)).not.toContain(
       "status = 'failed'"
     );
     expect(chargeSql.slice(grantStart)).not.toContain(
@@ -1571,7 +1681,8 @@ describe('credit lot ledger migration safety contract', () => {
       'cancel_credit_pack_purchase_request',
       'expire_credit_pack_purchase_request',
       'transition_credit_pack_purchase_request',
-      'reconcile_credit_pack_purchase_no_match',
+      'record_credit_pack_purchase_no_match_scan',
+      'finalize_credit_pack_purchase_no_match',
       'apply_credit_pack_subscription_charge',
       'apply_credit_pack_adjustment_v2'
     ]) {
@@ -1599,8 +1710,8 @@ describe('credit lot ledger migration safety contract', () => {
       'uuid, uuid, text, text, text, integer, integer, text, integer, ' +
       'timestamptz, text, timestamptz';
     const reconciliationSignature =
-      'uuid, uuid, text, text, timestamptz, timestamptz, timestamptz, ' +
-      'integer, integer, text[], text';
+      'uuid, uuid, text, timestamptz, timestamptz, timestamptz, ' +
+      'integer, integer, text[], text, text, text, text';
     const chargeSignature =
       'uuid, text, text, text, text, text, text, integer, integer, text, ' +
       'integer, integer, integer, integer, integer, integer, integer, ' +
@@ -1611,11 +1722,15 @@ describe('credit lot ledger migration safety contract', () => {
       `${beginSignature} ) FROM PUBLIC, anon, authenticated, service_role;`
     );
     expect(normalizedSecurePaymentSql).toContain(
-      `REVOKE ALL ON FUNCTION public.reconcile_credit_pack_purchase_no_match( ` +
+      `REVOKE ALL ON FUNCTION public.record_credit_pack_purchase_no_match_scan( ` +
       `${reconciliationSignature} ) FROM PUBLIC, anon, authenticated, service_role;`
     );
     expect(normalizedSecurePaymentSql).toContain(
-      `GRANT EXECUTE ON FUNCTION public.reconcile_credit_pack_purchase_no_match( ` +
+      `GRANT EXECUTE ON FUNCTION public.record_credit_pack_purchase_no_match_scan( ` +
+      `${reconciliationSignature} ) TO service_role;`
+    );
+    expect(normalizedSecurePaymentSql).toContain(
+      `GRANT EXECUTE ON FUNCTION public.finalize_credit_pack_purchase_no_match( ` +
       `${reconciliationSignature} ) TO service_role;`
     );
     expect(normalizedSecurePaymentSql).toContain(

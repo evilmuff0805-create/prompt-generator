@@ -734,6 +734,38 @@ async function grantCreditsForPack(
       );
     }
   }
+  const lateReconciledPaymentWithheld =
+    ['entitlement_withheld', 'duplicate'].includes(result?.reason)
+    && result?.status === 'withheld'
+    && result?.entitlementGranted === false
+    && result?.reviewRequired === true
+    && result?.withheldReason === 'late_payment_after_reconciled_no_match';
+  if (lateReconciledPaymentWithheld) {
+    const latePaymentIncident = await reportIncident({
+      severity: 'critical',
+      source: 'paddle-webhook',
+      eventCode: 'CREDIT_PACK_LATE_PAYMENT_REFUND_REVIEW_REQUIRED',
+      message: 'A credit-pack payment arrived after definitive no-match reconciliation',
+      fingerprint:
+        `paddle-webhook:CREDIT_PACK_LATE_PAYMENT_REFUND_REVIEW_REQUIRED:${data.id}`,
+      context: {
+        transactionId: data.id,
+        requestId,
+        providerEventId: providerEventId.trim(),
+        userId: result.userId || null,
+        withheldReason: result.withheldReason,
+        entitlementGranted: false,
+        refundReviewRequired: true
+      }
+    });
+    if (latePaymentIncident?.persisted !== true) {
+      throw webhookProcessingError(
+        'CREDIT_PACK_LATE_PAYMENT_INCIDENT_PERSIST_FAILED',
+        'Late credit-pack payment refund-review incident could not be persisted'
+      );
+    }
+    return result;
+  }
   if (
     result?.reason === 'duplicate'
     && ['completed', 'withheld', 'refunded', 'chargeback'].includes(result?.status)
@@ -758,7 +790,9 @@ async function grantCreditsForPack(
         requestId,
         providerEventId: providerEventId.trim(),
         userId: result.userId || null,
-        withheldReason: result.withheldReason || null
+        withheldReason: result.withheldReason || null,
+        entitlementGranted: false,
+        refundReviewRequired: false
       }
     });
     return result;
@@ -863,6 +897,21 @@ function hasCreditPackMarker(data) {
 
 function validateCompletedSubscriptionCheckoutTransaction(data, attempt) {
   const metadata = getSubscriptionCheckoutMetadata(data);
+  const isMetadataRecovery = [
+    'charging',
+    'provider_unknown',
+    'reconciled_no_match',
+    'account_deleted_review'
+  ].includes(attempt?.status);
+  const accountDeletedAttempt =
+    attempt?.user_id == null
+    && isUuid(attempt?.authorized_user_id);
+  const mayHaveUnboundTransaction = [
+    'charging',
+    'provider_unknown',
+    'reconciled_no_match'
+  ].includes(attempt?.status);
+  const requiresExactMetadata = isMetadataRecovery || accountDeletedAttempt;
   if (!attempt) return { valid: false, reason: 'missing_server_attempt' };
   if (hasCreditPackMarker(data)) {
     return { valid: false, reason: 'unexpected_credit_pack_marker' };
@@ -886,9 +935,27 @@ function validateCompletedSubscriptionCheckoutTransaction(data, attempt) {
   const billingCycle = price?.billing_cycle;
   if (
     !isUuid(attempt?.attempt_id)
-    || !attempt?.user_id
-    || attempt?.transaction_id !== data.id
-    || !['bound', 'completed'].includes(attempt?.status)
+    || (
+      requiresExactMetadata
+        ? !isUuid(attempt?.authorized_user_id)
+        : !attempt?.user_id
+    )
+    || (
+      mayHaveUnboundTransaction
+        ? (
+          attempt?.transaction_id != null
+          && attempt.transaction_id !== data.id
+        )
+        : attempt?.transaction_id !== data.id
+    )
+    || ![
+      'bound',
+      'charging',
+      'provider_unknown',
+      'reconciled_no_match',
+      'account_deleted_review',
+      'completed'
+    ].includes(attempt?.status)
     || attempt?.expected_origin !== 'api'
     || !['pro', 'enterprise'].includes(attempt?.target_plan)
     || !Number.isInteger(attempt?.credits)
@@ -904,6 +971,9 @@ function validateCompletedSubscriptionCheckoutTransaction(data, attempt) {
     && !metadata
   ) {
     return { valid: false, reason: 'invalid_checkout_metadata' };
+  }
+  if (requiresExactMetadata && !metadata) {
+    return { valid: false, reason: 'recovery_metadata_required' };
   }
   if (
     metadata
@@ -948,6 +1018,7 @@ function validateCompletedSubscriptionCheckoutTransaction(data, attempt) {
 const SUBSCRIPTION_CHECKOUT_ATTEMPT_SELECT = [
   'attempt_id',
   'user_id',
+  'authorized_user_id',
   'transaction_id',
   'subscription_id',
   'customer_id',
@@ -979,6 +1050,33 @@ async function findSubscriptionCheckoutAttemptByTransactionId(
   return attempt || null;
 }
 
+async function findRecoverableSubscriptionCheckoutAttemptByMetadata(
+  supabase,
+  data
+) {
+  if (data?.origin !== 'api') return null;
+  const metadata = getSubscriptionCheckoutMetadata(data);
+  if (!metadata) return null;
+
+  const { data: attempt, error } = await supabase
+    .from('subscription_checkout_attempts')
+    .select(SUBSCRIPTION_CHECKOUT_ATTEMPT_SELECT)
+    .eq('attempt_id', metadata.attemptId)
+    .in('status', ['charging', 'provider_unknown', 'reconciled_no_match'])
+    .maybeSingle();
+  if (error) {
+    throw webhookProcessingError(
+      'SUBSCRIPTION_CHECKOUT_ATTEMPT_LOOKUP_FAILED',
+      'Recoverable subscription checkout lookup failed'
+    );
+  }
+  if (!attempt) return null;
+
+  return validateCompletedSubscriptionCheckoutTransaction(data, attempt).valid
+    ? attempt
+    : null;
+}
+
 async function findCompletedSubscriptionCheckoutAttemptBySubscriptionId(
   supabase,
   subscriptionId
@@ -1006,7 +1104,11 @@ async function consumeSubscriptionCheckoutAttempt(
   serverAttempt = null
 ) {
   const attempt = serverAttempt
-    || await findSubscriptionCheckoutAttemptByTransactionId(supabase, data?.id);
+    || await findSubscriptionCheckoutAttemptByTransactionId(supabase, data?.id)
+    || await findRecoverableSubscriptionCheckoutAttemptByMetadata(
+      supabase,
+      data
+    );
   if (!attempt) {
     throw webhookProcessingError(
       'UNBOUND_SUBSCRIPTION_CHECKOUT_TRANSACTION',
@@ -1051,7 +1153,57 @@ async function consumeSubscriptionCheckoutAttempt(
   if (error) {
     throw new Error('consume_subscription_checkout_attempt RPC failed: ' + error.message);
   }
-  if (!result?.userId || !result?.status) {
+  const lateReconciledPayment =
+    result?.reason === 'late_payment_after_reconciled_no_match';
+  const validLateReconciledPayment =
+    lateReconciledPayment
+    && result?.status === 'reconciled_no_match'
+    && result?.entitlementGranted === false
+    && result?.refundReviewRequired === true
+    && result?.withheldReason === 'late_payment_after_reconciled_no_match'
+    && isUuid(result?.authorizedUserId)
+    && [true, false].includes(result?.applied)
+    && result?.transactionId === data.id
+    && result?.subscriptionId === data.subscription_id;
+  const accountDeletedPayment =
+    result?.reason === 'payment_after_account_deleted';
+  const validAccountDeletedPayment =
+    accountDeletedPayment
+    && result?.status === 'account_deleted_review'
+    && result?.entitlementGranted === false
+    && result?.refundReviewRequired === true
+    && result?.withheldReason === 'payment_after_account_deleted'
+    && isUuid(result?.authorizedUserId)
+    && result?.userId == null
+    && [true, false].includes(result?.applied)
+    && result?.transactionId === data.id
+    && result?.subscriptionId === data.subscription_id;
+  const completedBeforeAccountDeleted =
+    result?.reason === 'completed_before_account_deleted';
+  const validCompletedBeforeAccountDeleted =
+    completedBeforeAccountDeleted
+    && result?.applied === false
+    && result?.status === 'completed'
+    && isUuid(result?.authorizedUserId)
+    && result?.userId == null
+    && result?.transactionId === data.id
+    && result?.subscriptionId === data.subscription_id
+    && result?.entitlementGranted === false
+    && result?.refundReviewRequired === false;
+  if (
+    (lateReconciledPayment && !validLateReconciledPayment)
+    || (accountDeletedPayment && !validAccountDeletedPayment)
+    || (
+      completedBeforeAccountDeleted
+      && !validCompletedBeforeAccountDeleted
+    )
+    || (
+      !lateReconciledPayment
+      && !accountDeletedPayment
+      && !completedBeforeAccountDeleted
+      && (!result?.userId || !result?.status)
+    )
+  ) {
     throw new Error('consume_subscription_checkout_attempt returned an invalid outcome');
   }
   return {
@@ -1060,6 +1212,132 @@ async function consumeSubscriptionCheckoutAttempt(
     verifiedPlan: attempt.target_plan,
     verifiedCredits: attempt.credits
   };
+}
+
+async function reportLateReconciledSubscriptionCheckoutPayment(
+  result,
+  data,
+  {
+    requestId = null,
+    eventId = null,
+    providerEventId = null,
+    incidentReporter = reportIncident
+  } = {}
+) {
+  if (
+    result?.reason !== 'late_payment_after_reconciled_no_match'
+    || result?.status !== 'reconciled_no_match'
+    || result?.entitlementGranted !== false
+    || result?.refundReviewRequired !== true
+    || result?.withheldReason !== 'late_payment_after_reconciled_no_match'
+    || !isUuid(result?.authorizedUserId)
+    || ![true, false].includes(result?.applied)
+    || result?.transactionId !== data?.id
+    || result?.subscriptionId !== data?.subscription_id
+  ) {
+    throw webhookProcessingError(
+      'SUBSCRIPTION_CHECKOUT_LATE_PAYMENT_OUTCOME_INVALID',
+      'Late reconciled subscription payment returned an invalid outcome'
+    );
+  }
+
+  const incident = await incidentReporter({
+    severity: 'critical',
+    source: 'paddle-webhook',
+    eventCode: 'SUBSCRIPTION_CHECKOUT_LATE_PAYMENT_REFUND_REVIEW_REQUIRED',
+    message: 'A subscription payment arrived after definitive no-match reconciliation',
+    fingerprint:
+      `paddle-webhook:SUBSCRIPTION_CHECKOUT_LATE_PAYMENT_REFUND_REVIEW_REQUIRED:${data.id}`,
+    context: {
+      requestId,
+      eventId,
+      providerEventId,
+      transactionId: data.id,
+      subscriptionId: data.subscription_id,
+      customerId: data.customer_id || null,
+      attemptId: result.verifiedAttemptId || null,
+      authorizedUserId: result.authorizedUserId,
+      userId: result.userId || null,
+      plan: result.verifiedPlan || null,
+      entitlementGranted: false,
+      refundReviewRequired: true,
+      withheldReason: result.withheldReason,
+      receiptInserted: result.applied === true
+    }
+  });
+
+  if (incident?.persisted !== true) {
+    throw webhookProcessingError(
+      'SUBSCRIPTION_CHECKOUT_LATE_PAYMENT_INCIDENT_PERSIST_FAILED',
+      'Late subscription payment refund-review incident could not be persisted'
+    );
+  }
+
+  return incident;
+}
+
+async function reportDeletedAccountSubscriptionCheckoutPayment(
+  result,
+  data,
+  {
+    requestId = null,
+    eventId = null,
+    providerEventId = null,
+    incidentReporter = reportIncident
+  } = {}
+) {
+  if (
+    result?.reason !== 'payment_after_account_deleted'
+    || result?.status !== 'account_deleted_review'
+    || result?.entitlementGranted !== false
+    || result?.refundReviewRequired !== true
+    || result?.withheldReason !== 'payment_after_account_deleted'
+    || !isUuid(result?.authorizedUserId)
+    || result?.userId != null
+    || ![true, false].includes(result?.applied)
+    || result?.transactionId !== data?.id
+    || result?.subscriptionId !== data?.subscription_id
+  ) {
+    throw webhookProcessingError(
+      'SUBSCRIPTION_CHECKOUT_ACCOUNT_DELETED_OUTCOME_INVALID',
+      'Deleted-account subscription payment returned an invalid outcome'
+    );
+  }
+
+  const incident = await incidentReporter({
+    severity: 'critical',
+    source: 'paddle-webhook',
+    eventCode:
+      'SUBSCRIPTION_CHECKOUT_ACCOUNT_DELETED_PAYMENT_REFUND_REVIEW_REQUIRED',
+    message: 'A subscription payment arrived after its PromptGen account was deleted',
+    fingerprint:
+      `paddle-webhook:SUBSCRIPTION_CHECKOUT_ACCOUNT_DELETED_PAYMENT_REFUND_REVIEW_REQUIRED:${data.id}`,
+    context: {
+      requestId,
+      eventId,
+      providerEventId,
+      transactionId: data.id,
+      subscriptionId: data.subscription_id,
+      customerId: data.customer_id || null,
+      attemptId: result.verifiedAttemptId || null,
+      authorizedUserId: result.authorizedUserId,
+      userId: null,
+      plan: result.verifiedPlan || null,
+      entitlementGranted: false,
+      refundReviewRequired: true,
+      withheldReason: result.withheldReason,
+      receiptInserted: result.applied === true
+    }
+  });
+
+  if (incident?.persisted !== true) {
+    throw webhookProcessingError(
+      'SUBSCRIPTION_CHECKOUT_ACCOUNT_DELETED_INCIDENT_PERSIST_FAILED',
+      'Deleted-account subscription payment incident could not be persisted'
+    );
+  }
+
+  return incident;
 }
 
 async function resolveExistingSubscriptionOwner(
@@ -2522,12 +2800,20 @@ router.post('/webhook',
         const creditPack = creditPackMetadata?.promptgenKind === 'credit_pack'
           ? getCreditPack(creditPackMetadata?.promptgenPackKey)
           : null;
-        const checkoutAttempt = data?.origin === 'api'
-          ? await findSubscriptionCheckoutAttemptByTransactionId(
-              adminClient,
-              transactionId
-            )
-          : null;
+        let checkoutAttempt = null;
+        if (data?.origin === 'api') {
+          checkoutAttempt = await findSubscriptionCheckoutAttemptByTransactionId(
+            adminClient,
+            transactionId
+          );
+          if (!checkoutAttempt) {
+            checkoutAttempt =
+              await findRecoverableSubscriptionCheckoutAttemptByMetadata(
+                adminClient,
+                data
+              );
+          }
+        }
         const transactionRoute = classifyCompletedTransactionRoute(data, {
           hasCheckoutAttempt: Boolean(checkoutAttempt)
         });
@@ -2649,7 +2935,31 @@ router.post('/webhook',
             payload?.occurred_at,
             checkoutAttempt
           );
-          if (result.reason === 'terminal_subscription') {
+          if (result.reason === 'completed_before_account_deleted') {
+            // This is an exact semantic replay of a transaction whose original
+            // entitlement was already committed before account deletion. It is
+            // neither a new purchase nor a refund-review event.
+          } else if (result.reason === 'late_payment_after_reconciled_no_match') {
+            await reportLateReconciledSubscriptionCheckoutPayment(
+              result,
+              data,
+              {
+                requestId: req.id,
+                eventId,
+                providerEventId: payload?.event_id
+              }
+            );
+          } else if (result.reason === 'payment_after_account_deleted') {
+            await reportDeletedAccountSubscriptionCheckoutPayment(
+              result,
+              data,
+              {
+                requestId: req.id,
+                eventId,
+                providerEventId: payload?.event_id
+              }
+            );
+          } else if (result.reason === 'terminal_subscription') {
             await reportIncident({
               severity: 'critical',
               source: 'paddle-webhook',
@@ -3067,8 +3377,14 @@ module.exports.consumeSubscriptionCheckoutAttempt =
   consumeSubscriptionCheckoutAttempt;
 module.exports.findSubscriptionCheckoutAttemptByTransactionId =
   findSubscriptionCheckoutAttemptByTransactionId;
+module.exports.findRecoverableSubscriptionCheckoutAttemptByMetadata =
+  findRecoverableSubscriptionCheckoutAttemptByMetadata;
 module.exports.findCompletedSubscriptionCheckoutAttemptBySubscriptionId =
   findCompletedSubscriptionCheckoutAttemptBySubscriptionId;
+module.exports.reportLateReconciledSubscriptionCheckoutPayment =
+  reportLateReconciledSubscriptionCheckoutPayment;
+module.exports.reportDeletedAccountSubscriptionCheckoutPayment =
+  reportDeletedAccountSubscriptionCheckoutPayment;
 module.exports.resolveExistingSubscriptionOwner =
   resolveExistingSubscriptionOwner;
 module.exports.resolveSubscriptionSnapshotOwner =

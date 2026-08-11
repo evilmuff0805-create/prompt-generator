@@ -2,9 +2,12 @@
 
 const {
   PURCHASE_REQUEST_COLUMNS,
+  RECONCILIATION_SCAN_COLUMNS,
   ReconciliationOperatorError,
   SANDBOX_SUPABASE_PROJECT_REFS_ENV,
+  creditPackContractFingerprint,
   parseCliArguments,
+  reconciliationEvidenceHash,
   runCreditPackReconciliation
 } = require('../../scripts/reconcile-credit-pack-purchase');
 
@@ -13,10 +16,12 @@ const USER_ID = '223e4567-e89b-42d3-a456-426614174001';
 const CHECKED_AT = '2026-07-04T00:16:00.000Z';
 const CONFIRMATION_CHECKED_AT = '2026-07-04T00:16:30.000Z';
 const COMPLETED_AT = '2026-07-04T00:16:31.000Z';
+const FINALIZATION_CHECKED_AT = '2026-07-05T00:17:00.000Z';
 const AUDIT_REFERENCE = 'pgcr_323e4567-e89b-42d3-a456-426614174002';
 const PROVIDER_REQUEST_ID_1 = '423e4567-e89b-42d3-a456-426614174003';
 const PROVIDER_REQUEST_ID_2 = '523e4567-e89b-42d3-a456-426614174004';
 const BINDING_REQUEST_ID = '623e4567-e89b-42d3-a456-426614174005';
+const FIRST_BINDING_REQUEST_ID = '923e4567-e89b-42d3-a456-426614174008';
 const PROVIDER_REQUEST_ID_3 = '723e4567-e89b-42d3-a456-426614174006';
 const PROVIDER_REQUEST_ID_4 = '823e4567-e89b-42d3-a456-426614174007';
 const CUSTOMER_ID = `ctm_${'a'.repeat(26)}`;
@@ -67,22 +72,25 @@ function purchaseRow(overrides = {}) {
 
 function reconciledPurchaseRow(overrides = {}) {
   return purchaseRow({
-    status: 'provider_unknown',
+    status: 'failed',
+    transaction_id: null,
+    completed_at: null,
+    withheld_reason: null,
     review_required: true,
-    provider_error_code: 'reconciled_no_match_review_locked',
+    provider_error_code: 'reconciled_definitive_no_match',
     reconciliation_decision: 'definitive_no_match',
     reconciliation_previous_status: 'provider_unknown',
-    reconciliation_checked_at: CHECKED_AT,
+    reconciliation_checked_at: FINALIZATION_CHECKED_AT,
     reconciliation_window_start: '2026-06-30T23:59:30.000Z',
-    reconciliation_window_end: CHECKED_AT,
+    reconciliation_window_end: FINALIZATION_CHECKED_AT,
     reconciliation_pages_scanned: 2,
     reconciliation_transactions_scanned: 1,
     reconciliation_provider_request_ids: [
-      PROVIDER_REQUEST_ID_1,
-      PROVIDER_REQUEST_ID_2
+      PROVIDER_REQUEST_ID_3,
+      PROVIDER_REQUEST_ID_4
     ],
     reconciliation_audit_reference: AUDIT_REFERENCE,
-    reconciliation_closed_at: CHECKED_AT,
+    reconciliation_closed_at: FINALIZATION_CHECKED_AT,
     ...overrides
   });
 }
@@ -142,6 +150,119 @@ function completeEvidence(overrides = {}) {
   });
 }
 
+function firstScanRow(row = purchaseRow(), overrides = {}) {
+  const expectedStatus = row.reconciliation_previous_status || row.status;
+  const expected = {
+    purchaseRequestId: REQUEST_ID,
+    authorizedUserId: USER_ID,
+    expectedStatus,
+    customerId: CUSTOMER_ID,
+    subscriptionId: SUBSCRIPTION_ID,
+    providerPlanPriceId: PLAN_PRICE_ID,
+    packKey: 'usage_600',
+    currencyCode: 'USD',
+    unitAmount: '1000',
+    subtotal: '1000',
+    discount: '0',
+    tax: '80',
+    total: '1080',
+    credit: '0',
+    balance: '1080',
+    grandTotal: '1080',
+    grandTotalTax: '80',
+    windowStartAt: '2026-06-30T23:59:30.000Z',
+    authorizedAt: '2026-07-01T00:00:00.000Z',
+    authorizationExpiresAt: '2026-07-01T00:15:00.000Z',
+    windowEndAt: CHECKED_AT,
+    checkedAt: CHECKED_AT
+  };
+  const evidence = completeEvidence();
+  const fingerprint = creditPackContractFingerprint(expected);
+  return {
+    request_id: REQUEST_ID,
+    authorized_user_id: USER_ID,
+    scan_ordinal: 1,
+    expected_status: expectedStatus,
+    checked_at: CHECKED_AT,
+    window_start: '2026-06-30T23:59:30.000Z',
+    window_end: CHECKED_AT,
+    pages_scanned: 2,
+    transactions_scanned: 1,
+    provider_request_ids: [
+      PROVIDER_REQUEST_ID_1,
+      PROVIDER_REQUEST_ID_2
+    ],
+    catalog_request_id: FIRST_BINDING_REQUEST_ID,
+    contract_fingerprint: fingerprint,
+    evidence_hash: reconciliationEvidenceHash({
+      expectedStatus,
+      evidence,
+      catalogRequestId: FIRST_BINDING_REQUEST_ID,
+      contractFingerprint: fingerprint
+    }),
+    audit_reference: AUDIT_REFERENCE,
+    recorded_at: CHECKED_AT,
+    ...overrides
+  };
+}
+
+function finalScanRow(row = reconciledPurchaseRow(), overrides = {}) {
+  const expectedStatus = row.reconciliation_previous_status;
+  const evidence = completeEvidence({
+    checkedAt: FINALIZATION_CHECKED_AT,
+    windowEndAt: FINALIZATION_CHECKED_AT,
+    apiRequestIds: [PROVIDER_REQUEST_ID_3, PROVIDER_REQUEST_ID_4]
+  });
+  const expected = {
+    purchaseRequestId: REQUEST_ID,
+    authorizedUserId: USER_ID,
+    expectedStatus,
+    customerId: CUSTOMER_ID,
+    subscriptionId: SUBSCRIPTION_ID,
+    providerPlanPriceId: PLAN_PRICE_ID,
+    packKey: 'usage_600',
+    currencyCode: 'USD',
+    unitAmount: '1000',
+    subtotal: '1000',
+    discount: '0',
+    tax: '80',
+    total: '1080',
+    credit: '0',
+    balance: '1080',
+    grandTotal: '1080',
+    grandTotalTax: '80',
+    windowStartAt: '2026-06-30T23:59:30.000Z',
+    authorizedAt: '2026-07-01T00:00:00.000Z',
+    authorizationExpiresAt: '2026-07-01T00:15:00.000Z',
+    windowEndAt: FINALIZATION_CHECKED_AT,
+    checkedAt: FINALIZATION_CHECKED_AT
+  };
+  const fingerprint = creditPackContractFingerprint(expected);
+  return {
+    request_id: REQUEST_ID,
+    authorized_user_id: USER_ID,
+    scan_ordinal: 2,
+    expected_status: expectedStatus,
+    checked_at: FINALIZATION_CHECKED_AT,
+    window_start: '2026-06-30T23:59:30.000Z',
+    window_end: FINALIZATION_CHECKED_AT,
+    pages_scanned: 2,
+    transactions_scanned: 1,
+    provider_request_ids: [PROVIDER_REQUEST_ID_3, PROVIDER_REQUEST_ID_4],
+    catalog_request_id: BINDING_REQUEST_ID,
+    contract_fingerprint: fingerprint,
+    evidence_hash: reconciliationEvidenceHash({
+      expectedStatus,
+      evidence,
+      catalogRequestId: BINDING_REQUEST_ID,
+      contractFingerprint: fingerprint
+    }),
+    audit_reference: AUDIT_REFERENCE,
+    recorded_at: FINALIZATION_CHECKED_AT,
+    ...overrides
+  };
+}
+
 function reconciliationResult(status, overrides = {}) {
   return {
     status,
@@ -157,30 +278,52 @@ function reconciliationResult(status, overrides = {}) {
   };
 }
 
-function makeSupabase(row = purchaseRow(), rpcResponse = null) {
+function makeSupabase(
+  row = purchaseRow(),
+  rpcResponse = null,
+  firstScan = null,
+  finalScan = null
+) {
   const single = jest.fn().mockResolvedValue({ data: row, error: null });
-  const eq = jest.fn().mockReturnValue({ single });
-  const select = jest.fn().mockReturnValue({ eq });
-  const from = jest.fn().mockReturnValue({ select });
-  const rpc = jest.fn().mockResolvedValue(
-    rpcResponse || {
-      data: {
-        applied: true,
-        reason: 'request_reconciled_no_match',
-        requestId: REQUEST_ID,
-        status: 'provider_unknown',
-        reviewRequired: true,
-        reconciliationDecision: 'definitive_no_match'
-      },
-      error: null
-    }
-  );
+  const maybeSingle = jest.fn()
+    .mockResolvedValueOnce({ data: firstScan, error: null })
+    .mockResolvedValueOnce({ data: finalScan, error: null });
+  const requestBuilder = {};
+  requestBuilder.select = jest.fn().mockReturnValue(requestBuilder);
+  requestBuilder.eq = jest.fn().mockReturnValue(requestBuilder);
+  requestBuilder.single = single;
+  const scanBuilder = {};
+  scanBuilder.select = jest.fn().mockReturnValue(scanBuilder);
+  scanBuilder.eq = jest.fn().mockReturnValue(scanBuilder);
+  scanBuilder.maybeSingle = maybeSingle;
+  const from = jest.fn((table) => (
+    table === 'credit_pack_purchase_reconciliation_scans'
+      ? scanBuilder
+      : requestBuilder
+  ));
+  const rpc = rpcResponse
+    ? jest.fn().mockResolvedValue(rpcResponse)
+    : jest.fn().mockImplementation(async (_name, args) => ({
+        data: {
+          applied: true,
+          reason: 'reconciliation_scan_recorded',
+          requestId: REQUEST_ID,
+          status: args.p_expected_status,
+          scanOrdinal: 1,
+          firstCheckedAt: args.p_checked_at,
+          firstRecordedAt: args.p_checked_at
+        },
+        error: null
+      }));
   return {
     client: { from, rpc },
     from,
-    select,
-    eq,
+    select: requestBuilder.select,
+    eq: requestBuilder.eq,
     single,
+    scanSelect: scanBuilder.select,
+    scanEq: scanBuilder.eq,
+    maybeSingle,
     rpc
   };
 }
@@ -191,10 +334,12 @@ function operatorOptions({
   confirmationResult = null,
   apply = false,
   rpcResponse = null,
+  firstScan = null,
+  finalScan = null,
   now = CHECKED_AT,
   env = ENV
 } = {}) {
-  const supabase = makeSupabase(row, rpcResponse);
+  const supabase = makeSupabase(row, rpcResponse, firstScan, finalScan);
   const createClientImpl = jest.fn().mockReturnValue(supabase.client);
   const defaultConfirmationResult = result?.status === 'definitive_no_match'
     ? {
@@ -275,7 +420,7 @@ describe('credit-pack reconciliation operator', () => {
 
     await runCreditPackReconciliation(context.options);
 
-    expect(context.supabase.from).toHaveBeenCalledTimes(1);
+    expect(context.supabase.from).toHaveBeenCalledTimes(2);
     expect(context.supabase.from).toHaveBeenCalledWith(
       'credit_pack_purchase_requests'
     );
@@ -287,6 +432,13 @@ describe('credit-pack reconciliation operator', () => {
       REQUEST_ID
     );
     expect(context.supabase.single).toHaveBeenCalledTimes(1);
+    expect(context.supabase.from).toHaveBeenCalledWith(
+      'credit_pack_purchase_reconciliation_scans'
+    );
+    expect(context.supabase.scanSelect).toHaveBeenCalledWith(
+      RECONCILIATION_SCAN_COLUMNS
+    );
+    expect(context.supabase.maybeSingle).toHaveBeenCalledTimes(1);
     expect(context.createClientImpl).toHaveBeenCalledWith(
       'https://kzlovmcghswprasjaeeo.supabase.co',
       ENV.SUPABASE_SERVICE_ROLE_KEY,
@@ -534,6 +686,18 @@ describe('credit-pack reconciliation operator', () => {
   test('safe --apply invokes the exact CAS RPC once with complete evidence', async () => {
     const context = operatorOptions({
       apply: true,
+      rpcResponse: {
+        data: {
+          applied: true,
+          reason: 'reconciliation_scan_recorded',
+          requestId: REQUEST_ID,
+          status: 'provider_unknown',
+          scanOrdinal: 1,
+          firstCheckedAt: CONFIRMATION_CHECKED_AT,
+          firstRecordedAt: COMPLETED_AT
+        },
+        error: null
+      },
       confirmationResult: reconciliationResult('definitive_no_match', {
         evidence: completeEvidence({
           windowEndAt: CONFIRMATION_CHECKED_AT,
@@ -554,12 +718,12 @@ describe('credit-pack reconciliation operator', () => {
 
     expect(result).toMatchObject({
       ok: true,
-      mode: 'applied',
+      mode: 'first-scan-recorded',
       outcome: 'definitive_no_match',
       requestId: REQUEST_ID,
       status: 'provider_unknown',
-      reviewRequired: true,
-      reviewLocked: true,
+      firstRecordedAt: COMPLETED_AT,
+      finalizationEligibleAt: '2026-07-05T00:16:31.000Z',
       auditReference: AUDIT_REFERENCE
     });
     expect(context.reconcileImpl).toHaveBeenCalledTimes(2);
@@ -571,12 +735,11 @@ describe('credit-pack reconciliation operator', () => {
     );
     expect(context.supabase.rpc).toHaveBeenCalledTimes(1);
     expect(context.supabase.rpc).toHaveBeenCalledWith(
-      'reconcile_credit_pack_purchase_no_match',
+      'record_credit_pack_purchase_no_match_scan',
       {
         p_request_id: REQUEST_ID,
         p_user_id: USER_ID,
         p_expected_status: 'provider_unknown',
-        p_evidence_result: 'definitive_no_match',
         p_checked_at: CONFIRMATION_CHECKED_AT,
         p_window_start: '2026-06-30T23:59:30.000Z',
         p_window_end: CONFIRMATION_CHECKED_AT,
@@ -586,6 +749,9 @@ describe('credit-pack reconciliation operator', () => {
           PROVIDER_REQUEST_ID_3,
           PROVIDER_REQUEST_ID_4
         ],
+        p_catalog_request_id: BINDING_REQUEST_ID,
+        p_contract_fingerprint: expect.stringMatching(/^[0-9a-f]{64}$/),
+        p_evidence_hash: expect.stringMatching(/^[0-9a-f]{64}$/),
         p_audit_reference: AUDIT_REFERENCE
       }
     );
@@ -680,6 +846,129 @@ describe('credit-pack reconciliation operator', () => {
     expect(context.supabase.rpc).not.toHaveBeenCalled();
   });
 
+  test('a persisted first scan requires a disjoint fresh scan after 24 hours', async () => {
+    const row = purchaseRow();
+    const finalEvidence = completeEvidence({
+      checkedAt: FINALIZATION_CHECKED_AT,
+      windowEndAt: FINALIZATION_CHECKED_AT,
+      apiRequestIds: [PROVIDER_REQUEST_ID_3, PROVIDER_REQUEST_ID_4]
+    });
+    const context = operatorOptions({
+      row,
+      firstScan: firstScanRow(row),
+      now: FINALIZATION_CHECKED_AT,
+      result: reconciliationResult('definitive_no_match', {
+        evidence: finalEvidence
+      })
+    });
+
+    await expect(runCreditPackReconciliation(context.options))
+      .resolves.toMatchObject({
+        mode: 'dry-run-finalization',
+        outcome: 'definitive_no_match',
+        firstEvidence: { checkedAt: CHECKED_AT },
+        evidence: { checkedAt: FINALIZATION_CHECKED_AT }
+      });
+    expect(context.reconcileImpl).toHaveBeenCalledTimes(1);
+    expect(context.supabase.rpc).not.toHaveBeenCalled();
+  });
+
+  test('explicit second invocation uses the finalization RPC contract', async () => {
+    const row = purchaseRow();
+    const finalEvidence = completeEvidence({
+      checkedAt: FINALIZATION_CHECKED_AT,
+      windowEndAt: FINALIZATION_CHECKED_AT,
+      apiRequestIds: [PROVIDER_REQUEST_ID_3, PROVIDER_REQUEST_ID_4]
+    });
+    const context = operatorOptions({
+      row,
+      firstScan: firstScanRow(row),
+      now: FINALIZATION_CHECKED_AT,
+      apply: true,
+      result: reconciliationResult('definitive_no_match', {
+        evidence: finalEvidence
+      }),
+      rpcResponse: {
+        data: {
+          applied: true,
+          reason: 'request_reconciled_no_match',
+          requestId: REQUEST_ID,
+          status: 'failed',
+          reviewRequired: true,
+          reconciliationDecision: 'definitive_no_match',
+          firstCheckedAt: CHECKED_AT,
+          checkedAt: FINALIZATION_CHECKED_AT,
+          closedAt: FINALIZATION_CHECKED_AT
+        },
+        error: null
+      }
+    });
+
+    await expect(runCreditPackReconciliation(context.options))
+      .resolves.toMatchObject({
+        mode: 'finalized',
+        status: 'failed',
+        reviewRequired: true
+      });
+    expect(context.supabase.rpc).toHaveBeenCalledWith(
+      'finalize_credit_pack_purchase_no_match',
+      {
+        p_request_id: REQUEST_ID,
+        p_user_id: USER_ID,
+        p_expected_status: 'provider_unknown',
+        p_checked_at: FINALIZATION_CHECKED_AT,
+        p_window_start: '2026-06-30T23:59:30.000Z',
+        p_window_end: FINALIZATION_CHECKED_AT,
+        p_pages_scanned: 2,
+        p_transactions_scanned: 1,
+        p_provider_request_ids: [
+          PROVIDER_REQUEST_ID_3,
+          PROVIDER_REQUEST_ID_4
+        ],
+        p_catalog_request_id: BINDING_REQUEST_ID,
+        p_contract_fingerprint: expect.stringMatching(/^[0-9a-f]{64}$/),
+        p_evidence_hash: expect.stringMatching(/^[0-9a-f]{64}$/),
+        p_audit_reference: AUDIT_REFERENCE
+      }
+    );
+  });
+
+  test('a first scan younger than 24 hours blocks before provider reads', async () => {
+    const row = purchaseRow();
+    const context = operatorOptions({
+      row,
+      firstScan: firstScanRow(row),
+      now: '2026-07-05T00:15:59.999Z',
+      apply: true
+    });
+
+    await expect(runCreditPackReconciliation(context.options))
+      .rejects.toEqual(
+        expectOperatorError('RECONCILIATION_FINALIZATION_DELAY_ACTIVE')
+      );
+    expect(context.fetchImpl).not.toHaveBeenCalled();
+    expect(context.supabase.rpc).not.toHaveBeenCalled();
+  });
+
+  test('the 24-hour gate uses persisted recorded_at when it is later than checked_at', async () => {
+    const row = purchaseRow();
+    const context = operatorOptions({
+      row,
+      firstScan: firstScanRow(row, {
+        recorded_at: '2026-07-04T00:17:00.000Z'
+      }),
+      now: '2026-07-05T00:16:59.999Z',
+      apply: true
+    });
+
+    await expect(runCreditPackReconciliation(context.options))
+      .rejects.toEqual(
+        expectOperatorError('RECONCILIATION_FINALIZATION_DELAY_ACTIVE')
+      );
+    expect(context.fetchImpl).not.toHaveBeenCalled();
+    expect(context.supabase.rpc).not.toHaveBeenCalled();
+  });
+
   test('a submitted request is eligible for exhaustive no-match reconciliation', async () => {
     const context = operatorOptions({
       row: purchaseRow({ status: 'submitted' }),
@@ -690,20 +979,57 @@ describe('credit-pack reconciliation operator', () => {
       runCreditPackReconciliation(context.options)
     ).resolves.toMatchObject({
       ok: true,
-      mode: 'applied',
+      mode: 'first-scan-recorded',
       outcome: 'definitive_no_match'
     });
     expect(context.supabase.rpc).toHaveBeenCalledWith(
-      'reconcile_credit_pack_purchase_no_match',
+      'record_credit_pack_purchase_no_match_scan',
       expect.objectContaining({
         p_expected_status: 'submitted'
       })
     );
   });
 
-  test('a lost RPC response revalidates exact persisted evidence without writing again', async () => {
+  test('provider request UUID case variants are canonicalized before evidence persistence', async () => {
     const context = operatorOptions({
-      row: reconciledPurchaseRow(),
+      apply: true,
+      result: reconciliationResult('definitive_no_match', {
+        evidence: completeEvidence({
+          apiRequestIds: [
+            PROVIDER_REQUEST_ID_1.toUpperCase(),
+            PROVIDER_REQUEST_ID_2.toUpperCase()
+          ]
+        })
+      }),
+      confirmationResult: reconciliationResult('definitive_no_match', {
+        evidence: completeEvidence({
+          apiRequestIds: [
+            PROVIDER_REQUEST_ID_3.toUpperCase(),
+            PROVIDER_REQUEST_ID_4.toUpperCase()
+          ]
+        })
+      })
+    });
+
+    await runCreditPackReconciliation(context.options);
+
+    expect(context.supabase.rpc).toHaveBeenCalledWith(
+      'record_credit_pack_purchase_no_match_scan',
+      expect.objectContaining({
+        p_provider_request_ids: [
+          PROVIDER_REQUEST_ID_3,
+          PROVIDER_REQUEST_ID_4
+        ]
+      })
+    );
+  });
+
+  test('a lost final RPC response is recovered from exact terminal evidence without provider reads or writes', async () => {
+    const row = reconciledPurchaseRow();
+    const context = operatorOptions({
+      row,
+      firstScan: firstScanRow(row),
+      finalScan: finalScanRow(row),
       apply: true
     });
 
@@ -714,73 +1040,65 @@ describe('credit-pack reconciliation operator', () => {
       mode: 'idempotent',
       outcome: 'definitive_no_match',
       requestId: REQUEST_ID,
-      status: 'provider_unknown',
+      status: 'failed',
       reviewRequired: true,
-      reviewLocked: true,
       previousStatus: 'provider_unknown',
-      revalidated: true,
+      firstEvidence: {
+        checkedAt: CHECKED_AT,
+        windowStartAt: '2026-06-30T23:59:30.000Z',
+        windowEndAt: CHECKED_AT,
+        pagesScanned: 2,
+        transactionsScanned: 1,
+        providerRequestCount: 2
+      },
       evidence: {
-        checkedAt: CHECKED_AT,
+        checkedAt: FINALIZATION_CHECKED_AT,
         windowStartAt: '2026-06-30T23:59:30.000Z',
-        windowEndAt: CHECKED_AT,
+        windowEndAt: FINALIZATION_CHECKED_AT,
         pagesScanned: 2,
         transactionsScanned: 1,
         providerRequestCount: 2
       },
-      persistedEvidence: {
-        checkedAt: CHECKED_AT,
-        windowStartAt: '2026-06-30T23:59:30.000Z',
-        windowEndAt: CHECKED_AT,
-        pagesScanned: 2,
-        transactionsScanned: 1,
-        providerRequestCount: 2
-      },
-      paddleBindingRequestId: BINDING_REQUEST_ID,
       auditReference: AUDIT_REFERENCE,
-      closedAt: CHECKED_AT
+      closedAt: FINALIZATION_CHECKED_AT
     });
-    expect(context.fetchImpl).toHaveBeenCalledTimes(1);
-    expect(context.reconcileImpl).toHaveBeenCalledTimes(1);
+    expect(context.fetchImpl).not.toHaveBeenCalled();
+    expect(context.reconcileImpl).not.toHaveBeenCalled();
     expect(context.supabase.rpc).not.toHaveBeenCalled();
   });
 
-  test('a late match revalidates a persisted no-match without writing', async () => {
+  test('tampered persisted final scan never triggers provider reads or writes', async () => {
+    const row = reconciledPurchaseRow();
     const context = operatorOptions({
-      row: reconciledPurchaseRow(),
+      row,
+      firstScan: firstScanRow(row),
+      finalScan: finalScanRow(row, {
+        provider_request_ids: [PROVIDER_REQUEST_ID_1, PROVIDER_REQUEST_ID_4]
+      }),
       apply: true,
-      result: reconciliationResult('matched', {
-        transaction: { id: 'txn_late_revalidation' }
-      })
     });
 
     await expect(
       runCreditPackReconciliation(context.options)
-    ).resolves.toMatchObject({
-      ok: true,
-      mode: 'revalidation',
-      outcome: 'matched',
-      transactionId: 'txn_late_revalidation',
-      status: 'provider_unknown',
-      reviewRequired: true,
-      reviewLocked: true,
-      previousStatus: 'provider_unknown',
-      requiresSignedWebhookReplay: true,
-      auditReference: AUDIT_REFERENCE,
-      closedAt: CHECKED_AT
-    });
-    expect(context.fetchImpl).toHaveBeenCalledTimes(1);
-    expect(context.reconcileImpl).toHaveBeenCalledTimes(1);
+    ).rejects.toEqual(
+      expectOperatorError('RECONCILIATION_SCAN_CONTRACT_INVALID')
+    );
+    expect(context.fetchImpl).not.toHaveBeenCalled();
+    expect(context.reconcileImpl).not.toHaveBeenCalled();
     expect(context.supabase.rpc).not.toHaveBeenCalled();
   });
 
   test('malformed persisted no-match evidence never rescans or writes', async () => {
+    const row = reconciledPurchaseRow({
+      reconciliation_provider_request_ids: [
+        PROVIDER_REQUEST_ID_1,
+        PROVIDER_REQUEST_ID_1
+      ]
+    });
     const context = operatorOptions({
-      row: reconciledPurchaseRow({
-        reconciliation_provider_request_ids: [
-          PROVIDER_REQUEST_ID_1,
-          PROVIDER_REQUEST_ID_1
-        ]
-      }),
+      row,
+      firstScan: firstScanRow(row),
+      finalScan: finalScanRow(row),
       apply: true
     });
 
@@ -796,27 +1114,26 @@ describe('credit-pack reconciliation operator', () => {
 
   test.each([
     ['missing review lock', { review_required: false }],
-    ['legacy failed status', { status: 'failed' }],
+    ['nonterminal row with terminal metadata', { status: 'provider_unknown' }],
     ['legacy provider code', {
-      provider_error_code: 'reconciled_definitive_no_match'
+      provider_error_code: 'reconciled_no_match_review_locked'
     }]
   ])('%s cannot masquerade as a persisted no-match', async (
     _label,
     rowOverride
   ) => {
+    const row = reconciledPurchaseRow(rowOverride);
     const context = operatorOptions({
-      row: reconciledPurchaseRow(rowOverride),
+      row,
+      firstScan: firstScanRow(row),
+      finalScan: finalScanRow(row),
       apply: true
     });
 
     await expect(
       runCreditPackReconciliation(context.options)
     ).rejects.toEqual(
-      expectOperatorError(
-        rowOverride.status === 'failed'
-          ? 'RECONCILIATION_STATUS_NOT_ALLOWED'
-          : 'RECONCILIATION_REQUEST_CONTRACT_INVALID'
-      )
+      expectOperatorError('RECONCILIATION_REQUEST_CONTRACT_INVALID')
     );
     expect(context.fetchImpl).not.toHaveBeenCalled();
     expect(context.reconcileImpl).not.toHaveBeenCalled();
@@ -829,10 +1146,12 @@ describe('credit-pack reconciliation operator', () => {
       rpcResponse: {
         data: {
           applied: false,
-          reason: 'reconciliation_duplicate',
+          reason: 'reconciliation_scan_duplicate',
           requestId: REQUEST_ID,
           status: 'provider_unknown',
-          reconciliationDecision: 'definitive_no_match'
+          scanOrdinal: 1,
+          firstCheckedAt: CHECKED_AT,
+          firstRecordedAt: CHECKED_AT
         },
         error: null
       }
@@ -844,9 +1163,7 @@ describe('credit-pack reconciliation operator', () => {
       ok: true,
       mode: 'idempotent',
       outcome: 'definitive_no_match',
-      status: 'provider_unknown',
-      reviewRequired: true,
-      reviewLocked: true
+      status: 'provider_unknown'
     });
     expect(context.supabase.rpc).toHaveBeenCalledTimes(1);
   });
@@ -916,10 +1233,12 @@ describe('credit-pack reconciliation operator', () => {
       apply: true,
       rpcResponse: {
         data: {
-          applied: false,
-          reason: 'reconciliation_status_mismatch',
+          applied: true,
+          reason: 'reconciliation_scan_recorded',
           requestId: REQUEST_ID,
-          status: 'charging'
+          status: 'provider_unknown',
+          scanOrdinal: 1,
+          firstCheckedAt: CHECKED_AT
         },
         error: null
       }

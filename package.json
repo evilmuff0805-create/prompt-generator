@@ -17,6 +17,7 @@
     "audit:paddle-sandbox-checkout-preview": "node scripts/audit-paddle-sandbox-checkout-preview.js",
     "audit:credit-policy-v2": "node scripts/audit-credit-policy-v2.js",
     "reconcile:credit-pack": "node scripts/reconcile-credit-pack-purchase.js",
+    "reconcile:subscription-checkout": "node scripts/reconcile-subscription-checkout.js",
     "smoke": "node scripts/smoke-test.js"
   },
   "dependencies": {

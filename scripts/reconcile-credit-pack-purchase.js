@@ -29,7 +29,25 @@ const RECONCILABLE_STATUSES = new Set([
   'provider_unknown'
 ]);
 const RECONCILIATION_DELAY_MS = 72 * 60 * 60 * 1000;
+const FINALIZATION_DELAY_MS = 24 * 60 * 60 * 1000;
 const MAX_EVIDENCE_AGE_MS = 2 * 60 * 1000;
+const RECONCILIATION_SCAN_COLUMNS = [
+  'request_id',
+  'authorized_user_id',
+  'scan_ordinal',
+  'expected_status',
+  'checked_at',
+  'window_start',
+  'window_end',
+  'pages_scanned',
+  'transactions_scanned',
+  'provider_request_ids',
+  'catalog_request_id',
+  'contract_fingerprint',
+  'evidence_hash',
+  'audit_reference',
+  'recorded_at'
+].join(',');
 const PURCHASE_REQUEST_COLUMNS = [
   'request_id',
   'authorized_user_id',
@@ -52,6 +70,9 @@ const PURCHASE_REQUEST_COLUMNS = [
   'eligible_snapshot_occurred_at',
   'authorized_at',
   'authorization_expires_at',
+  'transaction_id',
+  'completed_at',
+  'withheld_reason',
   'provider_error_code',
   'review_required',
   'reconciliation_decision',
@@ -325,7 +346,94 @@ async function readPurchaseRequest(supabase, requestId) {
   return response.data;
 }
 
-function normalizePurchaseContract(row, requestId, checkedAt) {
+async function readReconciliationScan(supabase, requestId, ordinal) {
+  let response;
+  try {
+    response = await supabase
+      .from('credit_pack_purchase_reconciliation_scans')
+      .select(RECONCILIATION_SCAN_COLUMNS)
+      .eq('request_id', requestId)
+      .eq('scan_ordinal', ordinal)
+      .maybeSingle();
+  } catch (_) {
+    fail(
+      'RECONCILIATION_SCAN_READ_FAILED',
+      'The persisted reconciliation scan could not be read.'
+    );
+  }
+  if (response?.error) {
+    fail(
+      'RECONCILIATION_SCAN_READ_FAILED',
+      'The persisted reconciliation scan could not be read.'
+    );
+  }
+  return response?.data || null;
+}
+
+async function readFirstReconciliationScan(supabase, requestId) {
+  return readReconciliationScan(supabase, requestId, 1);
+}
+
+async function readFinalReconciliationScan(supabase, requestId) {
+  return readReconciliationScan(supabase, requestId, 2);
+}
+
+function sha256Json(value) {
+  return crypto
+    .createHash('sha256')
+    .update(JSON.stringify(value), 'utf8')
+    .digest('hex');
+}
+
+function creditPackContractFingerprint(expected) {
+  return sha256Json({
+    purchaseRequestId: expected.purchaseRequestId,
+    authorizedUserId: expected.authorizedUserId,
+    subscriptionId: expected.subscriptionId,
+    customerId: expected.customerId,
+    providerPlanPriceId: expected.providerPlanPriceId,
+    packKey: expected.packKey,
+    currencyCode: expected.currencyCode,
+    unitAmount: expected.unitAmount,
+    subtotal: expected.subtotal,
+    discount: expected.discount,
+    tax: expected.tax,
+    total: expected.total,
+    credit: expected.credit,
+    balance: expected.balance,
+    grandTotal: expected.grandTotal,
+    grandTotalTax: expected.grandTotalTax,
+    windowStartAt: expected.windowStartAt,
+    authorizedAt: expected.authorizedAt,
+    authorizationExpiresAt: expected.authorizationExpiresAt
+  });
+}
+
+function reconciliationEvidenceHash({
+  expectedStatus,
+  evidence,
+  catalogRequestId,
+  contractFingerprint
+}) {
+  return sha256Json({
+    expectedStatus,
+    checkedAt: evidence.checkedAt,
+    windowStartAt: evidence.windowStartAt,
+    windowEndAt: evidence.windowEndAt,
+    pagesScanned: evidence.pagesScanned,
+    transactionsScanned: evidence.transactionsScanned,
+    providerRequestIds: [...evidence.apiRequestIds],
+    catalogRequestId,
+    contractFingerprint
+  });
+}
+
+function normalizePurchaseContract(
+  row,
+  requestId,
+  checkedAt,
+  { terminalNoMatch = false } = {}
+) {
   if (!row || typeof row !== 'object' || Array.isArray(row)) {
     fail(
       'RECONCILIATION_REQUEST_CONTRACT_INVALID',
@@ -335,7 +443,12 @@ function normalizePurchaseContract(row, requestId, checkedAt) {
 
   const normalizedRequestId = normalizeUuid(row.request_id);
   const authorizedUserId = normalizeUuid(row.authorized_user_id);
-  const status = normalizeNonEmptyString(row.status, 64);
+  const rowStatus = normalizeNonEmptyString(row.status, 64);
+  const previousStatus = normalizeNonEmptyString(
+    row.reconciliation_previous_status,
+    64
+  );
+  const status = terminalNoMatch ? previousStatus : rowStatus;
   const customerId = normalizeNonEmptyString(row.customer_id);
   const subscriptionId = normalizeNonEmptyString(row.subscription_id);
   const providerPlanPriceId = normalizeNonEmptyString(
@@ -442,6 +555,39 @@ function normalizePurchaseContract(row, requestId, checkedAt) {
     );
   }
 
+  const closedAt = terminalNoMatch
+    ? normalizeTimestamp(row.reconciliation_closed_at)
+    : null;
+  if (terminalNoMatch) {
+    if (
+      rowStatus !== 'failed'
+      || row.provider_error_code !== 'reconciled_definitive_no_match'
+      || row.review_required !== true
+      || row.reconciliation_decision !== 'definitive_no_match'
+      || previousStatus !== status
+      || row.transaction_id != null
+      || row.completed_at != null
+      || row.withheld_reason != null
+      || !closedAt
+      || Date.parse(closedAt) < Date.parse(checkedAt)
+    ) {
+      fail(
+        'RECONCILIATION_REQUEST_CONTRACT_INVALID',
+        'The terminal purchase reconciliation contract is incomplete.'
+      );
+    }
+  } else if (
+    rowStatus !== status
+    || row.reconciliation_decision != null
+    || row.reconciliation_previous_status != null
+    || row.reconciliation_closed_at != null
+  ) {
+    fail(
+      'RECONCILIATION_REQUEST_CONTRACT_INVALID',
+      'The unresolved purchase reconciliation contract is inconsistent.'
+    );
+  }
+
   return Object.freeze({
     purchaseRequestId: normalizedRequestId,
     authorizedUserId,
@@ -464,40 +610,33 @@ function normalizePurchaseContract(row, requestId, checkedAt) {
     authorizedAt,
     authorizationExpiresAt,
     windowEndAt: checkedAt,
-    checkedAt
+    checkedAt,
+    terminalNoMatch,
+    closedAt
   });
 }
 
-function normalizePersistedNoMatch(row, expected) {
-  const decision = normalizeNonEmptyString(row.reconciliation_decision, 64);
-  if (!decision) return null;
-
-  const previousStatus = normalizeNonEmptyString(
-    row.reconciliation_previous_status,
+function normalizePersistedScan(row, expected, ordinal) {
+  if (!row) return null;
+  const requestId = normalizeUuid(row.request_id);
+  const authorizedUserId = normalizeUuid(row.authorized_user_id);
+  const expectedStatus = normalizeNonEmptyString(row.expected_status, 64);
+  const checkedAt = normalizeTimestamp(row.checked_at);
+  const windowStartAt = normalizeTimestamp(row.window_start);
+  const windowEndAt = normalizeTimestamp(row.window_end);
+  const recordedAt = normalizeTimestamp(row.recorded_at);
+  const pagesScanned = Number(row.pages_scanned);
+  const transactionsScanned = Number(row.transactions_scanned);
+  const apiRequestIds = Array.isArray(row.provider_request_ids)
+    ? row.provider_request_ids.map(normalizeUuid)
+    : [];
+  const catalogRequestId = normalizeUuid(row.catalog_request_id);
+  const contractFingerprint = normalizeNonEmptyString(
+    row.contract_fingerprint,
     64
   );
-  const providerErrorCode = normalizeNonEmptyString(
-    row.provider_error_code,
-    255
-  );
-  const checkedAt = normalizeTimestamp(row.reconciliation_checked_at);
-  const windowStartAt = normalizeTimestamp(
-    row.reconciliation_window_start
-  );
-  const windowEndAt = normalizeTimestamp(row.reconciliation_window_end);
-  const closedAt = normalizeTimestamp(row.reconciliation_closed_at);
-  const pagesScanned = Number(row.reconciliation_pages_scanned);
-  const transactionsScanned = Number(
-    row.reconciliation_transactions_scanned
-  );
-  const apiRequestIds = Array.isArray(
-    row.reconciliation_provider_request_ids
-  )
-    ? row.reconciliation_provider_request_ids.map(normalizeUuid)
-    : [];
-  const auditReference = normalizeNonEmptyString(
-    row.reconciliation_audit_reference
-  );
+  const evidenceHash = normalizeNonEmptyString(row.evidence_hash, 64);
+  const auditReference = normalizeNonEmptyString(row.audit_reference);
   const evidence = {
     scanComplete: true,
     purchaseRequestId: expected.purchaseRequestId,
@@ -521,23 +660,29 @@ function normalizePersistedNoMatch(row, expected) {
     transactionsScanned,
     apiRequestIds
   };
+  const expectedFingerprint = creditPackContractFingerprint(expected);
+  const expectedEvidenceHash = reconciliationEvidenceHash({
+    expectedStatus,
+    evidence,
+    catalogRequestId,
+    contractFingerprint: expectedFingerprint
+  });
 
   if (
-    decision !== 'definitive_no_match'
-    || expected.expectedStatus !== 'provider_unknown'
-    || row.review_required !== true
-    || !RECONCILABLE_STATUSES.has(previousStatus)
-    || providerErrorCode !== 'reconciled_no_match_review_locked'
+    requestId !== expected.purchaseRequestId
+    || authorizedUserId !== expected.authorizedUserId
+    || row.scan_ordinal !== ordinal
+    || expectedStatus !== expected.expectedStatus
+    || !RECONCILABLE_STATUSES.has(expectedStatus)
     || !checkedAt
     || !windowStartAt
     || windowStartAt !== expected.windowStartAt
     || !windowEndAt
     || windowEndAt !== checkedAt
-    || !closedAt
-    || Date.parse(closedAt) < Date.parse(checkedAt)
-    || Date.parse(closedAt) > Date.parse(expected.checkedAt)
-    || Date.parse(checkedAt) <
-      Date.parse(expected.authorizationExpiresAt) + RECONCILIATION_DELAY_MS
+    || !recordedAt
+    || Date.parse(recordedAt) < Date.parse(checkedAt)
+    || Date.parse(checkedAt)
+      < Date.parse(expected.authorizationExpiresAt) + RECONCILIATION_DELAY_MS
     || !Number.isSafeInteger(pagesScanned)
     || pagesScanned <= 0
     || pagesScanned > 256
@@ -547,6 +692,9 @@ function normalizePersistedNoMatch(row, expected) {
     || apiRequestIds.length !== pagesScanned
     || apiRequestIds.some((value) => !value)
     || new Set(apiRequestIds).size !== apiRequestIds.length
+    || !catalogRequestId
+    || contractFingerprint !== expectedFingerprint
+    || evidenceHash !== expectedEvidenceHash
     || !auditReference
     || !/^pgcr_[0-9a-f-]{36}$/i.test(auditReference)
     || !evidenceContractMatches(evidence, {
@@ -556,20 +704,100 @@ function normalizePersistedNoMatch(row, expected) {
     })
   ) {
     fail(
-      'RECONCILIATION_REQUEST_CONTRACT_INVALID',
-      'The persisted reconciliation evidence is incomplete.'
+      'RECONCILIATION_SCAN_CONTRACT_INVALID',
+      'The persisted reconciliation scan is incomplete.'
     );
   }
 
   return Object.freeze({
-    previousStatus,
-    reviewRequired: true,
+    expectedStatus,
     evidence: Object.freeze({
       ...evidence,
       apiRequestIds: Object.freeze([...apiRequestIds])
     }),
+    catalogRequestId,
+    contractFingerprint,
+    evidenceHash,
     auditReference,
-    closedAt
+    recordedAt
+  });
+}
+
+function normalizePersistedFirstScan(row, expected) {
+  return normalizePersistedScan(row, expected, 1);
+}
+
+function normalizePersistedFinalScan(row, expected) {
+  return normalizePersistedScan(row, expected, 2);
+}
+
+function scanFinalizationEligibleAt(firstScan) {
+  const anchor = Math.max(
+    Date.parse(firstScan.evidence.checkedAt),
+    Date.parse(firstScan.recordedAt)
+  );
+  return new Date(anchor + FINALIZATION_DELAY_MS).toISOString();
+}
+
+function normalizePersistedNoMatch(row, expected, firstScan, finalScan) {
+  if (!expected?.terminalNoMatch || !firstScan || !finalScan) {
+    fail(
+      'RECONCILIATION_SCAN_CONTRACT_INVALID',
+      'Both immutable reconciliation scans are required for a terminal request.'
+    );
+  }
+  const finalEvidence = finalScan.evidence;
+  const rowProviderRequestIds = Array.isArray(
+    row.reconciliation_provider_request_ids
+  )
+    ? row.reconciliation_provider_request_ids.map(normalizeUuid)
+    : [];
+  const eligibleAt = scanFinalizationEligibleAt(firstScan);
+  if (
+    firstScan.expectedStatus !== expected.expectedStatus
+    || finalScan.expectedStatus !== expected.expectedStatus
+    || firstScan.contractFingerprint !== finalScan.contractFingerprint
+    || Date.parse(finalEvidence.checkedAt) < Date.parse(eligibleAt)
+    || Date.parse(expected.closedAt) < Date.parse(eligibleAt)
+    || !evidenceScansAreIndependent(firstScan.evidence, finalEvidence)
+    || firstScan.catalogRequestId === finalScan.catalogRequestId
+    || finalEvidence.apiRequestIds.includes(firstScan.catalogRequestId)
+    || firstScan.evidence.apiRequestIds.includes(finalScan.catalogRequestId)
+    || normalizeTimestamp(row.reconciliation_checked_at)
+      !== finalEvidence.checkedAt
+    || normalizeTimestamp(row.reconciliation_window_start)
+      !== finalEvidence.windowStartAt
+    || normalizeTimestamp(row.reconciliation_window_end)
+      !== finalEvidence.windowEndAt
+    || Number(row.reconciliation_pages_scanned)
+      !== finalEvidence.pagesScanned
+    || Number(row.reconciliation_transactions_scanned)
+      !== finalEvidence.transactionsScanned
+    || rowProviderRequestIds.length !== finalEvidence.apiRequestIds.length
+    || rowProviderRequestIds.some(
+      (requestId, index) => requestId !== finalEvidence.apiRequestIds[index]
+    )
+    || normalizeNonEmptyString(row.reconciliation_audit_reference)
+      !== finalScan.auditReference
+  ) {
+    fail(
+      'RECONCILIATION_REQUEST_CONTRACT_INVALID',
+      'The terminal purchase reconciliation evidence is inconsistent.'
+    );
+  }
+
+  return Object.freeze({
+    ok: true,
+    mode: 'idempotent',
+    outcome: 'definitive_no_match',
+    requestId: expected.purchaseRequestId,
+    status: 'failed',
+    reviewRequired: true,
+    previousStatus: expected.expectedStatus,
+    firstEvidence: evidenceSummary(firstScan.evidence),
+    evidence: evidenceSummary(finalEvidence),
+    auditReference: finalScan.auditReference,
+    closedAt: expected.closedAt
   });
 }
 
@@ -749,13 +977,27 @@ function requireExactNoMatchEvidence(result, expected) {
       'The provider scan did not return complete, exact evidence.'
     );
   }
-  return result.evidence;
+  return Object.freeze({
+    ...result.evidence,
+    apiRequestIds: Object.freeze(
+      result.evidence.apiRequestIds.map(normalizeUuid)
+    )
+  });
 }
 
 function evidenceScansAreIndependent(firstEvidence, secondEvidence) {
   const firstRequestIds = new Set(firstEvidence.apiRequestIds);
   return secondEvidence.apiRequestIds.every(
     (requestId) => !firstRequestIds.has(requestId)
+  );
+}
+
+function catalogEvidenceIsIndependent(evidence, catalogRequestId) {
+  const normalizedCatalogRequestId = normalizeUuid(catalogRequestId);
+  return Boolean(
+    normalizedCatalogRequestId
+    && Array.isArray(evidence?.apiRequestIds)
+    && !evidence.apiRequestIds.includes(normalizedCatalogRequestId)
   );
 }
 
@@ -806,101 +1048,158 @@ function validateAuditReference(value) {
   return normalized;
 }
 
-async function applyDefinitiveNoMatch({
-  supabase,
+function reconciliationRpcArguments({
   expected,
   evidence,
   auditReference,
-  paddleBindingRequestId
+  catalogRequestId,
+  contractFingerprint,
+  evidenceHash
+}) {
+  return {
+    p_request_id: expected.purchaseRequestId,
+    p_user_id: expected.authorizedUserId,
+    p_expected_status: expected.expectedStatus,
+    p_checked_at: evidence.checkedAt,
+    p_window_start: evidence.windowStartAt,
+    p_window_end: evidence.windowEndAt,
+    p_pages_scanned: evidence.pagesScanned,
+    p_transactions_scanned: evidence.transactionsScanned,
+    p_provider_request_ids: [...evidence.apiRequestIds],
+    p_catalog_request_id: catalogRequestId,
+    p_contract_fingerprint: contractFingerprint,
+    p_evidence_hash: evidenceHash,
+    p_audit_reference: auditReference
+  };
+}
+
+async function invokeReconciliationRpc({
+  supabase,
+  rpcName,
+  expected,
+  evidence,
+  auditReference,
+  paddleBindingRequestId,
+  contractFingerprint,
+  evidenceHash,
+  finalizing = false
 }) {
   let response;
   try {
     response = await supabase.rpc(
-      'reconcile_credit_pack_purchase_no_match',
-      {
-        p_request_id: expected.purchaseRequestId,
-        p_user_id: expected.authorizedUserId,
-        p_expected_status: expected.expectedStatus,
-        p_evidence_result: 'definitive_no_match',
-        p_checked_at: evidence.checkedAt,
-        p_window_start: evidence.windowStartAt,
-        p_window_end: evidence.windowEndAt,
-        p_pages_scanned: evidence.pagesScanned,
-        p_transactions_scanned: evidence.transactionsScanned,
-        p_provider_request_ids: [...evidence.apiRequestIds],
-        p_audit_reference: auditReference
-      }
+      rpcName,
+      reconciliationRpcArguments({
+        expected,
+        evidence,
+        auditReference,
+        catalogRequestId: paddleBindingRequestId,
+        contractFingerprint,
+        evidenceHash
+      })
     );
   } catch (_) {
     fail(
       'RECONCILIATION_RPC_FAILED',
-      'The reconciliation decision was not applied.'
+      `The reconciliation decision was not ${finalizing ? 'finalized' : 'recorded'}.`
     );
   }
   if (response?.error || !response?.data) {
     fail(
       'RECONCILIATION_RPC_FAILED',
-      'The reconciliation decision was not applied.'
+      `The reconciliation decision was not ${finalizing ? 'finalized' : 'recorded'}.`
     );
   }
+  return response.data;
+}
 
-  const result = response.data;
-  const requestId = normalizeUuid(result?.requestId);
-  const decision = normalizeNonEmptyString(
-    result?.reconciliationDecision,
-    64
-  );
-  if (requestId !== expected.purchaseRequestId) {
-    fail(
-      'RECONCILIATION_RPC_CONTRACT_INVALID',
-      'The reconciliation RPC returned an unexpected request.'
-    );
-  }
+async function applyFirstNoMatchScan(args) {
+  const result = await invokeReconciliationRpc({
+    ...args,
+    rpcName: 'record_credit_pack_purchase_no_match_scan'
+  });
+  const expected = args.expected;
+  const checkedAt = normalizeTimestamp(result?.firstCheckedAt);
+  const recordedAt = normalizeTimestamp(result?.firstRecordedAt);
+  const valid = normalizeUuid(result?.requestId) === expected.purchaseRequestId
+    && result?.status === expected.expectedStatus
+    && result?.scanOrdinal === 1
+    && checkedAt === args.evidence.checkedAt
+    && recordedAt
+    && Date.parse(recordedAt) >= Date.parse(checkedAt);
   if (
-    result.applied === true
-    && result.reason === 'request_reconciled_no_match'
-    && result.status === 'provider_unknown'
-    && result.reviewRequired === true
-    && decision === 'definitive_no_match'
+    valid
+    && (
+      (result.applied === true
+        && result.reason === 'reconciliation_scan_recorded')
+      || (result.applied === false
+        && result.reason === 'reconciliation_scan_duplicate')
+    )
   ) {
     return Object.freeze({
       ok: true,
-      mode: 'applied',
+      mode: result.applied ? 'first-scan-recorded' : 'idempotent',
       outcome: 'definitive_no_match',
       requestId: expected.purchaseRequestId,
-      status: 'provider_unknown',
-      reviewRequired: true,
-      reviewLocked: true,
-      evidence: evidenceSummary(evidence),
-      auditReference,
-      paddleBindingRequestId
+      status: expected.expectedStatus,
+      firstRecordedAt: recordedAt,
+      finalizationEligibleAt: scanFinalizationEligibleAt({
+        evidence: { checkedAt },
+        recordedAt
+      }),
+      evidence: evidenceSummary(args.evidence),
+      auditReference: args.auditReference,
+      paddleBindingRequestId: args.paddleBindingRequestId
     });
   }
-  if (
-    result.applied === false
-    && result.reason === 'reconciliation_duplicate'
-    && result.status === 'provider_unknown'
-    && decision === 'definitive_no_match'
-  ) {
-    return Object.freeze({
-      ok: true,
-      mode: 'idempotent',
-      outcome: 'definitive_no_match',
-      requestId: expected.purchaseRequestId,
-      status: 'provider_unknown',
-      reviewRequired: true,
-      reviewLocked: true,
-      evidence: evidenceSummary(evidence),
-      auditReference,
-      paddleBindingRequestId
-    });
-  }
-
   fail(
     'RECONCILIATION_RPC_REJECTED',
-    'The reconciliation RPC rejected the state transition.'
+    'The reconciliation RPC rejected the first evidence record.'
   );
 }
+
+async function finalizeDefinitiveNoMatch(args) {
+  const result = await invokeReconciliationRpc({
+    ...args,
+    rpcName: 'finalize_credit_pack_purchase_no_match',
+    finalizing: true
+  });
+  const expected = args.expected;
+  const valid = normalizeUuid(result?.requestId) === expected.purchaseRequestId
+    && result?.status === 'failed'
+    && result?.reviewRequired === true
+    && result?.reconciliationDecision === 'definitive_no_match'
+    && normalizeTimestamp(result?.firstCheckedAt)
+    && normalizeTimestamp(result?.checkedAt) === args.evidence.checkedAt
+    && normalizeTimestamp(result?.closedAt);
+  if (
+    valid
+    && (
+      (result.applied === true
+        && result.reason === 'request_reconciled_no_match')
+      || (result.applied === false
+        && result.reason === 'reconciliation_duplicate')
+    )
+  ) {
+    return Object.freeze({
+      ok: true,
+      mode: result.applied ? 'finalized' : 'idempotent',
+      outcome: 'definitive_no_match',
+      requestId: expected.purchaseRequestId,
+      status: 'failed',
+      reviewRequired: true,
+      evidence: evidenceSummary(args.evidence),
+      auditReference: args.auditReference,
+      paddleBindingRequestId: args.paddleBindingRequestId,
+      closedAt: normalizeTimestamp(result.closedAt)
+    });
+  }
+  fail(
+    'RECONCILIATION_RPC_REJECTED',
+    'The reconciliation RPC rejected the final state transition.'
+  );
+}
+
+const applyDefinitiveNoMatch = applyFirstNoMatchScan;
 
 async function runCreditPackReconciliation(options = {}) {
   const requestId = normalizeUuid(options.requestId);
@@ -938,8 +1237,53 @@ async function runCreditPackReconciliation(options = {}) {
     options.createClientImpl || createClient
   );
   const row = await readPurchaseRequest(supabase, requestId);
-  const expected = normalizePurchaseContract(row, requestId, firstNow);
-  const persistedNoMatch = normalizePersistedNoMatch(row, expected);
+  const terminalNoMatch = row?.status === 'failed'
+    && row?.reconciliation_decision === 'definitive_no_match';
+  const firstScanRow = await readFirstReconciliationScan(supabase, requestId);
+  const finalScanRow = terminalNoMatch
+    ? await readFinalReconciliationScan(supabase, requestId)
+    : null;
+  const contractCheckedAt = terminalNoMatch
+    ? normalizeTimestamp(finalScanRow?.checked_at)
+    : firstNow;
+  if (!contractCheckedAt) {
+    fail(
+      'RECONCILIATION_SCAN_CONTRACT_INVALID',
+      'The terminal purchase reconciliation is missing its final scan.'
+    );
+  }
+  const expected = normalizePurchaseContract(
+    row,
+    requestId,
+    contractCheckedAt,
+    { terminalNoMatch }
+  );
+  const persistedFirstScan = normalizePersistedFirstScan(
+    firstScanRow,
+    expected
+  );
+  if (terminalNoMatch) {
+    const persistedFinalScan = normalizePersistedFinalScan(
+      finalScanRow,
+      expected
+    );
+    return normalizePersistedNoMatch(
+      row,
+      expected,
+      persistedFirstScan,
+      persistedFinalScan
+    );
+  }
+  if (
+    persistedFirstScan
+    && Date.parse(firstNow)
+      < Date.parse(scanFinalizationEligibleAt(persistedFirstScan))
+  ) {
+    fail(
+      'RECONCILIATION_FINALIZATION_DELAY_ACTIVE',
+      'The persisted first scan must be at least 24 hours old before finalization.'
+    );
+  }
   const fetchImpl = options.fetchImpl || global.fetch;
   const paddleBinding = await verifyPaddleSubscriptionBinding({
     apiKey: config.paddleApiKey,
@@ -956,44 +1300,87 @@ async function runCreditPackReconciliation(options = {}) {
   });
   const result = await reconcileImpl(scanOptions);
 
-  if (persistedNoMatch) {
+  if (persistedFirstScan) {
     if (result?.status !== 'definitive_no_match') {
-      const revalidation = safeNonClosingResult(
-        requestId,
-        result,
-        paddleBinding.providerRequestId
-      );
       return Object.freeze({
-        ...revalidation,
-        mode: 'revalidation',
-        status: 'provider_unknown',
-        reviewRequired: true,
-        reviewLocked: true,
-        previousStatus: persistedNoMatch.previousStatus,
-        requiresSignedWebhookReplay: result?.status === 'matched',
-        auditReference: persistedNoMatch.auditReference,
-        closedAt: persistedNoMatch.closedAt
+        ...safeNonClosingResult(
+          requestId,
+          result,
+          paddleBinding.providerRequestId
+        ),
+        mode: 'finalization-blocked',
+        firstEvidence: evidenceSummary(persistedFirstScan.evidence)
       });
     }
-    const revalidatedEvidence = requireExactNoMatchEvidence(
-      result,
-      expected
-    );
-    return Object.freeze({
-      ok: true,
-      mode: 'idempotent',
-      outcome: 'definitive_no_match',
-      requestId,
-      status: 'provider_unknown',
-      reviewRequired: true,
-      reviewLocked: true,
-      previousStatus: persistedNoMatch.previousStatus,
-      revalidated: true,
-      evidence: evidenceSummary(revalidatedEvidence),
-      persistedEvidence: evidenceSummary(persistedNoMatch.evidence),
+    const finalEvidence = requireExactNoMatchEvidence(result, expected);
+    if (
+      !evidenceScansAreIndependent(
+        persistedFirstScan.evidence,
+        finalEvidence
+      )
+      || !catalogEvidenceIsIndependent(
+        finalEvidence,
+        paddleBinding.providerRequestId
+      )
+      || persistedFirstScan.catalogRequestId
+        === paddleBinding.providerRequestId
+      || finalEvidence.apiRequestIds.includes(
+        persistedFirstScan.catalogRequestId
+      )
+      || persistedFirstScan.evidence.apiRequestIds.includes(
+        paddleBinding.providerRequestId
+      )
+    ) {
+      fail(
+        'RECONCILIATION_FINAL_SCAN_NOT_INDEPENDENT',
+        'The final scan did not provide evidence independent from the persisted first scan.'
+      );
+    }
+    const contractFingerprint = creditPackContractFingerprint(expected);
+    const evidenceHash = reconciliationEvidenceHash({
+      expectedStatus: expected.expectedStatus,
+      evidence: finalEvidence,
+      catalogRequestId: paddleBinding.providerRequestId,
+      contractFingerprint
+    });
+    if (!options.apply) {
+      return Object.freeze({
+        ok: true,
+        mode: 'dry-run-finalization',
+        outcome: 'definitive_no_match',
+        requestId,
+        readyToApply: (
+          config.supabaseProjectRef === DEFAULT_EXPECTED_SUPABASE_PROJECT_REF
+          && config.paddleKeyEnvironment === 'live'
+          && config.paddleApiBase === DEFAULT_PADDLE_API_BASE
+        ),
+        firstEvidence: evidenceSummary(persistedFirstScan.evidence),
+        evidence: evidenceSummary(finalEvidence),
+        paddleBindingRequestId: paddleBinding.providerRequestId
+      });
+    }
+    const completedAt = normalizeTimestamp(nowImpl());
+    if (
+      !completedAt
+      || Date.parse(completedAt) < Date.parse(finalEvidence.checkedAt)
+      || Date.parse(completedAt) - Date.parse(finalEvidence.checkedAt)
+        > MAX_EVIDENCE_AGE_MS
+    ) {
+      fail(
+        'RECONCILIATION_EVIDENCE_STALE',
+        'The provider evidence is too old to apply safely.'
+      );
+    }
+    const auditReferenceFactory = options.auditReferenceFactory
+      || (() => `pgcr_${crypto.randomUUID()}`);
+    return finalizeDefinitiveNoMatch({
+      supabase,
+      expected,
+      evidence: finalEvidence,
+      auditReference: validateAuditReference(auditReferenceFactory()),
       paddleBindingRequestId: paddleBinding.providerRequestId,
-      auditReference: persistedNoMatch.auditReference,
-      closedAt: persistedNoMatch.closedAt
+      contractFingerprint,
+      evidenceHash
     });
   }
 
@@ -1064,6 +1451,15 @@ async function runCreditPackReconciliation(options = {}) {
       'The confirmation scan did not provide independent Paddle evidence.'
     );
   }
+  if (!catalogEvidenceIsIndependent(
+    confirmationEvidence,
+    paddleBinding.providerRequestId
+  )) {
+    fail(
+      'RECONCILIATION_CATALOG_EVIDENCE_NOT_INDEPENDENT',
+      'The Paddle catalog request cannot be reused as transaction scan evidence.'
+    );
+  }
 
   const completedAt = normalizeTimestamp(nowImpl());
   if (
@@ -1083,12 +1479,23 @@ async function runCreditPackReconciliation(options = {}) {
   const auditReference = validateAuditReference(
     auditReferenceFactory()
   );
-  return applyDefinitiveNoMatch({
+  const contractFingerprint = creditPackContractFingerprint(
+    confirmationExpected
+  );
+  const evidenceHash = reconciliationEvidenceHash({
+    expectedStatus: confirmationExpected.expectedStatus,
+    evidence: confirmationEvidence,
+    catalogRequestId: paddleBinding.providerRequestId,
+    contractFingerprint
+  });
+  return applyFirstNoMatchScan({
     supabase,
     expected: confirmationExpected,
     evidence: confirmationEvidence,
     auditReference,
-    paddleBindingRequestId: paddleBinding.providerRequestId
+    paddleBindingRequestId: paddleBinding.providerRequestId,
+    contractFingerprint,
+    evidenceHash
   });
 }
 
@@ -1168,24 +1575,37 @@ if (require.main === module) {
 }
 
 module.exports = {
+  FINALIZATION_DELAY_MS,
   MAX_EVIDENCE_AGE_MS,
   DEFAULT_EXPECTED_SUPABASE_PROJECT_REF,
   SANDBOX_SUPABASE_PROJECT_REFS_ENV,
   PADDLE_BINDING_TIMEOUT_MS,
   PURCHASE_REQUEST_COLUMNS,
+  RECONCILIATION_SCAN_COLUMNS,
   RECONCILIATION_DELAY_MS,
   ReconciliationOperatorError,
   applyDefinitiveNoMatch,
+  applyFirstNoMatchScan,
+  catalogEvidenceIsIndependent,
+  creditPackContractFingerprint,
   evidenceContractMatches,
   evidenceScansAreIndependent,
+  finalizeDefinitiveNoMatch,
   main,
+  normalizePersistedFirstScan,
+  normalizePersistedFinalScan,
   normalizePurchaseContract,
   normalizePersistedNoMatch,
   parseCliArguments,
   parseSandboxSupabaseProjectRefAllowlist,
   readRequiredEnvironment,
   readPurchaseRequest,
+  readFinalReconciliationScan,
+  readFirstReconciliationScan,
+  readReconciliationScan,
+  reconciliationEvidenceHash,
   reconciliationScanOptions,
   runCreditPackReconciliation,
+  scanFinalizationEligibleAt,
   verifyPaddleSubscriptionBinding
 };

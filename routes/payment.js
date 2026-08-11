@@ -30,6 +30,7 @@ const {
 
 const PADDLE_API_BASE = getPaddleApiBase(process.env);
 const PADDLE_READ_TIMEOUT_MS = 8000;
+const PADDLE_CHECKOUT_TIMEOUT_MS = 15000;
 const PADDLE_CHARGE_TIMEOUT_MS = 15000;
 const CREDIT_PACK_REQUEST_ID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -69,7 +70,13 @@ async function createSubscriptionCheckoutAttempt(supabase, {
   if (
     !data
     || !['checkout_attempt_created', 'duplicate_pending'].includes(data.reason)
-    || !['created', 'bound', 'provider_unknown', 'completed'].includes(data.status)
+    || ![
+      'created',
+      'charging',
+      'bound',
+      'provider_unknown',
+      'completed'
+    ].includes(data.status)
   ) {
     throw new Error('create_subscription_checkout_attempt returned an invalid outcome');
   }
@@ -120,6 +127,37 @@ async function transitionSubscriptionCheckoutAttempt(
   });
   if (error) {
     throw new Error('transition_subscription_checkout_attempt RPC failed: ' + error.message);
+  }
+  return data;
+}
+
+async function markSubscriptionCheckoutProviderMutationStarted(
+  supabase,
+  { attemptId, userId }
+) {
+  const data = await transitionSubscriptionCheckoutAttempt(supabase, {
+    attemptId,
+    userId,
+    status: 'charging'
+  });
+  const validOutcome = data && (
+    (
+      data.applied === true
+      && data.reason === 'provider_mutation_started'
+    )
+    || (
+      data.applied === false
+      && data.reason === 'duplicate'
+    )
+  );
+  if (
+    !validOutcome
+    || data.status !== 'charging'
+    || !parsePaddleTimestamp(data.providerMutationStartedAt)
+  ) {
+    throw new Error(
+      'transition_subscription_checkout_attempt returned an invalid charging outcome'
+    );
   }
   return data;
 }
@@ -986,6 +1024,38 @@ async function handleSubscriptionCheckout(req, res) {
     contract
   });
 
+  let providerMutationState;
+  try {
+    providerMutationState =
+      await markSubscriptionCheckoutProviderMutationStarted(adminClient, {
+      attemptId,
+      userId: req.user.id
+    });
+  } catch (error) {
+    // The transition may have committed even when its response was lost. The
+    // provider has not been called yet, so fail closed and let the next request
+    // observe the durable open attempt instead of risking a second mutation.
+    console.error(
+      '[payment/checkout] Provider mutation claim could not be confirmed:',
+      error.message
+    );
+    return res.status(503).json({
+      success: false,
+      checkoutAttemptId: attemptId,
+      status: 'charging',
+      error: 'Checkout state could not be confirmed.',
+      code: 'CHECKOUT_RECOVERY_REQUIRED'
+    });
+  }
+  if (providerMutationState.applied !== true) {
+    return res.status(202).json({
+      success: true,
+      checkoutAttemptId: attemptId,
+      status: 'charging',
+      code: 'CHECKOUT_CONFIRMATION_PENDING'
+    });
+  }
+
   let paddleResponse;
   try {
     paddleResponse = await fetch(`${PADDLE_API_BASE}/transactions`, {
@@ -994,7 +1064,8 @@ async function handleSubscriptionCheckout(req, res) {
         'Authorization': `Bearer ${apiKey}`,
         'Content-Type': 'application/json'
       },
-      body: JSON.stringify(transactionBody)
+      body: JSON.stringify(transactionBody),
+      signal: AbortSignal.timeout(PADDLE_CHECKOUT_TIMEOUT_MS)
     });
   } catch (error) {
     console.error('[payment/checkout] Paddle transaction outcome is unknown:', error.message);
@@ -1002,7 +1073,10 @@ async function handleSubscriptionCheckout(req, res) {
       attemptId,
       userId: req.user.id,
       status: 'provider_unknown',
-      providerErrorCode: 'network_error'
+      providerErrorCode:
+        error?.name === 'TimeoutError' || error?.name === 'AbortError'
+          ? 'timeout'
+          : 'network_error'
     }).catch((transitionError) => {
       console.error('[payment/checkout] Could not persist unknown outcome:', transitionError.message);
     });
@@ -2483,6 +2557,8 @@ module.exports.bindSubscriptionCheckoutTransaction =
   bindSubscriptionCheckoutTransaction;
 module.exports.transitionSubscriptionCheckoutAttempt =
   transitionSubscriptionCheckoutAttempt;
+module.exports.markSubscriptionCheckoutProviderMutationStarted =
+  markSubscriptionCheckoutProviderMutationStarted;
 module.exports.isSandboxSubscriptionCheckoutConfirmed =
   isSandboxSubscriptionCheckoutConfirmed;
 module.exports.buildSubscriptionUpdateBody = buildSubscriptionUpdateBody;

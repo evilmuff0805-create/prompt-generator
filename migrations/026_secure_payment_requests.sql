@@ -508,7 +508,7 @@ CREATE TABLE public.credit_pack_purchase_requests (
         )
         AND reconciliation_checked_at IS NOT NULL
         AND reconciliation_checked_at >=
-          authorization_expires_at + interval '72 hours'
+          authorization_expires_at + interval '96 hours'
         AND reconciliation_window_start IS NOT NULL
         AND reconciliation_window_start <= authorized_at
         AND reconciliation_window_end IS NOT NULL
@@ -529,6 +529,14 @@ CREATE TABLE public.credit_pack_purchase_requests (
         AND length(reconciliation_audit_reference) <= 255
         AND reconciliation_closed_at IS NOT NULL
         AND reconciliation_closed_at >= reconciliation_checked_at
+        AND (
+          (
+            status = 'failed'
+            AND review_required = true
+            AND provider_error_code = 'reconciled_definitive_no_match'
+          )
+          OR status IN ('withheld', 'refunded', 'chargeback')
+        )
       )
     ),
   CONSTRAINT credit_pack_purchase_requests_status_fields_check
@@ -581,6 +589,83 @@ CREATE TABLE public.credit_pack_purchase_requests (
   )
 );
 
+-- Provider scans happen outside PostgreSQL, so persist both independent
+-- observations before releasing the durable checkout lock. Rows are append
+-- only, contain no email address, and survive account deletion through the
+-- retained request tombstone. The legal retention period is a separate release
+-- gate; this migration deliberately does not install an automatic purge job.
+CREATE TABLE public.credit_pack_purchase_reconciliation_scans (
+  request_id UUID NOT NULL
+    REFERENCES public.credit_pack_purchase_requests(request_id)
+    ON DELETE RESTRICT,
+  authorized_user_id UUID NOT NULL,
+  scan_ordinal SMALLINT NOT NULL CHECK (scan_ordinal IN (1, 2)),
+  expected_status TEXT NOT NULL
+    CHECK (expected_status IN ('charging', 'submitted', 'provider_unknown')),
+  checked_at TIMESTAMPTZ NOT NULL,
+  window_start TIMESTAMPTZ NOT NULL,
+  window_end TIMESTAMPTZ NOT NULL,
+  pages_scanned INTEGER NOT NULL CHECK (pages_scanned > 0 AND pages_scanned <= 256),
+  transactions_scanned INTEGER NOT NULL CHECK (transactions_scanned >= 0),
+  provider_request_ids TEXT[] NOT NULL,
+  catalog_request_id TEXT NOT NULL,
+  contract_fingerprint TEXT NOT NULL,
+  evidence_hash TEXT NOT NULL,
+  audit_reference TEXT NOT NULL,
+  recorded_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+  PRIMARY KEY (request_id, scan_ordinal),
+  CONSTRAINT credit_pack_reconciliation_scans_window_check
+    CHECK (window_start <= window_end AND window_end >= checked_at),
+  CONSTRAINT credit_pack_reconciliation_scans_count_check
+    CHECK (
+      transactions_scanned::bigint <= pages_scanned::bigint * 30
+      AND cardinality(provider_request_ids) = pages_scanned
+    ),
+  CONSTRAINT credit_pack_reconciliation_scans_catalog_request_id_check
+    CHECK (
+      catalog_request_id = btrim(catalog_request_id)
+      AND catalog_request_id ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
+    ),
+  CONSTRAINT credit_pack_reconciliation_scans_contract_fingerprint_check
+    CHECK (contract_fingerprint ~ '^[0-9a-f]{64}$'),
+  CONSTRAINT credit_pack_reconciliation_scans_evidence_hash_check
+    CHECK (evidence_hash ~ '^[0-9a-f]{64}$'),
+  CONSTRAINT credit_pack_reconciliation_scans_audit_reference_check
+    CHECK (
+      btrim(audit_reference) <> ''
+      AND length(audit_reference) <= 255
+    )
+);
+
+CREATE INDEX credit_pack_reconciliation_scans_checked_idx
+  ON public.credit_pack_purchase_reconciliation_scans (checked_at DESC);
+
+ALTER TABLE public.credit_pack_purchase_reconciliation_scans
+  ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON TABLE public.credit_pack_purchase_reconciliation_scans
+  FROM PUBLIC, anon, authenticated, service_role;
+GRANT SELECT ON TABLE public.credit_pack_purchase_reconciliation_scans
+  TO service_role;
+
+CREATE OR REPLACE FUNCTION public.reject_payment_reconciliation_scan_mutation()
+RETURNS trigger
+LANGUAGE plpgsql
+SET search_path = public, pg_temp
+AS $function$
+BEGIN
+  RAISE EXCEPTION 'PAYMENT_RECONCILIATION_SCAN_IMMUTABLE'
+    USING ERRCODE = '55000';
+END;
+$function$;
+
+CREATE TRIGGER credit_pack_reconciliation_scans_immutable
+BEFORE UPDATE OR DELETE ON public.credit_pack_purchase_reconciliation_scans
+FOR EACH ROW
+EXECUTE FUNCTION public.reject_payment_reconciliation_scan_mutation();
+
+REVOKE ALL ON FUNCTION public.reject_payment_reconciliation_scan_mutation()
+  FROM PUBLIC, anon, authenticated, service_role;
+
 ALTER TABLE public.credit_pack_payment_receipts
   ADD CONSTRAINT credit_pack_payment_receipts_request_id_fkey
   FOREIGN KEY (request_id)
@@ -589,11 +674,10 @@ ALTER TABLE public.credit_pack_payment_receipts
 
 -- One unresolved provider mutation per account. This is the durable reload and
 -- double-click guard; a provider_unknown request is reconciled, never retried.
--- A definitive no-match reconciliation deliberately remains provider_unknown
--- and therefore stays inside this index until an exact signed completion or a
--- separate, provider-terminal operator procedure resolves it. Withheld is
--- intentionally excluded because the claim-time review recheck blocks a newer
--- request before any provider mutation.
+-- A first no-match scan deliberately leaves the request open. Only a second,
+-- independent scan at least 24 hours later can CAS the request to failed, which
+-- is excluded from this index. Withheld remains excluded because the claim-time
+-- review recheck blocks a newer request before any provider mutation.
 CREATE UNIQUE INDEX credit_pack_purchase_requests_one_open_per_user_idx
   ON public.credit_pack_purchase_requests (authorized_user_id)
   WHERE status IN (
@@ -1695,6 +1779,20 @@ BEGIN
       'status', v_request.status
     );
   END IF;
+  IF v_request.status IS DISTINCT FROM v_status
+     AND EXISTS (
+       SELECT 1
+         FROM public.credit_pack_purchase_reconciliation_scans
+        WHERE request_id = p_request_id
+          AND scan_ordinal = 1
+     ) THEN
+    RETURN jsonb_build_object(
+      'applied', false,
+      'reason', 'reconciliation_scan_in_progress',
+      'requestId', v_request.request_id,
+      'status', v_request.status
+    );
+  END IF;
   IF v_request.status NOT IN ('charging', 'submitted') THEN
     RAISE EXCEPTION 'CREDIT_PACK_PURCHASE_REQUEST_STATE_INVALID'
       USING ERRCODE = 'P0001';
@@ -1718,17 +1816,19 @@ BEGIN
 END;
 $function$;
 
-CREATE OR REPLACE FUNCTION public.reconcile_credit_pack_purchase_no_match(
+CREATE OR REPLACE FUNCTION public.record_credit_pack_purchase_no_match_scan(
   p_request_id uuid,
   p_user_id uuid,
   p_expected_status text,
-  p_evidence_result text,
   p_checked_at timestamptz,
   p_window_start timestamptz,
   p_window_end timestamptz,
   p_pages_scanned integer,
   p_transactions_scanned integer,
   p_provider_request_ids text[],
+  p_catalog_request_id text,
+  p_contract_fingerprint text,
+  p_evidence_hash text,
   p_audit_reference text
 )
 RETURNS jsonb
@@ -1738,22 +1838,24 @@ SET search_path = public, pg_temp
 AS $function$
 DECLARE
   v_request public.credit_pack_purchase_requests%ROWTYPE;
-  v_expected_status text := lower(btrim(p_expected_status));
-  v_evidence_result text := lower(btrim(p_evidence_result));
+  v_existing public.credit_pack_purchase_reconciliation_scans%ROWTYPE;
+  v_expected_status text := lower(btrim(COALESCE(p_expected_status, '')));
+  v_catalog_request_id text := btrim(COALESCE(p_catalog_request_id, ''));
+  v_contract_fingerprint text :=
+    lower(btrim(COALESCE(p_contract_fingerprint, '')));
+  v_evidence_hash text := lower(btrim(COALESCE(p_evidence_hash, '')));
   v_audit_reference text := NULLIF(btrim(p_audit_reference), '');
   v_provider_request_id text;
   v_seen_provider_request_ids text[] := ARRAY[]::text[];
+  v_recorded_at timestamptz;
   v_now timestamptz := clock_timestamp();
 BEGIN
   IF p_request_id IS NULL OR p_user_id IS NULL
-     OR p_expected_status IS NULL
      OR v_expected_status NOT IN (
        'charging',
        'submitted',
        'provider_unknown'
      )
-     OR p_evidence_result IS NULL
-     OR v_evidence_result <> 'definitive_no_match'
      OR p_checked_at IS NULL
      OR p_window_start IS NULL
      OR p_window_end IS NULL
@@ -1768,7 +1870,12 @@ BEGIN
           p_pages_scanned
      OR v_audit_reference IS NULL
      OR length(v_audit_reference) > 255
-     OR p_checked_at < v_now - interval '15 minutes'
+     OR v_catalog_request_id IS DISTINCT FROM lower(v_catalog_request_id)
+     OR v_catalog_request_id !~*
+          '^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
+     OR v_contract_fingerprint !~ '^[0-9a-f]{64}$'
+     OR v_evidence_hash !~ '^[0-9a-f]{64}$'
+     OR p_checked_at < v_now - interval '2 minutes'
      OR p_checked_at > v_now
      OR p_window_end > v_now THEN
     RAISE EXCEPTION 'INVALID_CREDIT_PACK_RECONCILIATION_EVIDENCE'
@@ -1781,7 +1888,13 @@ BEGIN
          OR btrim(v_provider_request_id) = ''
          OR v_provider_request_id IS DISTINCT FROM btrim(v_provider_request_id)
          OR length(v_provider_request_id) > 255
+         OR v_provider_request_id
+              IS DISTINCT FROM lower(v_provider_request_id)
          OR v_provider_request_id !~* '^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$' THEN
+        RAISE EXCEPTION 'INVALID_CREDIT_PACK_RECONCILIATION_EVIDENCE'
+          USING ERRCODE = '22023';
+      END IF;
+      IF v_provider_request_id = v_catalog_request_id THEN
         RAISE EXCEPTION 'INVALID_CREDIT_PACK_RECONCILIATION_EVIDENCE'
           USING ERRCODE = '22023';
       END IF;
@@ -1810,32 +1923,38 @@ BEGIN
       USING ERRCODE = 'P0001';
   END IF;
 
-  -- Exact evidence replay is idempotent even if a later signed webhook has
-  -- already moved the quarantined failed row to withheld/refunded/chargeback.
-  IF v_request.reconciliation_decision IS NOT NULL THEN
-    IF v_request.reconciliation_decision IS NOT DISTINCT FROM v_evidence_result
-       AND v_request.reconciliation_previous_status
-            IS NOT DISTINCT FROM v_expected_status
-       AND v_request.reconciliation_checked_at
-            IS NOT DISTINCT FROM p_checked_at
-       AND v_request.reconciliation_window_start
-            IS NOT DISTINCT FROM p_window_start
-       AND v_request.reconciliation_window_end
-            IS NOT DISTINCT FROM p_window_end
-       AND v_request.reconciliation_pages_scanned
-            IS NOT DISTINCT FROM p_pages_scanned
-       AND v_request.reconciliation_transactions_scanned
+  SELECT *
+    INTO v_existing
+    FROM public.credit_pack_purchase_reconciliation_scans
+   WHERE request_id = p_request_id
+     AND scan_ordinal = 1;
+
+  IF FOUND THEN
+    IF v_existing.authorized_user_id IS NOT DISTINCT FROM p_user_id
+       AND v_existing.expected_status IS NOT DISTINCT FROM v_expected_status
+       AND v_existing.checked_at IS NOT DISTINCT FROM p_checked_at
+       AND v_existing.window_start IS NOT DISTINCT FROM p_window_start
+       AND v_existing.window_end IS NOT DISTINCT FROM p_window_end
+       AND v_existing.pages_scanned IS NOT DISTINCT FROM p_pages_scanned
+       AND v_existing.transactions_scanned
             IS NOT DISTINCT FROM p_transactions_scanned
-       AND v_request.reconciliation_provider_request_ids
+       AND v_existing.provider_request_ids
             IS NOT DISTINCT FROM p_provider_request_ids
-       AND v_request.reconciliation_audit_reference
+       AND v_existing.catalog_request_id
+            IS NOT DISTINCT FROM v_catalog_request_id
+       AND v_existing.contract_fingerprint
+            IS NOT DISTINCT FROM v_contract_fingerprint
+       AND v_existing.evidence_hash IS NOT DISTINCT FROM v_evidence_hash
+       AND v_existing.audit_reference
             IS NOT DISTINCT FROM v_audit_reference THEN
       RETURN jsonb_build_object(
         'applied', false,
-        'reason', 'reconciliation_duplicate',
+        'reason', 'reconciliation_scan_duplicate',
         'requestId', v_request.request_id,
         'status', v_request.status,
-        'reconciliationDecision', v_request.reconciliation_decision
+        'scanOrdinal', 1,
+        'firstCheckedAt', v_existing.checked_at,
+        'firstRecordedAt', v_existing.recorded_at
       );
     END IF;
 
@@ -1878,8 +1997,281 @@ BEGIN
     );
   END IF;
 
+  INSERT INTO public.credit_pack_purchase_reconciliation_scans (
+    request_id,
+    authorized_user_id,
+    scan_ordinal,
+    expected_status,
+    checked_at,
+    window_start,
+    window_end,
+    pages_scanned,
+    transactions_scanned,
+    provider_request_ids,
+    catalog_request_id,
+    contract_fingerprint,
+    evidence_hash,
+    audit_reference
+  ) VALUES (
+    p_request_id,
+    p_user_id,
+    1,
+    v_expected_status,
+    p_checked_at,
+    p_window_start,
+    p_window_end,
+    p_pages_scanned,
+    p_transactions_scanned,
+    p_provider_request_ids,
+    v_catalog_request_id,
+    v_contract_fingerprint,
+    v_evidence_hash,
+    v_audit_reference
+  )
+  RETURNING recorded_at INTO v_recorded_at;
+
+  RETURN jsonb_build_object(
+    'applied', true,
+    'reason', 'reconciliation_scan_recorded',
+    'requestId', p_request_id,
+    'status', v_request.status,
+    'scanOrdinal', 1,
+    'firstCheckedAt', p_checked_at,
+    'firstRecordedAt', v_recorded_at
+  );
+END;
+$function$;
+
+CREATE OR REPLACE FUNCTION public.finalize_credit_pack_purchase_no_match(
+  p_request_id uuid,
+  p_user_id uuid,
+  p_expected_status text,
+  p_checked_at timestamptz,
+  p_window_start timestamptz,
+  p_window_end timestamptz,
+  p_pages_scanned integer,
+  p_transactions_scanned integer,
+  p_provider_request_ids text[],
+  p_catalog_request_id text,
+  p_contract_fingerprint text,
+  p_evidence_hash text,
+  p_audit_reference text
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $function$
+DECLARE
+  v_request public.credit_pack_purchase_requests%ROWTYPE;
+  v_first public.credit_pack_purchase_reconciliation_scans%ROWTYPE;
+  v_existing public.credit_pack_purchase_reconciliation_scans%ROWTYPE;
+  v_expected_status text := lower(btrim(COALESCE(p_expected_status, '')));
+  v_catalog_request_id text := btrim(COALESCE(p_catalog_request_id, ''));
+  v_contract_fingerprint text :=
+    lower(btrim(COALESCE(p_contract_fingerprint, '')));
+  v_evidence_hash text := lower(btrim(COALESCE(p_evidence_hash, '')));
+  v_audit_reference text := NULLIF(btrim(p_audit_reference), '');
+  v_provider_request_id text;
+  v_seen_provider_request_ids text[] := ARRAY[]::text[];
+  v_now timestamptz := clock_timestamp();
+BEGIN
+  IF p_request_id IS NULL OR p_user_id IS NULL
+     OR v_expected_status NOT IN (
+       'charging',
+       'submitted',
+       'provider_unknown'
+     )
+     OR p_checked_at IS NULL
+     OR p_window_start IS NULL
+     OR p_window_end IS NULL
+     OR p_window_start > p_window_end
+     OR p_window_end < p_checked_at
+     OR p_pages_scanned IS NULL
+     OR p_pages_scanned <= 0
+     OR p_pages_scanned > 256
+     OR p_transactions_scanned IS NULL OR p_transactions_scanned < 0
+     OR p_transactions_scanned::bigint > p_pages_scanned::bigint * 30
+     OR COALESCE(cardinality(p_provider_request_ids), 0) <>
+          p_pages_scanned
+     OR v_audit_reference IS NULL
+     OR length(v_audit_reference) > 255
+     OR v_catalog_request_id IS DISTINCT FROM lower(v_catalog_request_id)
+     OR v_catalog_request_id !~*
+          '^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
+     OR v_contract_fingerprint !~ '^[0-9a-f]{64}$'
+     OR v_evidence_hash !~ '^[0-9a-f]{64}$'
+     OR p_checked_at < v_now - interval '2 minutes'
+     OR p_checked_at > v_now
+     OR p_window_end > v_now THEN
+    RAISE EXCEPTION 'INVALID_CREDIT_PACK_RECONCILIATION_EVIDENCE'
+      USING ERRCODE = '22023';
+  END IF;
+
+  FOREACH v_provider_request_id IN ARRAY p_provider_request_ids LOOP
+    IF v_provider_request_id IS NULL
+       OR btrim(v_provider_request_id) = ''
+       OR v_provider_request_id IS DISTINCT FROM btrim(v_provider_request_id)
+       OR length(v_provider_request_id) > 255
+       OR v_provider_request_id
+            IS DISTINCT FROM lower(v_provider_request_id)
+       OR v_provider_request_id !~*
+            '^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
+       OR v_provider_request_id = v_catalog_request_id
+       OR v_provider_request_id = ANY(v_seen_provider_request_ids) THEN
+      RAISE EXCEPTION 'INVALID_CREDIT_PACK_RECONCILIATION_EVIDENCE'
+        USING ERRCODE = '22023';
+    END IF;
+    v_seen_provider_request_ids :=
+      array_append(v_seen_provider_request_ids, v_provider_request_id);
+  END LOOP;
+
+  PERFORM pg_advisory_xact_lock(
+    hashtextextended('credit_pack_purchase_user:' || p_user_id::text, 0)
+  );
+
+  SELECT *
+    INTO v_request
+    FROM public.credit_pack_purchase_requests
+   WHERE request_id = p_request_id
+   FOR UPDATE;
+
+  IF NOT FOUND
+     OR v_request.authorized_user_id IS DISTINCT FROM p_user_id THEN
+    RAISE EXCEPTION 'CREDIT_PACK_PURCHASE_REQUEST_NOT_FOUND'
+      USING ERRCODE = 'P0001';
+  END IF;
+
+  SELECT *
+    INTO v_first
+    FROM public.credit_pack_purchase_reconciliation_scans
+   WHERE request_id = p_request_id
+     AND scan_ordinal = 1;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'CREDIT_PACK_RECONCILIATION_FIRST_SCAN_REQUIRED'
+      USING ERRCODE = 'P0001';
+  END IF;
+
+  SELECT *
+    INTO v_existing
+    FROM public.credit_pack_purchase_reconciliation_scans
+   WHERE request_id = p_request_id
+     AND scan_ordinal = 2;
+  IF FOUND THEN
+    IF v_existing.authorized_user_id IS NOT DISTINCT FROM p_user_id
+       AND v_existing.expected_status IS NOT DISTINCT FROM v_expected_status
+       AND v_existing.checked_at IS NOT DISTINCT FROM p_checked_at
+       AND v_existing.window_start IS NOT DISTINCT FROM p_window_start
+       AND v_existing.window_end IS NOT DISTINCT FROM p_window_end
+       AND v_existing.pages_scanned IS NOT DISTINCT FROM p_pages_scanned
+       AND v_existing.transactions_scanned
+            IS NOT DISTINCT FROM p_transactions_scanned
+       AND v_existing.provider_request_ids
+            IS NOT DISTINCT FROM p_provider_request_ids
+       AND v_existing.catalog_request_id
+            IS NOT DISTINCT FROM v_catalog_request_id
+       AND v_existing.contract_fingerprint
+            IS NOT DISTINCT FROM v_contract_fingerprint
+       AND v_existing.evidence_hash IS NOT DISTINCT FROM v_evidence_hash
+       AND v_existing.audit_reference
+            IS NOT DISTINCT FROM v_audit_reference
+       AND v_request.reconciliation_decision = 'definitive_no_match'
+       AND v_request.status IN ('failed', 'withheld', 'refunded', 'chargeback')
+       THEN
+      RETURN jsonb_build_object(
+        'applied', false,
+        'reason', 'reconciliation_duplicate',
+        'requestId', v_request.request_id,
+        'status', v_request.status,
+        'reviewRequired', v_request.review_required,
+        'reconciliationDecision', v_request.reconciliation_decision,
+        'firstCheckedAt', v_first.checked_at,
+        'checkedAt', v_existing.checked_at,
+        'closedAt', v_request.reconciliation_closed_at
+      );
+    END IF;
+
+    RAISE EXCEPTION 'CREDIT_PACK_RECONCILIATION_EVIDENCE_CONFLICT'
+      USING ERRCODE = '23505';
+  END IF;
+
+  IF v_request.status NOT IN ('charging', 'submitted', 'provider_unknown') THEN
+    RETURN jsonb_build_object(
+      'applied', false,
+      'reason', 'reconciliation_not_allowed',
+      'requestId', v_request.request_id,
+      'status', v_request.status
+    );
+  END IF;
+  IF v_request.status IS DISTINCT FROM v_expected_status THEN
+    RETURN jsonb_build_object(
+      'applied', false,
+      'reason', 'reconciliation_status_mismatch',
+      'requestId', v_request.request_id,
+      'status', v_request.status
+    );
+  END IF;
+  IF p_window_start > v_request.authorized_at
+     OR p_checked_at <
+          GREATEST(v_first.checked_at, v_first.recorded_at) +
+            interval '24 hours'
+     OR v_now <
+          GREATEST(v_first.checked_at, v_first.recorded_at) +
+            interval '24 hours' THEN
+    RETURN jsonb_build_object(
+      'applied', false,
+      'reason', 'reconciliation_second_scan_delay_active',
+      'requestId', v_request.request_id,
+      'status', v_request.status,
+      'earliestReconciliationAt',
+        GREATEST(v_first.checked_at, v_first.recorded_at) +
+          interval '24 hours'
+    );
+  END IF;
+  IF v_first.expected_status IS DISTINCT FROM v_expected_status
+     OR v_first.contract_fingerprint IS DISTINCT FROM v_contract_fingerprint
+     OR v_first.catalog_request_id = v_catalog_request_id
+     OR v_first.catalog_request_id = ANY(p_provider_request_ids)
+     OR v_catalog_request_id = ANY(v_first.provider_request_ids)
+     OR v_first.provider_request_ids && p_provider_request_ids THEN
+    RAISE EXCEPTION 'CREDIT_PACK_RECONCILIATION_SCANS_NOT_INDEPENDENT'
+      USING ERRCODE = '22023';
+  END IF;
+
+  INSERT INTO public.credit_pack_purchase_reconciliation_scans (
+    request_id,
+    authorized_user_id,
+    scan_ordinal,
+    expected_status,
+    checked_at,
+    window_start,
+    window_end,
+    pages_scanned,
+    transactions_scanned,
+    provider_request_ids,
+    catalog_request_id,
+    contract_fingerprint,
+    evidence_hash,
+    audit_reference
+  ) VALUES (
+    p_request_id,
+    p_user_id,
+    2,
+    v_expected_status,
+    p_checked_at,
+    p_window_start,
+    p_window_end,
+    p_pages_scanned,
+    p_transactions_scanned,
+    p_provider_request_ids,
+    v_catalog_request_id,
+    v_contract_fingerprint,
+    v_evidence_hash,
+    v_audit_reference
+  );
+
   UPDATE public.credit_pack_purchase_requests
-     SET reconciliation_decision = v_evidence_result,
+     SET reconciliation_decision = 'definitive_no_match',
          reconciliation_previous_status = v_expected_status,
          reconciliation_checked_at = p_checked_at,
          reconciliation_window_start = p_window_start,
@@ -1889,9 +2281,9 @@ BEGIN
          reconciliation_provider_request_ids = p_provider_request_ids,
          reconciliation_audit_reference = v_audit_reference,
          reconciliation_closed_at = v_now,
-         status = 'provider_unknown',
+         status = 'failed',
          review_required = true,
-         provider_error_code = 'reconciled_no_match_review_locked'
+         provider_error_code = 'reconciled_definitive_no_match'
    WHERE request_id = p_request_id
      AND status = v_expected_status
      AND reconciliation_decision IS NULL;
@@ -1905,9 +2297,10 @@ BEGIN
     'applied', true,
     'reason', 'request_reconciled_no_match',
     'requestId', p_request_id,
-    'status', 'provider_unknown',
+    'status', 'failed',
     'reviewRequired', true,
-    'reconciliationDecision', v_evidence_result,
+    'reconciliationDecision', 'definitive_no_match',
+    'firstCheckedAt', v_first.checked_at,
     'checkedAt', p_checked_at,
     'closedAt', v_now
   );
@@ -1965,7 +2358,7 @@ DECLARE
   v_has_preceding_adjustment boolean := false;
   v_is_primary_transaction boolean := true;
   v_account_deleted boolean := false;
-  v_reconciled_no_match_recovery boolean := false;
+  v_reconciled_no_match_close boolean := false;
 BEGIN
   IF p_request_id IS NULL
      OR p_transaction_id IS NULL OR btrim(p_transaction_id) = ''
@@ -2089,13 +2482,11 @@ BEGIN
       USING ERRCODE = '22023';
   END IF;
 
-  -- A complete provider scan and this signed completion can race because
-  -- Paddle and PostgreSQL cannot share one transaction. Only the exact
-  -- review-locked no-match state (plus the legacy failed representation) may
-  -- be superseded, and every normal identity, amount, timing, history,
-  -- lifecycle, adjustment, and idempotency check below still applies before a
-  -- credit lot can be minted.
-  v_reconciled_no_match_recovery :=
+  -- A late signed completion can race with the final provider scan because
+  -- Paddle and PostgreSQL cannot share one transaction. Once both scans have
+  -- closed the request, the payment is recorded for refund review but can
+  -- never mint a credit lot.
+  v_reconciled_no_match_close :=
     v_request.confirmation_version >= 1
     AND v_request.reconciliation_decision = 'definitive_no_match'
     AND v_request.reconciliation_previous_status IN (
@@ -2111,19 +2502,15 @@ BEGIN
     AND v_request.reconciliation_provider_request_ids IS NOT NULL
     AND v_request.reconciliation_audit_reference IS NOT NULL
     AND v_request.reconciliation_closed_at IS NOT NULL
-    AND (
-      (
-        v_request.status = 'provider_unknown'
-        AND v_request.review_required = true
-        AND v_request.provider_error_code =
-          'reconciled_no_match_review_locked'
-      )
-      OR
-      (
-        v_request.status = 'failed'
-        AND v_request.provider_error_code =
-          'reconciled_definitive_no_match'
-      )
+    AND v_request.status = 'failed'
+    AND v_request.review_required = true
+    AND v_request.provider_error_code =
+      'reconciled_definitive_no_match'
+    AND EXISTS (
+      SELECT 1
+        FROM public.credit_pack_purchase_reconciliation_scans s
+       WHERE s.request_id = v_request.request_id
+         AND s.scan_ordinal = 2
     );
 
   SELECT *
@@ -2189,8 +2576,10 @@ BEGIN
 
   IF v_request.status IN ('previewing', 'created') THEN
     v_withheld_reason := 'request_not_claimed';
+  ELSIF v_reconciled_no_match_close THEN
+    v_withheld_reason := 'late_payment_after_reconciled_no_match';
   ELSIF v_request.status = 'failed'
-        AND NOT v_reconciled_no_match_recovery THEN
+        THEN
     v_withheld_reason := 'request_previously_failed';
   ELSIF v_request.approved_subtotal IS DISTINCT FROM p_actual_subtotal
      OR v_request.approved_discount IS DISTINCT FROM p_actual_discount
@@ -2749,7 +3138,7 @@ BEGIN
   )
   OR (
     v_request.status = 'failed'
-    AND NOT v_reconciled_no_match_recovery
+    AND NOT v_reconciled_no_match_close
   ) THEN
     RAISE EXCEPTION 'CREDIT_PACK_PURCHASE_REQUEST_TERMINAL'
       USING ERRCODE = 'P0001';
@@ -2807,17 +3196,6 @@ BEGIN
    WHERE request_id = p_request_id
      AND (
        status IN ('charging', 'submitted', 'provider_unknown')
-       OR (
-         status = 'failed'
-         AND reconciliation_decision = 'definitive_no_match'
-         AND reconciliation_previous_status IN (
-           'charging',
-           'submitted',
-           'provider_unknown'
-         )
-         AND reconciliation_closed_at IS NOT NULL
-         AND provider_error_code = 'reconciled_definitive_no_match'
-       )
      );
 
   IF NOT FOUND THEN
@@ -2831,7 +3209,7 @@ BEGIN
     'status', 'completed',
     'entitlementGranted', true,
     'reviewRequired', false,
-    'reconciliationSuperseded', v_reconciled_no_match_recovery
+    'reconciliationSuperseded', false
   );
 END;
 $function$;
@@ -3341,9 +3719,13 @@ REVOKE ALL ON FUNCTION public.expire_credit_pack_purchase_request(
 REVOKE ALL ON FUNCTION public.transition_credit_pack_purchase_request(
   uuid, uuid, text, text
 ) FROM PUBLIC, anon, authenticated, service_role;
-REVOKE ALL ON FUNCTION public.reconcile_credit_pack_purchase_no_match(
-  uuid, uuid, text, text, timestamptz, timestamptz, timestamptz,
-  integer, integer, text[], text
+REVOKE ALL ON FUNCTION public.record_credit_pack_purchase_no_match_scan(
+  uuid, uuid, text, timestamptz, timestamptz, timestamptz,
+  integer, integer, text[], text, text, text, text
+) FROM PUBLIC, anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION public.finalize_credit_pack_purchase_no_match(
+  uuid, uuid, text, timestamptz, timestamptz, timestamptz,
+  integer, integer, text[], text, text, text, text
 ) FROM PUBLIC, anon, authenticated, service_role;
 REVOKE ALL ON FUNCTION public.apply_credit_pack_subscription_charge(
   uuid, text, text, text, text, text, text,
@@ -3377,9 +3759,13 @@ GRANT EXECUTE ON FUNCTION public.expire_credit_pack_purchase_request(
 GRANT EXECUTE ON FUNCTION public.transition_credit_pack_purchase_request(
   uuid, uuid, text, text
 ) TO service_role;
-GRANT EXECUTE ON FUNCTION public.reconcile_credit_pack_purchase_no_match(
-  uuid, uuid, text, text, timestamptz, timestamptz, timestamptz,
-  integer, integer, text[], text
+GRANT EXECUTE ON FUNCTION public.record_credit_pack_purchase_no_match_scan(
+  uuid, uuid, text, timestamptz, timestamptz, timestamptz,
+  integer, integer, text[], text, text, text, text
+) TO service_role;
+GRANT EXECUTE ON FUNCTION public.finalize_credit_pack_purchase_no_match(
+  uuid, uuid, text, timestamptz, timestamptz, timestamptz,
+  integer, integer, text[], text, text, text, text
 ) TO service_role;
 GRANT EXECUTE ON FUNCTION public.apply_credit_pack_subscription_charge(
   uuid, text, text, text, text, text, text,

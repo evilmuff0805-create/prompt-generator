@@ -7,7 +7,8 @@ const {
   handleSubscriptionCheckout,
   createSubscriptionCheckoutAttempt,
   bindSubscriptionCheckoutTransaction,
-  transitionSubscriptionCheckoutAttempt
+  transitionSubscriptionCheckoutAttempt,
+  markSubscriptionCheckoutProviderMutationStarted
 } = require('../../routes/payment');
 
 const ATTEMPT_ID = '123e4567-e89b-42d3-a456-426614174000';
@@ -109,9 +110,17 @@ function makeAdminClient({
     reason: 'attempt_transitioned'
   },
   transitionError = null,
+  chargingResult = {
+    applied: true,
+    reason: 'provider_mutation_started',
+    attemptId: ATTEMPT_ID,
+    status: 'charging',
+    providerMutationStartedAt: '2026-08-11T00:00:00.000Z'
+  },
+  chargingError = null,
   events = []
 } = {}) {
-  const rpc = jest.fn(async (name) => {
+  const rpc = jest.fn(async (name, args) => {
     events.push(`rpc:${name}`);
     if (name === 'create_subscription_checkout_attempt') {
       return { data: createResult, error: createError };
@@ -120,6 +129,9 @@ function makeAdminClient({
       return { data: bindResult, error: bindError };
     }
     if (name === 'transition_subscription_checkout_attempt') {
+      if (args?.p_status === 'charging') {
+        return { data: chargingResult, error: chargingError };
+      }
       return { data: transitionResult, error: transitionError };
     }
     throw new Error(`Unexpected RPC: ${name}`);
@@ -338,6 +350,7 @@ describe('authenticated server-created subscription checkout', () => {
   test('durably creates an attempt before exactly one Paddle transaction, then binds it', async () => {
     const events = [];
     const adminClient = makeAdminClient({ events });
+    const timeoutSpy = jest.spyOn(AbortSignal, 'timeout');
     global.fetch.mockImplementation(async () => {
       events.push('paddle:create_transaction');
       return jsonResponse(true, 201, { data: validTransaction() });
@@ -354,6 +367,7 @@ describe('authenticated server-created subscription checkout', () => {
 
     expect(events).toEqual([
       'rpc:create_subscription_checkout_attempt',
+      'rpc:transition_subscription_checkout_attempt',
       'paddle:create_transaction',
       'rpc:bind_subscription_checkout_transaction'
     ]);
@@ -362,6 +376,10 @@ describe('authenticated server-created subscription checkout', () => {
     const request = global.fetch.mock.calls[0][1];
     expect(request.method).toBe('POST');
     expect(request.headers.Authorization).toBe('Bearer test-api-key');
+    expect(timeoutSpy).toHaveBeenCalledTimes(1);
+    expect(timeoutSpy).toHaveBeenCalledWith(15000);
+    expect(request.signal).toBeInstanceOf(AbortSignal);
+    timeoutSpy.mockRestore();
     expect(JSON.parse(request.body)).toEqual({
       items: [{ price_id: PRO_CONTRACT.priceId, quantity: 1 }],
       collection_mode: 'automatic',
@@ -406,7 +424,7 @@ describe('authenticated server-created subscription checkout', () => {
     });
   });
 
-  test.each(['created', 'provider_unknown'])(
+  test.each(['created', 'charging', 'provider_unknown'])(
     'returns an existing same-plan %s attempt as pending without charging again',
     async (status) => {
       const existingAttemptId = '223e4567-e89b-42d3-a456-426614174000';
@@ -505,6 +523,108 @@ describe('authenticated server-created subscription checkout', () => {
     expect(global.fetch).not.toHaveBeenCalled();
   });
 
+  test('persists charging before the Paddle provider mutation', async () => {
+    const events = [];
+    const adminClient = makeAdminClient({ events });
+    global.fetch.mockImplementation(async () => {
+      events.push('paddle:create_transaction');
+      return jsonResponse(true, 201, { data: validTransaction() });
+    });
+    const res = makeResponse();
+
+    await handleSubscriptionCheckout(makeRequest(adminClient), res);
+
+    expect(events.indexOf('rpc:transition_subscription_checkout_attempt'))
+      .toBeLessThan(events.indexOf('paddle:create_transaction'));
+    expect(adminClient.rpc).toHaveBeenNthCalledWith(
+      2,
+      'transition_subscription_checkout_attempt',
+      {
+        p_attempt_id: ATTEMPT_ID,
+        p_user_id: USER_ID,
+        p_status: 'charging',
+        p_provider_error_code: null
+      }
+    );
+  });
+
+  test.each([
+    ['RPC error', {
+      chargingError: { message: 'database timeout after commit' }
+    }],
+    ['invalid ambiguous result', {
+      chargingResult: {
+        applied: true,
+        reason: 'provider_mutation_started',
+        status: 'charging',
+        providerMutationStartedAt: null
+      }
+    }]
+  ])('%s before provider mutation returns 503 without calling Paddle', async (
+    _label,
+    adminOptions
+  ) => {
+    const adminClient = makeAdminClient(adminOptions);
+    const res = makeResponse();
+
+    await handleSubscriptionCheckout(makeRequest(adminClient), res);
+
+    expect(global.fetch).not.toHaveBeenCalled();
+    expect(adminClient.rpc).toHaveBeenCalledTimes(2);
+    expect(res.statusCode).toBe(503);
+    expect(res.body).toEqual({
+      success: false,
+      checkoutAttemptId: ATTEMPT_ID,
+      status: 'charging',
+      error: 'Checkout state could not be confirmed.',
+      code: 'CHECKOUT_RECOVERY_REQUIRED'
+    });
+  });
+
+  test('accepts an idempotent charging claim with a durable timestamp', async () => {
+    const adminClient = makeAdminClient({
+      chargingResult: {
+        applied: false,
+        reason: 'duplicate',
+        status: 'charging',
+        providerMutationStartedAt: '2026-08-11T00:00:00.000Z'
+      }
+    });
+
+    await expect(markSubscriptionCheckoutProviderMutationStarted(
+      adminClient,
+      { attemptId: ATTEMPT_ID, userId: USER_ID }
+    )).resolves.toMatchObject({
+      applied: false,
+      reason: 'duplicate',
+      status: 'charging'
+    });
+  });
+
+  test('a duplicate charging claim never sends a second Paddle mutation', async () => {
+    const adminClient = makeAdminClient({
+      chargingResult: {
+        applied: false,
+        reason: 'duplicate',
+        status: 'charging',
+        providerMutationStartedAt: '2026-08-11T00:00:00.000Z'
+      }
+    });
+    const res = makeResponse();
+
+    await handleSubscriptionCheckout(makeRequest(adminClient), res);
+
+    expect(global.fetch).not.toHaveBeenCalled();
+    expect(adminClient.rpc).toHaveBeenCalledTimes(2);
+    expect(res.statusCode).toBe(202);
+    expect(res.body).toEqual({
+      success: true,
+      checkoutAttemptId: ATTEMPT_ID,
+      status: 'charging',
+      code: 'CHECKOUT_CONFIRMATION_PENDING'
+    });
+  });
+
   test('a network-unknown outcome is persisted and the transaction is never retried', async () => {
     const adminClient = makeAdminClient();
     global.fetch.mockRejectedValue(new Error('socket closed after request'));
@@ -531,6 +651,65 @@ describe('authenticated server-created subscription checkout', () => {
     });
     expect(res.body).not.toHaveProperty('transactionId');
   });
+
+  test.each(['TimeoutError', 'AbortError'])(
+    'a provider %s is persisted as timeout and a retry never mutates Paddle again',
+    async (errorName) => {
+      const timeoutError = new Error('Paddle request exceeded its bounded deadline');
+      timeoutError.name = errorName;
+      global.fetch.mockRejectedValueOnce(timeoutError);
+      const firstAdminClient = makeAdminClient();
+      const firstResponse = makeResponse();
+
+      await handleSubscriptionCheckout(
+        makeRequest(firstAdminClient),
+        firstResponse
+      );
+
+      expect(global.fetch).toHaveBeenCalledTimes(1);
+      expect(firstAdminClient.rpc).toHaveBeenLastCalledWith(
+        'transition_subscription_checkout_attempt',
+        {
+          p_attempt_id: ATTEMPT_ID,
+          p_user_id: USER_ID,
+          p_status: 'provider_unknown',
+          p_provider_error_code: 'timeout'
+        }
+      );
+      expect(firstResponse.statusCode).toBe(202);
+      expect(firstResponse.body).toEqual({
+        success: true,
+        checkoutAttemptId: ATTEMPT_ID,
+        status: 'provider_unknown',
+        code: 'CHECKOUT_CONFIRMATION_PENDING'
+      });
+
+      const retryAdminClient = makeAdminClient({
+        createResult: createdAttempt({
+          applied: false,
+          reason: 'duplicate_pending',
+          targetPlan: 'pro',
+          status: 'provider_unknown'
+        })
+      });
+      const retryResponse = makeResponse();
+
+      await handleSubscriptionCheckout(
+        makeRequest(retryAdminClient),
+        retryResponse
+      );
+
+      expect(global.fetch).toHaveBeenCalledTimes(1);
+      expect(retryAdminClient.rpc).toHaveBeenCalledTimes(1);
+      expect(retryResponse.statusCode).toBe(202);
+      expect(retryResponse.body).toEqual({
+        success: true,
+        checkoutAttemptId: ATTEMPT_ID,
+        status: 'provider_unknown',
+        code: 'CHECKOUT_CONFIRMATION_PENDING'
+      });
+    }
+  );
 
   test.each([
     ['provider 4xx', 422, 'failed', 409, false, 'CHECKOUT_REJECTED'],

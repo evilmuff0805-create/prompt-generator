@@ -55,7 +55,7 @@ describe('secure subscription checkout migration', () => {
       'CREATE TABLE public.subscription_checkout_attempts'
     );
     expect(sql).toMatch(
-      /attempt_id\s+UUID PRIMARY KEY[\s\S]{0,180}user_id\s+UUID NOT NULL[\s\S]{0,120}REFERENCES public\.profiles\(id\) ON DELETE CASCADE/
+      /attempt_id\s+UUID PRIMARY KEY[\s\S]{0,180}user_id\s+UUID[\s\S]{0,120}REFERENCES public\.profiles\(id\) ON DELETE SET NULL[\s\S]{0,120}authorized_user_id\s+UUID NOT NULL/
     );
     expect(sql).toContain('transaction_id       TEXT UNIQUE');
     expect(sql).toContain('subscription_id      TEXT UNIQUE');
@@ -70,19 +70,33 @@ describe('secure subscription checkout migration', () => {
     expect(sql).not.toContain(
       'CONSTRAINT subscription_checkout_attempts_plan_credit_check'
     );
+    for (const status of [
+      'created',
+      'charging',
+      'bound',
+      'provider_unknown',
+      'reconciled_no_match',
+      'account_deleted_review',
+      'completed',
+      'failed'
+    ]) {
+      expect(sql).toContain(`'${status}'`);
+    }
+    expect(sql).toContain('provider_mutation_started_at TIMESTAMPTZ');
+    expect(sql).toContain('provider_unknown_at  TIMESTAMPTZ');
     expect(sql).toContain(
-      "'created',\n                           'bound',\n                           'provider_unknown',\n                           'completed',\n                           'failed'"
+      "provider_error_code = 'pre_provider_attempt_expired'"
     );
   });
 
   test('allows only one unresolved provider mutation per user', () => {
     expect(sql).toMatch(
-      /CREATE UNIQUE INDEX subscription_checkout_attempts_one_open_per_user_idx[\s\S]{0,180}ON public\.subscription_checkout_attempts \(user_id\)[\s\S]{0,120}WHERE status IN \('created', 'bound', 'provider_unknown'\)/
+      /CREATE UNIQUE INDEX subscription_checkout_attempts_one_open_per_user_idx[\s\S]{0,180}ON public\.subscription_checkout_attempts \(authorized_user_id\)[\s\S]{0,120}WHERE status IN \('created', 'charging', 'bound', 'provider_unknown'\)/
     );
     expect(sql).toContain(
-      'A provider_unknown attempt may already have created a transaction'
+      'charging is persisted before the provider mutation'
     );
-    expect(sql).toContain('it is never automatically retried');
+    expect(sql).toContain('both remain reconciliation-only');
   });
 
   test('makes the table read-only to service_role with all writes behind RPCs', () => {
@@ -106,6 +120,60 @@ describe('secure subscription checkout migration', () => {
     );
   });
 
+  test('keeps reconciliation evidence and withheld receipts private and immutable', () => {
+    expect(sql).toContain(
+      'CREATE TABLE public.subscription_checkout_reconciliation_scans'
+    );
+    expect(sql).toContain(
+      'CREATE TABLE public.subscription_checkout_late_payment_receipts'
+    );
+    expect(sql).toMatch(
+      /attempt_id UUID NOT NULL\s+REFERENCES public\.subscription_checkout_attempts\(attempt_id\)\s+ON DELETE RESTRICT/
+    );
+    expect(sql).toContain(
+      'user_id UUID REFERENCES public.profiles(id) ON DELETE SET NULL'
+    );
+    expect(sql).toContain(
+      'subscription_checkout_reconciliation_scans_immutable'
+    );
+    expect(sql).toContain('subscription_checkout_late_receipts_immutable');
+    expect(sql).toContain(
+      'CREATE OR REPLACE FUNCTION public.guard_subscription_checkout_late_receipt_mutation()'
+    );
+    expect(sql).toContain('AND pg_trigger_depth() > 1');
+    expect(sql).toContain('AND OLD.user_id IS NOT NULL');
+    expect(sql).toContain('AND NEW.user_id IS NULL');
+    expect(sql).toContain(
+      "(to_jsonb(NEW) - 'user_id')\n" +
+      "           IS NOT DISTINCT FROM (to_jsonb(OLD) - 'user_id')"
+    );
+    expect(sql).toContain(
+      'EXECUTE FUNCTION public.guard_subscription_checkout_late_receipt_mutation();'
+    );
+    expect(sql).toContain(
+      'REVOKE ALL ON FUNCTION public.guard_subscription_checkout_late_receipt_mutation()\n' +
+      '  FROM PUBLIC, anon, authenticated, service_role;'
+    );
+    for (const tableName of [
+      'subscription_checkout_reconciliation_scans',
+      'subscription_checkout_late_payment_receipts'
+    ]) {
+      expect(sql).toContain(
+        `ALTER TABLE public.${tableName}\n  ENABLE ROW LEVEL SECURITY;`
+      );
+      expect(sql).toContain(
+        `REVOKE ALL ON TABLE public.${tableName}\n` +
+        '  FROM PUBLIC, anon, authenticated, service_role;'
+      );
+      expect(sql).toContain(
+        `GRANT SELECT ON TABLE public.${tableName}\n  TO service_role;`
+      );
+    }
+    expect(sql).not.toMatch(
+      /GRANT\s+(?:[A-Z]+\s*,\s*)*(?:INSERT|UPDATE|DELETE)(?:\s*,\s*[A-Z]+)*\s+ON TABLE public\.subscription_checkout_(?:reconciliation_scans|late_payment_receipts) TO service_role;/i
+    );
+  });
+
   test('publishes exact request-first RPC signatures', () => {
     expect(normalizedSql).toContain(
       'CREATE OR REPLACE FUNCTION public.create_subscription_checkout_attempt( ' +
@@ -123,6 +191,20 @@ describe('secure subscription checkout migration', () => {
       'p_attempt_id uuid, p_user_id uuid, p_status text, ' +
       'p_provider_error_code text ) RETURNS jsonb'
     );
+    for (const functionName of [
+      'record_subscription_checkout_no_match_scan',
+      'finalize_subscription_checkout_no_match'
+    ]) {
+      expect(normalizedSql).toContain(
+        `CREATE OR REPLACE FUNCTION public.${functionName}( ` +
+        'p_attempt_id uuid, p_expected_status text, p_checked_at timestamptz, ' +
+        'p_window_start timestamptz, p_window_end timestamptz, ' +
+        'p_pages_scanned integer, p_transactions_scanned integer, ' +
+        'p_provider_request_ids text[], p_catalog_request_id text, ' +
+        'p_contract_fingerprint text, p_evidence_hash text, ' +
+        'p_audit_reference text ) RETURNS jsonb'
+      );
+    }
     expect(normalizedSql).toContain(
       'CREATE OR REPLACE FUNCTION public.consume_subscription_checkout_attempt( ' +
       'p_attempt_id uuid, p_transaction_id text, p_subscription_id text, ' +
@@ -155,7 +237,7 @@ describe('secure subscription checkout migration', () => {
     );
     const attemptLock = createSql.indexOf(
       'FROM public.subscription_checkout_attempts\n' +
-      '   WHERE user_id = p_user_id'
+      '   WHERE authorized_user_id = p_user_id'
     );
     expect(stateLock).toBeGreaterThan(-1);
     expect(profileLock).toBeGreaterThan(stateLock);
@@ -165,6 +247,19 @@ describe('secure subscription checkout migration', () => {
       'SUBSCRIPTION_PROFILE_RECONCILIATION_REQUIRED'
     );
     expect(createSql).toContain("'reason', 'duplicate_pending'");
+    expect(createSql).toContain(
+      "v_existing.status = 'created'"
+    );
+    expect(createSql).toContain(
+      "v_existing.created_at + interval '15 minutes'"
+    );
+    expect(createSql).toContain(
+      "provider_error_code = 'pre_provider_attempt_expired'"
+    );
+    expect(createSql).toContain("AND status = 'created'");
+    expect(createSql).toContain(
+      "status IN ('created', 'charging', 'bound', 'provider_unknown')"
+    );
     expect(createSql).toContain(
       'INSERT INTO public.subscription_checkout_attempts'
     );
@@ -194,7 +289,10 @@ describe('secure subscription checkout migration', () => {
     expect(profileLock).toBeGreaterThan(stateLock);
     expect(attemptLock).toBeGreaterThan(profileLock);
     expect(bindSql).toContain(
-      "AND status IN ('created', 'provider_unknown')"
+      "AND status IN ('charging', 'provider_unknown')"
+    );
+    expect(bindSql).toContain(
+      'SUBSCRIPTION_CHECKOUT_PROVIDER_MUTATION_NOT_STARTED'
     );
     expect(bindSql).toContain(
       'SUBSCRIPTION_CHECKOUT_TRANSACTION_CONFLICT'
@@ -206,17 +304,20 @@ describe('secure subscription checkout migration', () => {
     expect(bindSql).toContain('EXCEPTION WHEN unique_violation THEN');
   });
 
-  test('never releases a provider-unknown or bound attempt automatically', () => {
+  test('persists provider-mutation start and never TTL-releases provider work', () => {
     const transitionSql = functionSlice(
       'transition_subscription_checkout_attempt',
-      'consume_subscription_checkout_attempt'
+      'record_subscription_checkout_no_match_scan'
     );
 
     expect(transitionSql).toContain(
-      "v_status NOT IN ('provider_unknown', 'failed')"
+      "v_status NOT IN ('charging', 'provider_unknown', 'failed')"
     );
     expect(transitionSql).toContain(
-      "IF v_attempt.status IN ('bound', 'completed') THEN"
+      "IF v_attempt.status = 'created' AND v_status <> 'charging' THEN"
+    );
+    expect(transitionSql).toContain(
+      "IF v_attempt.status = 'charging' AND v_status = 'charging' THEN"
     );
     expect(transitionSql).toContain(
       'SUBSCRIPTION_CHECKOUT_ATTEMPT_RECONCILIATION_REQUIRED'
@@ -225,8 +326,141 @@ describe('secure subscription checkout migration', () => {
       /IF v_attempt\.status = 'provider_unknown' THEN[\s\S]{0,500}SUBSCRIPTION_CHECKOUT_ATTEMPT_RECONCILIATION_REQUIRED/
     );
     expect(transitionSql).toContain(
-      "AND status = 'created'"
+      "THEN COALESCE(provider_mutation_started_at, clock_timestamp())"
     );
+    expect(transitionSql).toContain(
+      "THEN COALESCE(provider_unknown_at, clock_timestamp())"
+    );
+    expect(transitionSql).toContain("'reason', CASE");
+    expect(transitionSql).toContain("'provider_mutation_started'");
+  });
+
+  test('freezes charging status after scan one while preserving value-bearing paths', () => {
+    const bindSql = functionSlice(
+      'bind_subscription_checkout_transaction',
+      'transition_subscription_checkout_attempt'
+    );
+    const transitionSql = functionSlice(
+      'transition_subscription_checkout_attempt',
+      'record_subscription_checkout_no_match_scan'
+    );
+    const consumeSql = functionSlice(
+      'consume_subscription_checkout_attempt',
+      'resolve_completed_subscription_checkout'
+    );
+    const chargingDuplicate = transitionSql.indexOf(
+      "v_attempt.status = 'charging' AND v_status = 'charging'"
+    );
+    const scanGuard = transitionSql.indexOf(
+      "'reason', 'reconciliation_scan_in_progress'"
+    );
+    const transitionUpdate = transitionSql.indexOf(
+      'UPDATE public.subscription_checkout_attempts'
+    );
+
+    expect(transitionSql).toContain(
+      "v_attempt.status = 'charging'\n" +
+      "     AND v_status IN ('provider_unknown', 'failed')"
+    );
+    expect(transitionSql).toContain(
+      'FROM public.subscription_checkout_reconciliation_scans'
+    );
+    expect(transitionSql).toContain('AND scan_ordinal = 1');
+    expect(chargingDuplicate).toBeGreaterThan(-1);
+    expect(scanGuard).toBeGreaterThan(chargingDuplicate);
+    expect(transitionUpdate).toBeGreaterThan(scanGuard);
+    expect(bindSql).not.toContain('reconciliation_scan_in_progress');
+    expect(bindSql).toContain(
+      "AND status IN ('charging', 'provider_unknown')"
+    );
+    expect(consumeSql).not.toContain('reconciliation_scan_in_progress');
+    expect(consumeSql).toContain("v_attempt.status = 'reconciled_no_match'");
+    expect(transitionSql).toContain(
+      "v_attempt.status = 'charging'\n     AND v_status NOT IN ('provider_unknown', 'failed')"
+    );
+  });
+
+  test('requires two fresh independent full-window scans before final close', () => {
+    const firstSql = functionSlice(
+      'record_subscription_checkout_no_match_scan',
+      'finalize_subscription_checkout_no_match'
+    );
+    const finalSql = functionSlice(
+      'finalize_subscription_checkout_no_match',
+      'consume_subscription_checkout_attempt'
+    );
+
+    for (const rpcSql of [firstSql, finalSql]) {
+      expect(rpcSql).toContain(
+        "p_checked_at < v_now - interval '2 minutes'"
+      );
+      expect(rpcSql).toContain(
+        'COALESCE(cardinality(p_provider_request_ids), 0) <>'
+      );
+      expect(rpcSql).toContain(
+        'p_transactions_scanned::bigint > p_pages_scanned::bigint * 30'
+      );
+      expect(rpcSql).toContain(
+        "v_provider_request_id = v_catalog_request_id"
+      );
+      expect(rpcSql).toContain(
+        'v_catalog_request_id IS DISTINCT FROM lower(v_catalog_request_id)'
+      );
+      expect(rpcSql).toContain(
+        'IS DISTINCT FROM lower(v_provider_request_id)'
+      );
+    }
+    expect(firstSql).toContain(
+      'COALESCE(\n        v_attempt.provider_unknown_at,\n' +
+      '        v_attempt.provider_mutation_started_at\n      )'
+    );
+    expect(firstSql).toContain(
+      "p_checked_at < v_reconciliation_started_at + interval '72 hours'"
+    );
+    expect(firstSql).toContain('p_window_start > v_attempt.created_at');
+    expect(firstSql).toContain("'reconciliation_scan_recorded'");
+    expect(firstSql).toContain('RETURNING recorded_at INTO v_recorded_at');
+    expect(firstSql).toContain("'firstRecordedAt', v_existing.recorded_at");
+    expect(firstSql).toContain("'firstRecordedAt', v_recorded_at");
+    expect(firstSql).not.toContain(
+      "SET status = 'reconciled_no_match'"
+    );
+
+    expect(finalSql).toContain(
+      'p_checked_at <\n' +
+      '          GREATEST(v_first.checked_at, v_first.recorded_at)'
+    );
+    expect(finalSql).toContain("interval '24 hours'");
+    expect(finalSql).toContain(
+      'v_first.expected_status IS DISTINCT FROM v_expected_status'
+    );
+    expect(finalSql).toContain(
+      'v_first.contract_fingerprint IS DISTINCT FROM v_contract_fingerprint'
+    );
+    expect(finalSql).toContain(
+      'v_first.provider_request_ids && p_provider_request_ids'
+    );
+    expect(finalSql).toContain(
+      'SUBSCRIPTION_CHECKOUT_RECONCILIATION_SCANS_NOT_INDEPENDENT'
+    );
+    const secondEvidence = finalSql.indexOf(
+      'INSERT INTO public.subscription_checkout_reconciliation_scans'
+    );
+    const closeAttempt = finalSql.indexOf(
+      'UPDATE public.subscription_checkout_attempts'
+    );
+    expect(secondEvidence).toBeGreaterThan(-1);
+    expect(closeAttempt).toBeGreaterThan(secondEvidence);
+    expect(finalSql).toContain("SET status = 'reconciled_no_match'");
+    expect(finalSql).toContain(
+      "provider_error_code = 'reconciled_definitive_no_match'"
+    );
+    expect(finalSql).toContain('AND status = v_expected_status');
+    expect(finalSql).toContain(
+      'SUBSCRIPTION_CHECKOUT_RECONCILIATION_CAS_RACE'
+    );
+    expect(finalSql).toContain("'reason', 'attempt_reconciled_no_match'");
+    expect(finalSql).toContain("'reconciliationDecision', 'definitive_no_match'");
   });
 
   test('fails closed for direct web/checkout transactions and mismatched items', () => {
@@ -253,6 +487,107 @@ describe('secure subscription checkout migration', () => {
     expect(consumeSql).not.toContain('p_user_id');
   });
 
+  test('withholds late final-close payments while preserving the terminal attempt', () => {
+    const consumeSql = functionSlice(
+      'consume_subscription_checkout_attempt',
+      'resolve_completed_subscription_checkout'
+    );
+    const lateStart = consumeSql.indexOf(
+      "IF v_attempt.status = 'reconciled_no_match' THEN"
+    );
+    const lateEnd = consumeSql.indexOf(
+      "IF v_attempt.status IN ('failed', 'account_deleted_review') THEN",
+      lateStart
+    );
+    const lateSql = consumeSql.slice(lateStart, lateEnd);
+
+    expect(lateStart).toBeGreaterThan(-1);
+    expect(lateEnd).toBeGreaterThan(lateStart);
+    expect(lateSql).toMatch(
+      /public\.apply_ordered_subscription_payment\([\s\S]{0,320}p_completed_at,\s+true,\s+false\s+\)/
+    );
+    expect(lateSql).toContain('refund_review_required = true');
+    expect(lateSql).toContain(
+      "refund_review_reason =\n             'late_payment_after_reconciled_no_match'"
+    );
+    expect(lateSql).toContain(
+      'INSERT INTO public.subscription_checkout_late_payment_receipts'
+    );
+    expect(lateSql).not.toContain(
+      'UPDATE public.subscription_checkout_attempts'
+    );
+    for (const field of [
+      "'authorizedUserId'",
+      "'userId'",
+      "'refundReviewRequired', true",
+      "'withheldReason', 'late_payment_after_reconciled_no_match'",
+      "'transactionId'",
+      "'subscriptionId'"
+    ]) {
+      expect(lateSql).toContain(field);
+    }
+  });
+
+  test('tombstones account-deleted completions without granting entitlement', () => {
+    const consumeSql = functionSlice(
+      'consume_subscription_checkout_attempt',
+      'resolve_completed_subscription_checkout'
+    );
+    const deletedStart = consumeSql.indexOf(
+      'IF v_attempt_snapshot.user_id IS NULL THEN'
+    );
+    const deletedEnd = consumeSql.indexOf(
+      "SELECT NULLIF(btrim(p.paddle_subscription_id), '')",
+      deletedStart
+    );
+    const deletedSql = consumeSql.slice(deletedStart, deletedEnd);
+
+    expect(deletedStart).toBeGreaterThan(-1);
+    expect(deletedEnd).toBeGreaterThan(deletedStart);
+    expect(deletedSql).toContain("'completed_before_account_deleted'");
+    expect(deletedSql).toContain("'authorizedUserId'");
+    expect(deletedSql).toContain("'userId', NULL");
+    expect(deletedSql).toContain("'refundReviewRequired', false");
+    expect(deletedSql).toContain(
+      'IF v_attempt.provider_mutation_started_at IS NULL THEN'
+    );
+    expect(deletedSql).toContain(
+      'SUBSCRIPTION_CHECKOUT_PROVIDER_MUTATION_NOT_STARTED'
+    );
+    expect(deletedSql).toContain(
+      'INSERT INTO public.subscription_checkout_late_payment_receipts'
+    );
+    expect(deletedSql).toContain("status = 'account_deleted_review'");
+    expect(deletedSql).toContain(
+      "provider_error_code = 'payment_after_account_deleted'"
+    );
+    expect(deletedSql).toContain(
+      "AND status IN (\n             'charging',\n" +
+      "             'bound',\n             'provider_unknown',\n" +
+      "             'failed'\n           )"
+    );
+    expect(deletedSql).not.toContain("'created',\n             'charging'");
+    expect(deletedSql).not.toContain(
+      'public.apply_ordered_subscription_payment('
+    );
+    expect(deletedSql).not.toContain(
+      'v_late_receipt.account_deleted IS DISTINCT FROM true'
+    );
+    expect(deletedSql).toContain(
+      "'status', CASE\n          WHEN v_late_receipt.decision_reason ="
+    );
+    for (const field of [
+      "'authorizedUserId'",
+      "'userId', NULL",
+      "'refundReviewRequired', true",
+      "'withheldReason', v_review_reason",
+      "'transactionId'",
+      "'subscriptionId'"
+    ]) {
+      expect(deletedSql).toContain(field);
+    }
+  });
+
   test('locks lifecycle rows deterministically before profile and attempt', () => {
     const consumeSql = functionSlice(
       'consume_subscription_checkout_attempt',
@@ -267,7 +602,8 @@ describe('secure subscription checkout migration', () => {
     const attemptLock = consumeSql.indexOf(
       'FROM public.subscription_checkout_attempts\n' +
       '   WHERE attempt_id = p_attempt_id\n' +
-      '   FOR UPDATE;'
+      '   FOR UPDATE;',
+      profileLock
     );
 
     expect(stateLock).toBeGreaterThan(-1);
@@ -284,17 +620,20 @@ describe('secure subscription checkout migration', () => {
       'consume_subscription_checkout_attempt',
       'resolve_completed_subscription_checkout'
     );
-    const paymentCall = consumeSql.indexOf(
+    const paymentCall = consumeSql.lastIndexOf(
       'public.apply_ordered_subscription_payment('
     );
     const purchaseBinding = consumeSql.indexOf(
-      'UPDATE public.purchases'
+      'UPDATE public.purchases',
+      paymentCall
     );
     const profileBinding = consumeSql.indexOf(
-      'UPDATE public.profiles'
+      'UPDATE public.profiles',
+      purchaseBinding
     );
     const attemptCompletion = consumeSql.indexOf(
-      'UPDATE public.subscription_checkout_attempts'
+      'UPDATE public.subscription_checkout_attempts',
+      profileBinding
     );
 
     expect(paymentCall).toBeGreaterThan(-1);
@@ -308,7 +647,7 @@ describe('secure subscription checkout migration', () => {
       'SUBSCRIPTION_CHECKOUT_LEDGER_BINDING_CONFLICT'
     );
     expect(consumeSql).toContain(
-      "AND status IN ('created', 'bound', 'provider_unknown')"
+      "AND status IN ('charging', 'bound', 'provider_unknown')"
     );
     expect(consumeSql).toContain(
       'SUBSCRIPTION_CHECKOUT_LEDGER_INVARIANT_FAILED'
@@ -372,13 +711,15 @@ describe('secure subscription checkout migration', () => {
       'create_subscription_checkout_attempt',
       'bind_subscription_checkout_transaction',
       'transition_subscription_checkout_attempt',
+      'record_subscription_checkout_no_match_scan',
+      'finalize_subscription_checkout_no_match',
       'consume_subscription_checkout_attempt',
       'resolve_completed_subscription_checkout'
     ]) {
       expect(sql).toMatch(
         new RegExp(
           `REVOKE ALL ON FUNCTION public\\.${functionName}\\([\\s\\S]*?\\) ` +
-          'FROM PUBLIC, anon, authenticated;'
+          'FROM PUBLIC, anon, authenticated, service_role;'
         )
       );
       expect(sql).toMatch(
@@ -393,7 +734,7 @@ describe('secure subscription checkout migration', () => {
   test('documents a gated reverse migration without automatic data loss', () => {
     expect(sql).toContain('Reverse migration (operator-run only):');
     expect(sql).toContain(
-      'Reconcile every created/bound/provider_unknown attempt in Paddle.'
+      'Reconcile every created/charging/bound/provider_unknown attempt in Paddle.'
     );
     expect(sql).toContain(
       'Preserve/export completed rows for the payment audit trail.'

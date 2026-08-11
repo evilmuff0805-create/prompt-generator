@@ -181,17 +181,21 @@ The flow is:
    instead of issuing a second charge.
    If the browser lost the charge response before learning the request ID, it
    performs one authenticated, owner-scoped lookup for the newest non-terminal
-   request and resumes that request. A 72-hour reconciled no-match remains
-   review-locked and discoverable from `reconciliation_closed_at` rather than
-   disappearing because its original `created_at` is old. The browser never
+   request and resumes that request. A first complete no-match scan cannot run
+   until at least 72 hours after the authorization window and remains locked in
+   its current state. Only a second independent complete scan at least 24 hours
+   later may CAS-close the request, so the earliest automatic no-match release
+   is approximately 96 hours after the authorization window. The browser never
    repeats the purchase POST.
 9. Only a valid signed `transaction.completed` event with
    `origin=subscription_charge`, the exact request/subscription/customer
    binding, one custom line item, one captured payment, the exact pack
    contract, and eligible Subscription History proof can grant credits.
 
-An exhaustive no-match reconciliation applies only after the authorization
-window plus 72 hours for `charging`, `submitted`, or `provider_unknown`.
+The first exhaustive no-match reconciliation scan applies only after the
+authorization window plus 72 hours for `charging`, `submitted`, or
+`provider_unknown`. A final scan must be independent and at least 24 hours
+newer than the persisted first scan.
 Before any Paddle transaction scan, the operator is restricted to PromptGen's
 exact Supabase project and reads the exact Paddle subscription with the same
 API key. Subscription ID, customer ID, bound recurring plan Price ID, API
@@ -199,20 +203,18 @@ environment, and provider request ID must all match. A wrong project, key/base
 environment mismatch, wrong Paddle seller, missing permission, malformed
 response, or failed entity read stops before both the scan and database RPC.
 
-Paddle's list API and PostgreSQL cannot share one atomic transaction. An
-exhaustive no-match scan therefore records its evidence but deliberately keeps
-the request review-locked as `provider_unknown`; it never reopens purchasing.
-The confirmation scan must take a fresh cutoff immediately before the write so
-a transaction created after the first scan is inside the second scan. If an
-exact signed completion is then delivered, only that specific reconciled
-request may continue through all normal identity, amount, authorization-window,
-Subscription History, lifecycle, adjustment, and receipt-idempotency checks. A
-fully valid completion grants once, preserves the reconciliation evidence, and
-records a critical `CREDIT_PACK_RECONCILIATION_SUPERSEDED` incident. Every
-ordinary failure or mismatch remains withheld and review-locked until a
-confirmed full refund clears it. Releasing a no-match lock requires a separate,
-audited provider-terminal operator procedure; that release procedure is not
-part of this foundation.
+Paddle's list API and PostgreSQL cannot share one atomic transaction. The first
+complete scan therefore records immutable evidence but deliberately keeps the
+request open. The second scan uses a fresh cutoff immediately before the write,
+must have disjoint Paddle request IDs, and includes any transaction created
+after the first scan. Only that second exact no-match may atomically move the
+request to terminal `failed` with
+`provider_error_code=reconciled_definitive_no_match`, release the per-user open
+request lock, and retain `review_required=true`. If an exact signed completion
+arrives after that terminal decision, PromptGen records the payment and a
+durable refund-review incident but grants no credit lot and changes no balance.
+Any match, partial evidence, intermediate transaction, malformed page, stale
+cutoff, reused request ID, or CAS race leaves the request unclosed.
 
 The temporal interval is exactly:
 
@@ -613,10 +615,11 @@ approval is recorded:
 - [ ] Monitoring, durable incident records, and an operator escalation path
   exist for withheld direct payments, `provider_unknown`, stale leases,
   duplicate/missing grants, refunds, and balance divergence. A subscription
-  checkout `provider_unknown` attempt may be terminalized only after two
-  independent complete Paddle scans and a 72-hour delay, with immutable
-  evidence, CAS, and a late-payment webhook path that grants no entitlement and
-  creates a durable refund-review incident. A status-only release is forbidden.
+  checkout `provider_unknown` attempt may be terminalized only after a complete
+  first Paddle scan at 72 hours and a second independent complete scan at least
+  24 hours later, with immutable evidence, CAS, and a late-payment webhook path
+  that grants no entitlement and creates a durable refund-review incident. A
+  status-only release is forbidden.
 - [ ] External alert webhooks receive only minimal event metadata; customer,
   user, subscription, transaction, request, message, and incident context stay
   in PromptGen's internal incident store.
@@ -852,12 +855,12 @@ evidence.
 | Canceled, paused, past-due, trialing, manual-collection, mismatched, multi-item, or scheduled-change subscription | Rejected before charge |
 | Browser closes or reloads after submission | Same durable request resumes; no new charge is issued |
 | Network timeout, HTTP 5xx, or malformed success | `provider_unknown`; no automatic retry; reconciliation required |
-| Charge API succeeds as `submitted`, but the webhook is never delivered | After 72 hours, the same exhaustive reconciliation rules apply; no automatic retry |
+| Charge API succeeds as `submitted`, but the webhook is never delivered | First complete scan no earlier than 72 hours, final independent scan no earlier than 24 hours after that; no automatic charge retry |
 | A markerless one-item subscription charge matches the exact subscription, customer, and origin but has changed or incomplete totals/details | Classify as ambiguous partial evidence; never close the request as a definitive no-match |
 | A write-capable no-match reconciliation is attempted | Perform two complete Paddle scans with disjoint provider request IDs and a fresh second cutoff; any match, partial, malformed page, or reused/stale evidence blocks the write |
-| Both no-match scans complete | Persist the evidence but keep the request `provider_unknown` with review required; never enable a replacement purchase |
+| Both independent no-match scans complete at the required times | Atomically close the add-on request as terminal `failed` or the subscription attempt as `reconciled_no_match`, retain immutable evidence and review-required state, then release only the one-open-attempt lock |
 | A markerless `subscription_charge` completion is delivered | Grant nothing, create a durable critical incident with minimal identifiers, and keep the account purchase-locked for review |
-| Operator no-match scan completes immediately before an exact signed completion is processed | The exact completion may supersede only the review-locked reconciled request, grants once after all normal checks, preserves evidence, and emits a critical incident |
+| Exact signed completion arrives after final no-match closure | Record an immutable payment receipt and durable refund-review incident; grant no plan or credits and do not auto-refund |
 | Reconciliation runs with a wrong Supabase project, Paddle environment, seller, subscription, customer, or plan Price ID | Stops before transaction scan and database reconciliation RPC |
 | `transaction.completed` delivered twice | Exactly one grant from the bound request |
 | Webhook arrives before browser response | Webhook grants once; browser only reports durable status |
@@ -905,17 +908,25 @@ IDs outside the repository without customer personal data.
    inbox, subscription state, purchase, lot, allocation, and profile balance.
 5. If Paddle charged, bind/replay the original signed event or use an audited
    reconciliation path; never create a replacement charge.
-6. If both scans find no charge, keep the request review-locked as
-   `provider_unknown`. Do not allow another attempt. Only a separate audited
-   procedure with provider-terminal evidence may release that lock; this
-   foundation intentionally does not implement that release.
-7. Keep the incident open until Paddle, the request state, entitlement, and
+6. If the first full scan finds no charge after 72 hours, persist its immutable
+   evidence and keep the attempt locked. Run a new full scan no earlier than 24
+   hours after the later of the first scan's provider cutoff and database record
+   time. The two scans and catalog reads must use fully disjoint Paddle request
+   IDs.
+7. If the second scan is also an exact no-match, let the service-role CAS close
+   the add-on request as terminal `failed` or the subscription checkout as
+   `reconciled_no_match`. Never release the lock by a direct status update.
+8. A signed completion arriving after final closure is a paid-but-withheld
+   event: retain the immutable receipt, create durable refund review, grant no
+   plan or credits, and do not auto-refund.
+9. Keep the incident open until Paddle, the request state, entitlement, and
    ledger agree.
 
 The operator is dry-run by default:
 
 ```text
 npm run reconcile:credit-pack -- --request-id=<opaque UUID>
+npm run reconcile:subscription-checkout -- --attempt-id=<opaque UUID>
 ```
 
 For a Sandbox rehearsal, use a separate non-production Supabase project and
@@ -927,27 +938,30 @@ CREDIT_PACK_RECONCILIATION_SANDBOX_PROJECT_REFS=<exact staging project ref>
 PADDLE_API_BASE=https://sandbox-api.paddle.com
 PADDLE_API_KEY=pdl_sdbx_apikey_<redacted>
 npm run reconcile:credit-pack -- --request-id=<opaque UUID>
+npm run reconcile:subscription-checkout -- --attempt-id=<opaque UUID>
 ```
 
 This Sandbox path is read-only and always reports `readyToApply: false`.
 Never include the PromptGen production ref in the allowlist and never add
 `--apply` to a Sandbox or staging run.
 
-It scans only after the request is at least 72 hours past authorization,
-validates every Paddle page and provider request ID, and never prints keys or
-customer payloads. A markerless transaction with the exact subscription,
-customer, `subscription_charge` origin, and one-item envelope is partial
-evidence even when totals or details differ or are incomplete; it is never
-treated as an unrelated definitive no-match. The explicit write performs a
-second complete scan with a new cutoff and requires request IDs disjoint from
-the first scan. The write is rejected if the completed scan evidence is more
-than two minutes old; rerun the scan rather than extending that window. A
-successful no-match write stores review evidence and leaves the request locked
-as `provider_unknown`; it does not authorize a retry. Review the dry-run
-evidence and retained external audit record before the explicit write:
+The first scan runs only after the request is at least 72 hours past its delay
+anchor, validates every Paddle page and provider request ID, and never prints
+keys or customer payloads. A markerless transaction with the exact
+subscription, customer, `subscription_charge` origin, and one-item envelope is
+partial evidence even when totals or details differ or are incomplete; it is
+never treated as an unrelated definitive no-match. The final write is not
+eligible until at least 24 hours after the persisted first scan and performs a
+new complete scan with a fresh cutoff and fully disjoint request IDs. The write
+is rejected if the completed scan evidence is more than two minutes old; rerun
+the scan rather than extending that window. A successful final write retains
+both evidence records, sets the terminal no-match state, and releases only the
+open-attempt uniqueness lock. Review the dry-run evidence and retained external
+audit record before each explicit write:
 
 ```text
 npm run reconcile:credit-pack -- --request-id=<opaque UUID> --apply
+npm run reconcile:subscription-checkout -- --attempt-id=<opaque UUID> --apply
 ```
 
 `--apply` is production-only: it requires the exact PromptGen Supabase project,
@@ -959,11 +973,11 @@ performs a second complete provider scan immediately before the database CAS
 and requires provider response request IDs disjoint from the first scan. Any
 match, partial evidence, malformed page, or reused request ID blocks the write.
 
-If the database commit succeeded but the CLI response was lost, rerunning the
-same command never writes again. It first revalidates the Paddle binding and
-rescans Paddle: a still-empty result reports the retained and current evidence
-as idempotent, while a late exact match is reported as revalidation evidence
-that requires replay of the original signed webhook event.
+If a database commit succeeded but the CLI response was lost, rerunning the
+same command validates the terminal row and persisted evidence and reports the
+operation as idempotent; it never reopens the attempt or writes a third scan.
+Any later exact payment must enter through the original signed webhook and the
+paid-but-withheld refund-review path.
 
 ### Direct or unbound subscription payment
 

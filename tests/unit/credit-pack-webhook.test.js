@@ -1099,6 +1099,102 @@ describe('credit pack transaction.completed fulfillment', () => {
     expect(recordServerEvent).not.toHaveBeenCalled();
   });
 
+  test('late payment after definitive no-match creates a dedicated refund-review incident', async () => {
+    const rpcResult = {
+      applied: false,
+      reason: 'entitlement_withheld',
+      status: 'withheld',
+      entitlementGranted: false,
+      reviewRequired: true,
+      withheldReason: 'late_payment_after_reconciled_no_match',
+      userId: 'user_1'
+    };
+    const supabase = supabaseForGrant({ rpcResult });
+
+    await expect(grantCreditsForPack(
+      supabase,
+      completedTransaction(),
+      PACK,
+      {
+        CREDIT_PACK_EXPIRY_DAYS: '365',
+        PADDLE_API_KEY: ''
+      },
+      COMPLETED_AT,
+      PROVIDER_EVENT_ID
+    )).resolves.toEqual(rpcResult);
+
+    expect(reportIncident).toHaveBeenCalledWith(expect.objectContaining({
+      eventCode: 'CREDIT_PACK_LATE_PAYMENT_REFUND_REVIEW_REQUIRED',
+      context: expect.objectContaining({
+        transactionId: 'txn_pack_1',
+        requestId: REQUEST_ID,
+        withheldReason: 'late_payment_after_reconciled_no_match',
+        entitlementGranted: false,
+        refundReviewRequired: true
+      })
+    }));
+    expect(recordServerEvent).not.toHaveBeenCalled();
+  });
+
+  test('late credit-pack payment remains retryable until its incident is durable', async () => {
+    const firstOutcome = {
+      applied: false,
+      reason: 'entitlement_withheld',
+      status: 'withheld',
+      entitlementGranted: false,
+      reviewRequired: true,
+      withheldReason: 'late_payment_after_reconciled_no_match',
+      userId: 'user_1'
+    };
+    const duplicateOutcome = {
+      ...firstOutcome,
+      reason: 'duplicate'
+    };
+    const supabase = supabaseForGrant({ rpcResult: duplicateOutcome });
+    supabase.rpc
+      .mockResolvedValueOnce({ data: firstOutcome, error: null })
+      .mockResolvedValueOnce({ data: duplicateOutcome, error: null });
+    reportIncident
+      .mockResolvedValueOnce({ persisted: false })
+      .mockResolvedValueOnce({ persisted: true });
+
+    await expect(grantCreditsForPack(
+      supabase,
+      completedTransaction(),
+      PACK,
+      {
+        CREDIT_PACK_EXPIRY_DAYS: '365',
+        PADDLE_API_KEY: ''
+      },
+      COMPLETED_AT,
+      PROVIDER_EVENT_ID
+    )).rejects.toMatchObject({
+      code: 'CREDIT_PACK_LATE_PAYMENT_INCIDENT_PERSIST_FAILED'
+    });
+
+    await expect(grantCreditsForPack(
+      supabase,
+      completedTransaction(),
+      PACK,
+      {
+        CREDIT_PACK_EXPIRY_DAYS: '365',
+        PADDLE_API_KEY: ''
+      },
+      COMPLETED_AT,
+      PROVIDER_EVENT_ID
+    )).resolves.toEqual(duplicateOutcome);
+
+    expect(reportIncident).toHaveBeenCalledTimes(2);
+    expect(reportIncident).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      eventCode: 'CREDIT_PACK_LATE_PAYMENT_REFUND_REVIEW_REQUIRED',
+      context: expect.objectContaining({
+        withheldReason: 'late_payment_after_reconciled_no_match',
+        refundReviewRequired: true
+      })
+    }));
+    expect(recordServerEvent).not.toHaveBeenCalled();
+  });
+
   test.each([
     'completed',
     'withheld',
