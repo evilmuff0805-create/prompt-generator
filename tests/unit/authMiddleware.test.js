@@ -43,7 +43,8 @@ describe('authMiddleware', () => {
     expect(res.status).toHaveBeenCalledWith(401);
     expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
       success: false,
-      code: 'AUTH_REQUIRED'
+      code: 'AUTH_REQUIRED',
+      requestProcessed: false
     }));
     expect(next).not.toHaveBeenCalled();
   });
@@ -75,7 +76,8 @@ describe('authMiddleware', () => {
     expect(res.status).toHaveBeenCalledWith(401);
     expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
       success: false,
-      code: 'AUTH_INVALID'
+      code: 'AUTH_INVALID',
+      requestProcessed: false
     }));
     expect(next).not.toHaveBeenCalled();
   });

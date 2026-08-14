@@ -1,6 +1,22 @@
 /* ── Supabase Init ── */
-const SUPABASE_URL = 'https://kzlovmcghswprasjaeeo.supabase.co';
-const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imt6bG92bWNnaHN3cHJhc2phZWVvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc1ODkyOTEsImV4cCI6MjA5MzE2NTI5MX0.aivqzUI4jpGgIMEpo6NMy8JL3iBxp49RqoCJU0NLOGE';
+function requirePromptGenRuntimeConfig() {
+  const config = window.PromptGenRuntimeConfig;
+  if (
+    !config
+    || typeof config.supabaseUrl !== 'string'
+    || !config.supabaseUrl
+    || typeof config.supabaseAnonKey !== 'string'
+    || !config.supabaseAnonKey
+  ) {
+    throw new Error('[runtime-config] Public configuration is unavailable');
+  }
+  return config;
+}
+
+const {
+  supabaseUrl: SUPABASE_URL,
+  supabaseAnonKey: SUPABASE_ANON_KEY
+} = requirePromptGenRuntimeConfig();
 const sbClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
   auth: { storage: window.sessionStorage, persistSession: true, autoRefreshToken: true }
 });

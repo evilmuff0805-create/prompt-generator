@@ -1,6 +1,22 @@
 /* ── Supabase Init ── */
-const SUPABASE_URL = 'https://kzlovmcghswprasjaeeo.supabase.co';
-const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imt6bG92bWNnaHN3cHJhc2phZWVvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc1ODkyOTEsImV4cCI6MjA5MzE2NTI5MX0.aivqzUI4jpGgIMEpo6NMy8JL3iBxp49RqoCJU0NLOGE';
+function requirePromptGenRuntimeConfig() {
+  const config = window.PromptGenRuntimeConfig;
+  if (
+    !config
+    || typeof config.supabaseUrl !== 'string'
+    || !config.supabaseUrl
+    || typeof config.supabaseAnonKey !== 'string'
+    || !config.supabaseAnonKey
+  ) {
+    throw new Error('[runtime-config] Public configuration is unavailable');
+  }
+  return config;
+}
+
+const {
+  supabaseUrl: SUPABASE_URL,
+  supabaseAnonKey: SUPABASE_ANON_KEY
+} = requirePromptGenRuntimeConfig();
 const sbClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
   auth: { storage: window.sessionStorage, persistSession: true, autoRefreshToken: true }
 });
@@ -21,6 +37,10 @@ function uiText(key, values) {
 let productCatalog = null;
 let productCatalogPromise = null;
 let paddleInitialized = false;
+let subscriptionCheckoutPending = false;
+let subscriptionCheckoutBlocked = false;
+let subscriptionCheckoutContext = null;
+let pricingCheckoutStatus = { key: '', values: {}, state: '' };
 
 async function loadProductCatalog() {
   if (productCatalog) return productCatalog;
@@ -118,25 +138,1595 @@ function hydrateProductCatalog(catalog) {
   } catch (error) {
     console.error('[catalog] Failed to hydrate structured pricing data:', error.message);
   }
+
+  renderCreditPacks();
 }
+
+const CREDIT_PACK_STATUS_ATTEMPTS = 12;
+const CREDIT_PACK_STATUS_INTERVAL_MS = 1500;
+const CREDIT_PACK_STATUS_REQUEST_TIMEOUT_MS = 8000;
+const CREDIT_PACK_REQUEST_STORAGE_PREFIX = 'promptgen:credit-pack-purchase:';
+const CREDIT_PACK_REQUEST_ID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const CREDIT_PACK_PENDING_STATUSES = new Set([
+  'previewing',
+  'created',
+  'charging',
+  'submitted',
+  'provider_unknown'
+]);
+const CREDIT_PACK_RECOVERY_STATUSES = new Set([
+  ...CREDIT_PACK_PENDING_STATUSES,
+  'completed',
+  'withheld',
+  'refunded',
+  'failed',
+  'chargeback'
+]);
+const CREDIT_PACK_RECOVERABLE_PHASES = new Set([
+  'previewing',
+  'created',
+  'charging',
+  'submitted',
+  'provider_unknown',
+  'withheld',
+  'chargeback',
+  'recovering'
+]);
+let creditPackPurchasePending = null;
+let creditPackPurchasePhase = 'idle';
+let creditPackPurchaseRequestId = null;
+let creditPackPreviewContext = null;
+let creditPackStatusPollPromise = null;
+let creditPackStatusPollKey = null;
+let creditPackStatusPollGeneration = 0;
+let creditPackPendingRecoveryPromise = null;
+let creditPackPendingRecoveryKey = null;
+let creditPackPendingRecoveryGeneration = 0;
+let creditPackModalReturnFocus = null;
+let creditPackModalReturnPackKey = null;
+let creditPackPreviewUserId = null;
+let creditPackPreviewAuthGeneration = null;
+let creditPackStatus = { key: '', values: {}, state: '' };
+
+function isValidCreditPackRequestId(value) {
+  return typeof value === 'string' && CREDIT_PACK_REQUEST_ID_PATTERN.test(value);
+}
+
+function getCreditPackStorageKey(userId) {
+  return userId ? `${CREDIT_PACK_REQUEST_STORAGE_PREFIX}${userId}` : null;
+}
+
+function readStoredCreditPackRequestId(userId) {
+  const key = getCreditPackStorageKey(userId);
+  if (!key) return null;
+  try {
+    const requestId = window.localStorage.getItem(key);
+    if (isValidCreditPackRequestId(requestId)) return requestId;
+    if (requestId) window.localStorage.removeItem(key);
+  } catch (error) {
+    console.error('[credit-packs] Could not read pending purchase state:', error.message);
+  }
+  return null;
+}
+
+function storeCreditPackRequestId(userId, requestId) {
+  const key = getCreditPackStorageKey(userId);
+  if (!key || !isValidCreditPackRequestId(requestId)) return false;
+  try {
+    const existingRequestId = window.localStorage.getItem(key);
+    if (
+      isValidCreditPackRequestId(existingRequestId)
+      && existingRequestId !== requestId
+    ) {
+      return false;
+    }
+    window.localStorage.setItem(key, requestId);
+    return true;
+  } catch (error) {
+    console.error('[credit-packs] Could not persist pending purchase state:', error.message);
+    return false;
+  }
+}
+
+function replaceStoredCreditPackRequestId(
+  userId,
+  expectedRequestId,
+  nextRequestId
+) {
+  const key = getCreditPackStorageKey(userId);
+  if (
+    !key
+    || !isValidCreditPackRequestId(expectedRequestId)
+    || !isValidCreditPackRequestId(nextRequestId)
+    || expectedRequestId === nextRequestId
+  ) {
+    return false;
+  }
+  try {
+    if (window.localStorage.getItem(key) !== expectedRequestId) {
+      return false;
+    }
+    window.localStorage.setItem(key, nextRequestId);
+    return window.localStorage.getItem(key) === nextRequestId;
+  } catch (error) {
+    console.error(
+      '[credit-packs] Could not replace pending purchase state:',
+      error.message
+    );
+    return false;
+  }
+}
+
+function clearStoredCreditPackRequestId(userId, expectedRequestId = null) {
+  const key = getCreditPackStorageKey(userId);
+  if (!key) return;
+  try {
+    if (
+      !expectedRequestId
+      || window.localStorage.getItem(key) === expectedRequestId
+    ) {
+      window.localStorage.removeItem(key);
+    }
+  } catch (error) {
+    console.error('[credit-packs] Could not clear pending purchase state:', error.message);
+  }
+}
+
+function isCurrentCreditPackAuthContext(userId, generation) {
+  return Boolean(userId)
+    && activeAuthUserId === userId
+    && authSessionGeneration === generation;
+}
+
+async function fetchCreditPackStatusWithTimeout(url, session) {
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(
+    () => controller.abort(),
+    CREDIT_PACK_STATUS_REQUEST_TIMEOUT_MS
+  );
+  try {
+    return await fetch(url, {
+      headers: { 'Authorization': `Bearer ${session.access_token}` },
+      signal: controller.signal
+    });
+  } finally {
+    window.clearTimeout(timeoutId);
+  }
+}
+
+async function fetchCreditPackRecoveryCandidate(session) {
+  const response = await fetchCreditPackStatusWithTimeout(
+    '/api/payment/credit-packs/purchase/pending',
+    session
+  );
+  const result = await response.json().catch(() => null);
+  if (
+    !response.ok
+    || result?.success !== true
+    || !Object.prototype.hasOwnProperty.call(result, 'purchase')
+  ) {
+    throw new Error('Purchase recovery is unavailable');
+  }
+  if (result.purchase === null) return null;
+  if (
+    !isValidCreditPackRequestId(result.purchase?.purchaseRequestId)
+    || !CREDIT_PACK_RECOVERY_STATUSES.has(result.purchase?.status)
+  ) {
+    throw new Error('Purchase recovery returned an invalid state');
+  }
+  return result.purchase;
+}
+
+function formatMinorCurrency(minorUnits, currencyCode) {
+  if (
+    typeof minorUnits !== 'string'
+    || !/^(0|[1-9]\d*)$/.test(minorUnits)
+    || currencyCode !== 'USD'
+  ) {
+    return null;
+  }
+  const amount = Number(minorUnits) / 100;
+  if (!Number.isFinite(amount)) return null;
+  return window.PromptGenI18n?.formatCurrency(amount, currencyCode, {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  }) || `$${amount.toFixed(2)}`;
+}
+
+function normalizeCreditPackPreview(result, expectedPackKey) {
+  const pack = result?.pack;
+  const preview = result?.preview;
+  const purchaseRequestId = result?.purchaseRequestId;
+  const confirmationVersion = Number(result?.confirmationVersion);
+  const catalogPack = productCatalog?.creditPacks?.packs?.find(
+    candidate => candidate.key === expectedPackKey
+  );
+  const minorFields = [
+    'subtotal',
+    'discount',
+    'tax',
+    'total',
+    'credit',
+    'balance',
+    'grandTotal',
+    'grandTotalTax'
+  ];
+  const validMinorFields = minorFields.every(
+    field => typeof preview?.[field] === 'string'
+      && /^(0|[1-9]\d*)$/.test(preview[field])
+  );
+  const expiryDays = Number(result?.expiryDays);
+  const expectedSubtotal = Number.isFinite(Number(pack?.priceUsd))
+    ? String(Math.round(Number(pack.priceUsd) * 100))
+    : null;
+
+  if (
+    !pack
+    || !catalogPack
+    || !isValidCreditPackRequestId(purchaseRequestId)
+    || !Number.isInteger(confirmationVersion)
+    || confirmationVersion < 1
+    || pack.key !== expectedPackKey
+    || Number(pack.credits) !== Number(catalogPack.credits)
+    || preview?.currencyCode !== 'USD'
+    || pack.currencyCode !== 'USD'
+    || !validMinorFields
+    || preview.subtotal !== expectedSubtotal
+    || !Number.isInteger(expiryDays)
+    || expiryDays <= 0
+  ) {
+    return null;
+  }
+
+  return Object.freeze({
+    purchaseRequestId,
+    confirmationVersion,
+    packKey: pack.key,
+    credits: Number(pack.credits),
+    expiryDays,
+    currencyCode: preview.currencyCode,
+    preview: Object.freeze({ ...preview })
+  });
+}
+
+function renderCreditPackStatus() {
+  const status = document.getElementById('creditPackStatus');
+  if (!status) return;
+  const hasStatus = Boolean(creditPackStatus.key);
+  status.hidden = !hasStatus;
+  status.textContent = hasStatus
+    ? uiText(creditPackStatus.key, creditPackStatus.values)
+    : '';
+  if (creditPackStatus.state) status.dataset.state = creditPackStatus.state;
+  else status.removeAttribute('data-state');
+}
+
+function setCreditPackStatus(key = '', state = '', values = {}) {
+  creditPackStatus = { key, state, values };
+  renderCreditPackStatus();
+}
+
+function focusCreditPackStatus() {
+  const status = document.getElementById('creditPackStatus');
+  if (status && !status.hidden) status.focus({ preventScroll: true });
+}
+
+function renderCreditPacks() {
+  const panel = document.getElementById('creditPackPanel');
+  const list = document.getElementById('creditPackList');
+  const note = document.getElementById('creditPackNote');
+  const config = productCatalog?.creditPacks;
+  if (!panel || !list || !note) return;
+
+  if (!config?.enabled || !Array.isArray(config.packs) || config.packs.length === 0) {
+    panel.hidden = true;
+    list.replaceChildren();
+    renderCreditPackStatus();
+    return;
+  }
+
+  panel.hidden = false;
+  note.textContent = uiText('pricing.addons.note', {
+    days: window.PromptGenI18n?.formatNumber(config.expiryDays) || config.expiryDays
+  });
+
+  const isPaid = ['pro', 'enterprise', 'paid'].includes(currentUserPlan);
+  const flowLocked = creditPackPurchasePhase !== 'idle';
+  list.replaceChildren(...config.packs.map((pack) => {
+    const item = document.createElement('article');
+    item.className = 'credit-pack';
+    item.id = `credit-pack-${pack.key}`;
+
+    const credits = document.createElement('div');
+    credits.className = 'credit-pack__credits';
+    credits.id = `${item.id}-credits`;
+    const formattedCredits = window.PromptGenI18n?.formatNumber(pack.credits) || pack.credits;
+    credits.textContent = uiText('pricing.addons.credits', { credits: formattedCredits });
+
+    const price = document.createElement('div');
+    price.className = 'credit-pack__price';
+    price.id = `${item.id}-price`;
+    const formattedPrice = formatUsd(pack.priceUsd);
+    price.textContent = formattedPrice;
+
+    const meta = document.createElement('p');
+    meta.className = 'credit-pack__meta';
+    meta.id = `${item.id}-meta`;
+    meta.textContent = uiText('pricing.addons.oneTime');
+
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'btn btn--outline credit-pack__button';
+    button.dataset.creditPackKey = pack.key;
+    button.textContent = flowLocked
+      ? uiText(
+          creditPackPurchasePhase === 'previewing'
+            ? 'pricing.addons.action.previewing'
+            : creditPackPurchasePhase === 'awaiting_confirmation'
+              ? 'pricing.addons.action.review'
+              : creditPackPurchasePhase === 'submitting'
+                ? 'pricing.addons.action.submitting'
+                : ['withheld', 'chargeback'].includes(
+                    creditPackPurchasePhase
+                  )
+                  ? 'pricing.addons.action.reviewRequired'
+                : 'pricing.addons.action.purchasePending'
+        )
+      : isPaid
+        ? uiText('pricing.addons.action.buy')
+        : uiText('pricing.addons.action.paidPlanRequired');
+    button.setAttribute('aria-label', uiText('pricing.addons.action.productLabel', {
+      action: button.textContent,
+      credits: formattedCredits,
+      price: formattedPrice
+    }));
+    button.setAttribute('aria-describedby', `${price.id} ${meta.id} creditPackNote`);
+    button.disabled = flowLocked || !isPaid;
+    button.addEventListener('click', () => startCreditPackPurchase(pack.key));
+
+    item.setAttribute('aria-labelledby', credits.id);
+    item.setAttribute('aria-describedby', `${price.id} ${meta.id}`);
+    item.append(credits, price, meta, button);
+    return item;
+  }));
+
+  renderCreditPackStatus();
+}
+
+function resetCreditPackFlow(statusKey = '', state = '') {
+  creditPackPurchasePending = null;
+  creditPackPurchasePhase = 'idle';
+  creditPackPurchaseRequestId = null;
+  creditPackPreviewContext = null;
+  creditPackPreviewUserId = null;
+  creditPackPreviewAuthGeneration = null;
+  renderCreditPacks();
+  setCreditPackStatus(statusKey, state);
+}
+
+function waitForCreditPackStatus() {
+  return new Promise(resolve => {
+    window.setTimeout(resolve, CREDIT_PACK_STATUS_INTERVAL_MS);
+  });
+}
+
+function invalidateCreditPackStatusPoll() {
+  creditPackStatusPollGeneration += 1;
+  creditPackStatusPollPromise = null;
+  creditPackStatusPollKey = null;
+}
+
+function setCreditPackModalError(key = '') {
+  const errorElement = document.getElementById('creditPackModalError');
+  if (!errorElement) return;
+  errorElement.hidden = !key;
+  errorElement.textContent = key ? uiText(key) : '';
+}
+
+function renderCreditPackConfirmationModal() {
+  const context = creditPackPreviewContext;
+  if (!context) return;
+  const formattedCredits =
+    window.PromptGenI18n?.formatNumber(context.credits) || context.credits;
+  const values = {
+    credits: formattedCredits,
+    days: window.PromptGenI18n?.formatNumber(context.expiryDays)
+      || context.expiryDays
+  };
+  const formattedDiscount = formatMinorCurrency(
+    context.preview.discount,
+    context.currencyCode
+  );
+  const fields = {
+    creditPackModalTitle: uiText('pricing.addons.modal.title'),
+    creditPackModalSummary: uiText('pricing.addons.modal.summary', values),
+    creditPackModalCredits: uiText('pricing.addons.credits', values),
+    creditPackModalSubtotal: formatMinorCurrency(
+      context.preview.subtotal,
+      context.currencyCode
+    ),
+    creditPackModalDiscount: context.preview.discount === '0'
+      ? formattedDiscount
+      : `−${formattedDiscount}`,
+    creditPackModalTax: formatMinorCurrency(
+      context.preview.tax,
+      context.currencyCode
+    ),
+    creditPackModalTotal: formatMinorCurrency(
+      context.preview.grandTotal,
+      context.currencyCode
+    ),
+    creditPackModalImmediate: uiText('pricing.addons.modal.immediateCharge'),
+    creditPackModalExpiry: uiText('pricing.addons.modal.expiry', values),
+    creditPackModalEligibility: uiText('pricing.addons.modal.activeSubscription'),
+    creditPackModalNoCash: uiText('pricing.addons.modal.noCashValue'),
+    creditPackModalCancel: uiText('pricing.addons.modal.cancel'),
+    creditPackModalConfirm: uiText('pricing.addons.modal.confirm', {
+      total: formatMinorCurrency(
+        context.preview.grandTotal,
+        context.currencyCode
+      )
+    })
+  };
+  for (const [id, text] of Object.entries(fields)) {
+    const element = document.getElementById(id);
+    if (element && text != null) element.textContent = text;
+  }
+}
+
+function openCreditPackConfirmationModal(
+  context,
+  returnFocus = null,
+  { userId = null, authGeneration = null } = {}
+) {
+  const modal = document.getElementById('creditPackConfirmModal');
+  if (!modal) return;
+  creditPackPreviewContext = context;
+  creditPackPreviewUserId = userId;
+  creditPackPreviewAuthGeneration = authGeneration;
+  creditPackPurchasePhase = 'awaiting_confirmation';
+  creditPackModalReturnFocus = returnFocus || document.activeElement;
+  creditPackModalReturnPackKey = context.packKey;
+  updateCreditPackModalBusy(false);
+  renderCreditPacks();
+  renderCreditPackConfirmationModal();
+  setCreditPackModalError();
+  modal.classList.add('open');
+  modal.setAttribute('aria-hidden', 'false');
+  document.getElementById('creditPackModalClose')?.focus();
+}
+
+function closeCreditPackConfirmationModal({
+  restoreFocus = true,
+  resetFlow = true
+} = {}) {
+  const modal = document.getElementById('creditPackConfirmModal');
+  if (!modal || creditPackPurchasePhase === 'submitting') return false;
+  modal.classList.remove('open');
+  modal.setAttribute('aria-hidden', 'true');
+  const returnFocus = creditPackModalReturnFocus;
+  const returnPackKey = creditPackModalReturnPackKey;
+  if (resetFlow) resetCreditPackFlow();
+  if (restoreFocus) {
+    const currentPackButton = Array.from(
+      document.querySelectorAll('[data-credit-pack-key]')
+    ).find(button => button.dataset.creditPackKey === returnPackKey);
+    if (currentPackButton) {
+      currentPackButton.focus();
+    } else if (returnFocus?.isConnected) {
+      returnFocus.focus();
+    }
+  }
+  creditPackModalReturnFocus = null;
+  creditPackModalReturnPackKey = null;
+  return true;
+}
+
+async function cancelCreditPackConfirmationModal() {
+  const context = creditPackPreviewContext;
+  const userId = creditPackPreviewUserId;
+  const authGeneration = creditPackPreviewAuthGeneration;
+  if (
+    !context
+    || creditPackPurchasePhase !== 'awaiting_confirmation'
+    || !isCurrentCreditPackAuthContext(userId, authGeneration)
+  ) {
+    return false;
+  }
+
+  const { data: { session } } = await sbClient.auth.getSession();
+  if (
+    session?.user?.id !== userId
+    || !isCurrentCreditPackAuthContext(userId, authGeneration)
+  ) {
+    setCreditPackModalError('pricing.addons.error.unavailable');
+    return false;
+  }
+
+  creditPackPurchasePhase = 'cancelling';
+  updateCreditPackModalBusy(true);
+  renderCreditPacks();
+  setCreditPackModalError();
+
+  try {
+    const response = await fetch(
+      `/api/payment/credit-packs/purchase/${
+        encodeURIComponent(context.purchaseRequestId)
+      }/cancel`,
+      {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${session.access_token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ reason: 'client_cancelled' })
+      }
+    );
+    const result = await response.json().catch(() => null);
+    if (!isCurrentCreditPackAuthContext(userId, authGeneration)) return false;
+
+    const cancellationConfirmed = response.ok
+      && result?.success === true
+      && result?.purchaseRequestId === context.purchaseRequestId
+      && result?.status === 'failed'
+      && result?.chargeMayHaveRun === false;
+    if (cancellationConfirmed) {
+      clearStoredCreditPackRequestId(userId, context.purchaseRequestId);
+      updateCreditPackModalBusy(false);
+      closeCreditPackConfirmationModal({
+        restoreFocus: true,
+        resetFlow: true
+      });
+      return true;
+    }
+
+    if (
+      isValidCreditPackRequestId(result?.purchaseRequestId)
+      && CREDIT_PACK_RECOVERY_STATUSES.has(result?.status)
+    ) {
+      storeCreditPackRequestId(userId, result.purchaseRequestId);
+      updateCreditPackModalBusy(false);
+      closeCreditPackConfirmationModal({
+        restoreFocus: false,
+        resetFlow: false
+      });
+      trackPendingCreditPackPurchase(session, result.purchaseRequestId, {
+        status: result.status,
+        packKey: result?.pack?.key || context.packKey
+      });
+      setCreditPackStatus('pricing.addons.status.responseUnknown', 'pending');
+      focusCreditPackStatus();
+      return false;
+    }
+  } catch (error) {
+    console.error(
+      '[credit-packs] Preview cancellation could not be confirmed:',
+      error.message
+    );
+  }
+
+  // The reservation may have raced with another tab's confirmation. Keep the
+  // same opaque request locked until the server gives a definitive state.
+  creditPackPurchasePhase = 'awaiting_confirmation';
+  updateCreditPackModalBusy(false);
+  renderCreditPacks();
+  setCreditPackModalError('pricing.addons.error.unavailable');
+  setCreditPackStatus('pricing.addons.status.responseUnknown', 'pending');
+  document.getElementById('creditPackModalCancel')?.focus();
+  return false;
+}
+
+function updateCreditPackModalBusy(isBusy) {
+  const modal = document.getElementById('creditPackConfirmModal');
+  const close = document.getElementById('creditPackModalClose');
+  const cancel = document.getElementById('creditPackModalCancel');
+  const confirm = document.getElementById('creditPackModalConfirm');
+  modal?.setAttribute('aria-busy', String(isBusy));
+  if (close) close.disabled = isBusy;
+  if (cancel) cancel.disabled = isBusy;
+  if (confirm) confirm.disabled = isBusy;
+}
+
+async function pollCreditPackPurchase(session, requestId) {
+  const userId = session?.user?.id;
+  const authGeneration = authSessionGeneration;
+  if (
+    !userId
+    || !isValidCreditPackRequestId(requestId)
+    || !isCurrentCreditPackAuthContext(userId, authGeneration)
+  ) {
+    return;
+  }
+  const pollKey = `${userId}:${requestId}`;
+  if (creditPackStatusPollPromise && creditPackStatusPollKey === pollKey) {
+    return creditPackStatusPollPromise;
+  }
+
+  const generation = ++creditPackStatusPollGeneration;
+  creditPackStatusPollKey = pollKey;
+  const pollPromise = (async () => {
+    let lastStatus = null;
+    for (let attempt = 0; attempt < CREDIT_PACK_STATUS_ATTEMPTS; attempt += 1) {
+      if (
+        generation !== creditPackStatusPollGeneration
+        || !isCurrentCreditPackAuthContext(userId, authGeneration)
+        || creditPackPurchaseRequestId !== requestId
+      ) {
+        return;
+      }
+
+      try {
+        const response = await fetchCreditPackStatusWithTimeout(
+          `/api/payment/credit-packs/purchase/${encodeURIComponent(requestId)}`,
+          session
+        );
+        const result = await response.json().catch(() => null);
+        if (
+          generation !== creditPackStatusPollGeneration
+          || !isCurrentCreditPackAuthContext(userId, authGeneration)
+          || creditPackPurchaseRequestId !== requestId
+        ) {
+          return;
+        }
+
+        if (
+          response.ok
+          && result?.success === true
+          && result.purchaseRequestId === requestId
+        ) {
+          lastStatus = result.status;
+          if (result.pack?.key) creditPackPurchasePending = result.pack.key;
+
+          // A refund or reconciled provider-unknown outcome can still require
+          // account review. The durable server flag is authoritative and must
+          // win over the status label so the browser never clears the lock or
+          // suggests another purchase.
+          if (
+            result.reviewRequired === true
+            && !['withheld', 'chargeback'].includes(result.status)
+          ) {
+            creditPackPurchasePhase = 'withheld';
+            renderCreditPacks();
+            setCreditPackStatus(
+              'pricing.addons.status.withheld',
+              'error'
+            );
+            await refreshUserProfile(session);
+            return;
+          }
+
+          if (result.status === 'completed') {
+            clearStoredCreditPackRequestId(userId, requestId);
+            resetCreditPackFlow('pricing.addons.status.confirmed', 'success');
+            await refreshUserProfile(session);
+            return;
+          }
+
+          if (result.status === 'failed') {
+            clearStoredCreditPackRequestId(userId, requestId);
+            resetCreditPackFlow('pricing.addons.status.failed', 'error');
+            return;
+          }
+
+          if (result.status === 'withheld') {
+            creditPackPurchasePhase = 'withheld';
+            renderCreditPacks();
+            setCreditPackStatus(
+              'pricing.addons.status.withheld',
+              'error'
+            );
+            return;
+          }
+
+          if (result.status === 'refunded') {
+            clearStoredCreditPackRequestId(userId, requestId);
+            resetCreditPackFlow('pricing.addons.status.refunded', 'success');
+            await refreshUserProfile(session);
+            return;
+          }
+
+          if (result.status === 'chargeback') {
+            creditPackPurchasePhase = 'chargeback';
+            renderCreditPacks();
+            setCreditPackStatus(
+              'pricing.addons.status.chargeback',
+              'error'
+            );
+            await refreshUserProfile(session);
+            return;
+          }
+
+          if (result.status === 'created') {
+            const recoveredContext = normalizeCreditPackPreview(
+              result,
+              result.pack?.key
+            );
+            if (!recoveredContext) {
+              creditPackPurchasePhase = 'created';
+              renderCreditPacks();
+              setCreditPackStatus(
+                'pricing.addons.status.responseUnknown',
+                'pending'
+              );
+              return;
+            }
+            openCreditPackConfirmationModal(
+              recoveredContext,
+              document.activeElement,
+              { userId, authGeneration }
+            );
+            setCreditPackStatus();
+            return;
+          }
+
+          if (CREDIT_PACK_PENDING_STATUSES.has(result.status)) {
+            creditPackPurchasePhase = result.status;
+            renderCreditPacks();
+            setCreditPackStatus(
+              result.status === 'provider_unknown'
+                ? 'pricing.addons.status.providerUnknown'
+                : 'pricing.addons.status.pending',
+              'pending'
+            );
+          } else {
+            setCreditPackStatus('pricing.addons.status.pending', 'pending');
+            return;
+          }
+        } else if (response.status === 404) {
+          // The purchase POST performs two bounded Paddle reads before its
+          // durable request exists. A lost response can therefore make the
+          // exact status lookup arrive first. Never clear the token or unlock
+          // another charge on this ambiguous 404. Discover the server's latest
+          // request as a concurrent tab may have won with a different token.
+          lastStatus = 'provider_unknown';
+          creditPackPurchasePhase = 'provider_unknown';
+          renderCreditPacks();
+          setCreditPackStatus(
+            'pricing.addons.status.responseUnknown',
+            'pending'
+          );
+          try {
+            const recovered = await fetchCreditPackRecoveryCandidate(session);
+            if (
+              generation !== creditPackStatusPollGeneration
+              || !isCurrentCreditPackAuthContext(userId, authGeneration)
+              || creditPackPurchaseRequestId !== requestId
+            ) {
+              return;
+            }
+            if (
+              recovered
+              && recovered.purchaseRequestId !== requestId
+            ) {
+              const replaced = replaceStoredCreditPackRequestId(
+                userId,
+                requestId,
+                recovered.purchaseRequestId
+              );
+              const latestStoredRequestId = readStoredCreditPackRequestId(userId);
+              const recoveryRequestId = replaced
+                ? recovered.purchaseRequestId
+                : latestStoredRequestId || recovered.purchaseRequestId;
+              trackPendingCreditPackPurchase(
+                session,
+                recoveryRequestId,
+                {
+                  status: recoveryRequestId === recovered.purchaseRequestId
+                    ? recovered.status
+                    : 'provider_unknown',
+                  packKey: recoveryRequestId === recovered.purchaseRequestId
+                    ? recovered.pack?.key || null
+                    : null
+                }
+              );
+              return;
+            }
+          } catch (recoveryError) {
+            console.error(
+              '[credit-packs] Purchase discovery delayed:',
+              recoveryError.message
+            );
+          }
+        } else if (response.status === 400) {
+          // A locally valid server-issued token should never be rejected.
+          // Keep the flow locked for reconciliation instead of guessing that
+          // the original charge did not run.
+          lastStatus = 'provider_unknown';
+          creditPackPurchasePhase = 'provider_unknown';
+          renderCreditPacks();
+          setCreditPackStatus(
+            'pricing.addons.status.responseUnknown',
+            'pending'
+          );
+          return;
+        }
+      } catch (error) {
+        if (
+          generation !== creditPackStatusPollGeneration
+          || !isCurrentCreditPackAuthContext(userId, authGeneration)
+          || creditPackPurchaseRequestId !== requestId
+        ) {
+          return;
+        }
+        console.error('[credit-packs] Purchase status check delayed:', error.message);
+      }
+
+      if (attempt < CREDIT_PACK_STATUS_ATTEMPTS - 1) {
+        await waitForCreditPackStatus();
+      }
+    }
+
+    if (
+      generation === creditPackStatusPollGeneration
+      && isCurrentCreditPackAuthContext(userId, authGeneration)
+      && creditPackPurchaseRequestId === requestId
+    ) {
+      creditPackPurchasePhase = CREDIT_PACK_PENDING_STATUSES.has(lastStatus)
+        ? lastStatus
+        : 'provider_unknown';
+      renderCreditPacks();
+      setCreditPackStatus(
+        lastStatus === 'provider_unknown'
+          ? 'pricing.addons.status.providerUnknown'
+          : 'pricing.addons.status.pending',
+        'pending'
+      );
+    }
+  })();
+
+  let trackedPromise;
+  trackedPromise = pollPromise.finally(() => {
+    if (creditPackStatusPollPromise === trackedPromise) {
+      creditPackStatusPollPromise = null;
+      creditPackStatusPollKey = null;
+    }
+  });
+  creditPackStatusPollPromise = trackedPromise;
+  return trackedPromise;
+}
+
+function trackPendingCreditPackPurchase(session, requestId, {
+  status = 'submitted',
+  packKey = null
+} = {}) {
+  const userId = session?.user?.id;
+  if (
+    !userId
+    || activeAuthUserId !== userId
+    || !isValidCreditPackRequestId(requestId)
+  ) {
+    return false;
+  }
+  if (
+    creditPackPurchaseRequestId === requestId
+    && creditPackStatusPollPromise
+  ) {
+    return true;
+  }
+  creditPackPurchasePending =
+    packKey || creditPackPurchasePending || '__pending__';
+  creditPackPurchaseRequestId = requestId;
+  creditPackPurchasePhase = CREDIT_PACK_PENDING_STATUSES.has(status)
+    ? status
+    : ['withheld', 'chargeback'].includes(status)
+      ? status
+      : 'provider_unknown';
+  renderCreditPacks();
+  setCreditPackStatus(
+    ['withheld', 'chargeback'].includes(creditPackPurchasePhase)
+      ? (
+          creditPackPurchasePhase === 'chargeback'
+            ? 'pricing.addons.status.chargeback'
+            : 'pricing.addons.status.withheld'
+        )
+      : creditPackPurchasePhase === 'provider_unknown'
+      ? 'pricing.addons.status.providerUnknown'
+      : 'pricing.addons.status.pending',
+    ['withheld', 'chargeback'].includes(creditPackPurchasePhase)
+      ? 'error'
+      : 'pending'
+  );
+  void pollCreditPackPurchase(session, requestId);
+  return true;
+}
+
+function lockCreditPackRecovery(userId, recoveryGeneration) {
+  if (
+    recoveryGeneration !== creditPackPendingRecoveryGeneration
+    || activeAuthUserId !== userId
+    || creditPackPurchaseRequestId
+  ) {
+    return;
+  }
+  creditPackPurchasePending = '__pending__';
+  creditPackPurchasePhase = 'provider_unknown';
+  renderCreditPacks();
+  setCreditPackStatus('pricing.addons.status.responseUnknown', 'pending');
+}
+
+function resumeCreditPackPurchase(session, { discoverIfIdle = true } = {}) {
+  const userId = session?.user?.id;
+  if (!userId || activeAuthUserId !== userId) return null;
+
+  const storedRequestId = readStoredCreditPackRequestId(userId);
+  if (storedRequestId) {
+    trackPendingCreditPackPurchase(session, storedRequestId);
+    return creditPackStatusPollPromise;
+  }
+  if (!discoverIfIdle && creditPackPurchasePhase === 'idle') return null;
+
+  const recoveryGeneration = creditPackPendingRecoveryGeneration;
+  const recoveryKey = `${recoveryGeneration}:${userId}`;
+  if (
+    creditPackPendingRecoveryPromise
+    && creditPackPendingRecoveryKey === recoveryKey
+  ) {
+    return creditPackPendingRecoveryPromise;
+  }
+
+  creditPackPurchasePending = '__pending__';
+  creditPackPurchasePhase = 'recovering';
+  renderCreditPacks();
+
+  const recoveryPromise = (async () => {
+    try {
+      const purchase = await fetchCreditPackRecoveryCandidate(session);
+      if (
+        recoveryGeneration !== creditPackPendingRecoveryGeneration
+        || activeAuthUserId !== userId
+      ) {
+        return;
+      }
+
+      if (purchase === null) {
+        if (
+          recoveryGeneration === creditPackPendingRecoveryGeneration
+          && activeAuthUserId === userId
+          && creditPackPurchasePhase === 'recovering'
+          && !creditPackPurchaseRequestId
+        ) {
+          resetCreditPackFlow();
+        }
+        return;
+      }
+
+      const latestStoredRequestId = readStoredCreditPackRequestId(userId);
+      if (latestStoredRequestId) {
+        trackPendingCreditPackPurchase(session, latestStoredRequestId);
+        return;
+      }
+      if (
+        creditPackPurchaseRequestId
+        && creditPackPurchaseRequestId !== purchase.purchaseRequestId
+      ) {
+        return;
+      }
+
+      storeCreditPackRequestId(userId, purchase.purchaseRequestId);
+      trackPendingCreditPackPurchase(session, purchase.purchaseRequestId, {
+        status: purchase.status,
+        packKey: purchase.pack?.key || null
+      });
+    } catch (error) {
+      console.error(
+        '[credit-packs] Pending purchase recovery failed:',
+        error.message
+      );
+      lockCreditPackRecovery(userId, recoveryGeneration);
+    }
+  })();
+
+  let trackedRecoveryPromise;
+  trackedRecoveryPromise = recoveryPromise.finally(() => {
+    if (creditPackPendingRecoveryPromise === trackedRecoveryPromise) {
+      creditPackPendingRecoveryPromise = null;
+      creditPackPendingRecoveryKey = null;
+    }
+  });
+  creditPackPendingRecoveryKey = recoveryKey;
+  creditPackPendingRecoveryPromise = trackedRecoveryPromise;
+  return trackedRecoveryPromise;
+}
+
+async function resumeCurrentCreditPackLifecycle() {
+  const userId = activeAuthUserId;
+  const authGeneration = authSessionGeneration;
+  if (!userId) return;
+  const storedRequestId = readStoredCreditPackRequestId(userId);
+  if (
+    !storedRequestId
+    && !CREDIT_PACK_RECOVERABLE_PHASES.has(creditPackPurchasePhase)
+  ) {
+    return;
+  }
+
+  const { data: { session } } = await sbClient.auth.getSession();
+  if (
+    session?.user?.id !== userId
+    || !isCurrentCreditPackAuthContext(userId, authGeneration)
+  ) {
+    return;
+  }
+  // Visibility/storage callbacks may begin while a confirmation modal is
+  // idle and resume only after this tab starts its own mutation. Do not let
+  // that older callback launch a competing status poll over a local submit or
+  // cancellation that is already in progress.
+  if (['previewing', 'submitting', 'cancelling'].includes(
+    creditPackPurchasePhase
+  )) {
+    return;
+  }
+  resumeCreditPackPurchase(session, { discoverIfIdle: false });
+}
+
+window.addEventListener('online', () => {
+  void resumeCurrentCreditPackLifecycle();
+});
+window.addEventListener('storage', event => {
+  const userId = activeAuthUserId;
+  if (
+    !userId
+    || event.key !== getCreditPackStorageKey(userId)
+    || !isValidCreditPackRequestId(event.newValue)
+  ) {
+    return;
+  }
+  void resumeCurrentCreditPackLifecycle();
+});
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') {
+    void resumeCurrentCreditPackLifecycle();
+  }
+});
+
+async function startCreditPackPurchase(packKey) {
+  if (creditPackPurchasePhase !== 'idle') return;
+
+  const authGeneration = authSessionGeneration;
+  const { data: { session } } = await sbClient.auth.getSession();
+  if (!session) {
+    if (authGeneration !== authSessionGeneration) return;
+    openModal();
+    return;
+  }
+  const userId = session.user?.id;
+  if (!isCurrentCreditPackAuthContext(userId, authGeneration)) return;
+  const existingRequestId = readStoredCreditPackRequestId(userId);
+  if (existingRequestId) {
+    trackPendingCreditPackPurchase(session, existingRequestId, {
+      status: 'provider_unknown'
+    });
+    return;
+  }
+  if (!['pro', 'enterprise', 'paid'].includes(currentUserPlan)) {
+    setCreditPackStatus(
+      'pricing.addons.error.activeSubscriptionRequired',
+      'error'
+    );
+    return;
+  }
+
+  const returnFocus = document.activeElement;
+  creditPackPurchasePending = packKey;
+  creditPackPurchasePhase = 'previewing';
+  renderCreditPacks();
+  setCreditPackStatus('pricing.addons.status.previewing', 'pending');
+
+  try {
+    const response = await fetch('/api/payment/credit-packs/preview', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${session.access_token}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ packKey })
+    });
+    const result = await response.json().catch(() => null);
+    if (!isCurrentCreditPackAuthContext(userId, authGeneration)) return;
+    if (result?.code === 'PURCHASE_REVIEW_REQUIRED') {
+      if (isValidCreditPackRequestId(result?.purchaseRequestId)) {
+        storeCreditPackRequestId(userId, result.purchaseRequestId);
+        creditPackPurchaseRequestId = result.purchaseRequestId;
+      }
+      creditPackPurchasePending = result?.pack?.key || '__pending__';
+      creditPackPurchasePhase = 'withheld';
+      renderCreditPacks();
+      setCreditPackStatus('pricing.addons.status.withheld', 'error');
+      focusCreditPackStatus();
+      return;
+    }
+    if (
+      (
+        response.status === 202
+        || result?.code === 'PURCHASE_ALREADY_PENDING'
+      )
+      && isValidCreditPackRequestId(result?.purchaseRequestId)
+      && CREDIT_PACK_RECOVERY_STATUSES.has(result?.status)
+    ) {
+      const stored = storeCreditPackRequestId(
+        userId,
+        result.purchaseRequestId
+      );
+      const recoveryRequestId = stored
+        ? result.purchaseRequestId
+        : readStoredCreditPackRequestId(userId) || result.purchaseRequestId;
+      trackPendingCreditPackPurchase(session, recoveryRequestId, {
+        status: recoveryRequestId === result.purchaseRequestId
+          ? result.status
+          : 'provider_unknown',
+        packKey: recoveryRequestId === result.purchaseRequestId
+          ? result?.pack?.key || packKey
+          : null
+      });
+      return;
+    }
+    const context = response.ok && result?.success === true
+      ? normalizeCreditPackPreview(result, packKey)
+      : null;
+    if (!context) {
+      const messageKey = result?.code === 'ACTIVE_SUBSCRIPTION_REQUIRED'
+        ? 'pricing.addons.error.activeSubscriptionRequired'
+        : result?.code === 'INVALID_PADDLE_PREVIEW'
+          ? 'pricing.addons.error.invalidPreview'
+          : 'pricing.addons.error.unavailable';
+      const reservationReleased =
+        isValidCreditPackRequestId(result?.purchaseRequestId)
+        && result?.status === 'failed'
+        && result?.chargeMayHaveRun === false;
+      if (reservationReleased) {
+        clearStoredCreditPackRequestId(userId, result.purchaseRequestId);
+        resetCreditPackFlow(messageKey, 'error');
+        return;
+      }
+      setCreditPackStatus(messageKey, 'error');
+      await resumeCreditPackPurchase(session);
+      return;
+    }
+    if (!storeCreditPackRequestId(userId, context.purchaseRequestId)) {
+      openCreditPackConfirmationModal(context, returnFocus, {
+        userId,
+        authGeneration
+      });
+      const cancellationConfirmed =
+        await cancelCreditPackConfirmationModal();
+      if (cancellationConfirmed) {
+        setCreditPackStatus(
+          'pricing.addons.error.recoveryStorageRequired',
+          'error'
+        );
+      }
+      return;
+    }
+    openCreditPackConfirmationModal(context, returnFocus, {
+      userId,
+      authGeneration
+    });
+    setCreditPackStatus();
+  } catch (error) {
+    if (!isCurrentCreditPackAuthContext(userId, authGeneration)) return;
+    console.error('[credit-packs] Preview failed:', error.message);
+    setCreditPackStatus(
+      'pricing.addons.status.responseUnknown',
+      'pending'
+    );
+    await resumeCreditPackPurchase(session);
+  }
+}
+
+async function submitCreditPackPurchase() {
+  const context = creditPackPreviewContext;
+  if (!context || creditPackPurchasePhase !== 'awaiting_confirmation') return;
+  const purchaseUserId = creditPackPreviewUserId;
+  const purchaseAuthGeneration = creditPackPreviewAuthGeneration;
+  if (
+    !isCurrentCreditPackAuthContext(
+      purchaseUserId,
+      purchaseAuthGeneration
+    )
+  ) {
+    return;
+  }
+
+  const { data: { session } } = await sbClient.auth.getSession();
+  if (!session) {
+    if (
+      !isCurrentCreditPackAuthContext(
+        purchaseUserId,
+        purchaseAuthGeneration
+      )
+    ) {
+      return;
+    }
+    creditPackPurchaseRequestId = context.purchaseRequestId;
+    creditPackPurchasePending = context.packKey;
+    creditPackPurchasePhase = 'provider_unknown';
+    closeCreditPackConfirmationModal({
+      restoreFocus: false,
+      resetFlow: false
+    });
+    renderCreditPacks();
+    setCreditPackStatus('pricing.addons.status.responseUnknown', 'pending');
+    openModal();
+    return;
+  }
+  if (
+    session.user?.id !== purchaseUserId
+    || !isCurrentCreditPackAuthContext(
+      purchaseUserId,
+      purchaseAuthGeneration
+    )
+  ) {
+    return;
+  }
+
+  const requestId = context.purchaseRequestId;
+  const existingRequestId = readStoredCreditPackRequestId(purchaseUserId);
+  if (
+    !isValidCreditPackRequestId(requestId)
+    || (
+      existingRequestId
+      && existingRequestId !== requestId
+    )
+  ) {
+    closeCreditPackConfirmationModal({
+      restoreFocus: false,
+      resetFlow: false
+    });
+    if (existingRequestId) {
+      trackPendingCreditPackPurchase(session, existingRequestId, {
+        status: 'provider_unknown'
+      });
+    } else {
+      creditPackPurchasePhase = 'provider_unknown';
+      renderCreditPacks();
+      setCreditPackStatus(
+        'pricing.addons.status.responseUnknown',
+        'pending'
+      );
+    }
+    focusCreditPackStatus();
+    return;
+  }
+
+  creditPackPurchasePhase = 'submitting';
+  updateCreditPackModalBusy(true);
+  renderCreditPacks();
+  setCreditPackModalError();
+  setCreditPackStatus('pricing.addons.status.submitting', 'pending');
+  // Persist the server-issued opaque request token before the money-moving
+  // POST. localStorage survives reloads, tab closure, and concurrent tabs.
+  // Never clear it for an ambiguous response or a not-yet-registered 404.
+  if (!storeCreditPackRequestId(purchaseUserId, requestId)) {
+    updateCreditPackModalBusy(false);
+    creditPackPurchasePhase = 'awaiting_confirmation';
+    renderCreditPacks();
+    setCreditPackModalError(
+      'pricing.addons.error.recoveryStorageRequired'
+    );
+    setCreditPackStatus(
+      'pricing.addons.error.recoveryStorageRequired',
+      'error'
+    );
+    document.getElementById('creditPackModalConfirm')?.focus();
+    return;
+  }
+
+  // A status request started while this tab was restoring the `created`
+  // preview can resolve after confirmation and otherwise reopen the modal or
+  // clear the pending message. Fence that stale generation before the
+  // money-moving request, then start a fresh poll from its durable response.
+  invalidateCreditPackStatusPoll();
+
+  let response;
+  let result;
+  try {
+    response = await fetch('/api/payment/credit-packs/purchase', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${session.access_token}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        packKey: context.packKey,
+        purchaseRequestId: requestId,
+        confirmationVersion: context.confirmationVersion,
+        confirmedGrandTotal: context.preview.grandTotal,
+        confirmedCurrencyCode: context.currencyCode
+      })
+    });
+    result = await response.json().catch(() => null);
+  } catch (error) {
+    if (
+      !isCurrentCreditPackAuthContext(
+        purchaseUserId,
+        purchaseAuthGeneration
+      )
+    ) {
+      return;
+    }
+    console.error('[credit-packs] Purchase response is unknown:', error.message);
+    updateCreditPackModalBusy(false);
+    creditPackPurchasePhase = 'provider_unknown';
+    closeCreditPackConfirmationModal({
+      restoreFocus: false,
+      resetFlow: false
+    });
+    trackPendingCreditPackPurchase(session, requestId, {
+      status: 'provider_unknown',
+      packKey: context.packKey
+    });
+    setCreditPackStatus('pricing.addons.status.responseUnknown', 'pending');
+    focusCreditPackStatus();
+    return;
+  }
+
+  if (
+    !isCurrentCreditPackAuthContext(
+      purchaseUserId,
+      purchaseAuthGeneration
+    )
+  ) {
+    if (isValidCreditPackRequestId(result?.purchaseRequestId)) {
+      storeCreditPackRequestId(purchaseUserId, result.purchaseRequestId);
+    }
+    return;
+  }
+
+  if ([
+    'CREDIT_PACK_TOTAL_CHANGED',
+    'CREDIT_PACK_CONFIRMATION_CHANGED'
+  ].includes(result?.code)) {
+    const updatedContext = normalizeCreditPackPreview(result, context.packKey);
+    updateCreditPackModalBusy(false);
+    if (!updatedContext) {
+      closeCreditPackConfirmationModal({
+        restoreFocus: false,
+        resetFlow: false
+      });
+      trackPendingCreditPackPurchase(session, requestId, {
+        status: 'created',
+        packKey: context.packKey
+      });
+      setCreditPackStatus('pricing.addons.status.responseUnknown', 'pending');
+      focusCreditPackStatus();
+      return;
+    }
+    creditPackPreviewContext = updatedContext;
+    creditPackPurchasePhase = 'awaiting_confirmation';
+    renderCreditPacks();
+    renderCreditPackConfirmationModal();
+    setCreditPackModalError('pricing.addons.modal.totalChanged');
+    setCreditPackStatus('pricing.addons.modal.totalChanged', 'pending');
+    document.getElementById('creditPackModalConfirm')?.focus();
+    return;
+  }
+
+  const resultRequestId = result?.purchaseRequestId;
+  const hasRequestId = isValidCreditPackRequestId(resultRequestId);
+  if (
+    hasRequestId
+    && result?.code === 'PURCHASE_REVIEW_REQUIRED'
+    && result?.status === 'withheld'
+  ) {
+    storeCreditPackRequestId(session.user.id, resultRequestId);
+    creditPackPurchaseRequestId = resultRequestId;
+    creditPackPurchasePending = result?.pack?.key || context.packKey;
+    creditPackPurchasePhase = 'withheld';
+    updateCreditPackModalBusy(false);
+    closeCreditPackConfirmationModal({
+      restoreFocus: false,
+      resetFlow: false
+    });
+    renderCreditPacks();
+    setCreditPackStatus('pricing.addons.status.withheld', 'error');
+    focusCreditPackStatus();
+    return;
+  }
+
+  const isPendingResponse = hasRequestId && (
+    result?.success === true
+    || result?.code === 'PURCHASE_CONFIRMATION_PENDING'
+    || result?.code === 'PURCHASE_ALREADY_PENDING'
+  ) && (
+    CREDIT_PACK_PENDING_STATUSES.has(result?.status)
+    || result?.code === 'PURCHASE_CONFIRMATION_PENDING'
+    || result?.code === 'PURCHASE_ALREADY_PENDING'
+  );
+
+  if (isPendingResponse) {
+    storeCreditPackRequestId(session.user.id, resultRequestId);
+    creditPackPurchaseRequestId = resultRequestId;
+    creditPackPurchasePending = result?.pack?.key || context.packKey;
+    creditPackPurchasePhase = CREDIT_PACK_PENDING_STATUSES.has(result?.status)
+      ? result.status
+      : 'provider_unknown';
+    updateCreditPackModalBusy(false);
+    closeCreditPackConfirmationModal({
+      restoreFocus: false,
+      resetFlow: false
+    });
+    renderCreditPacks();
+    setCreditPackStatus(
+      creditPackPurchasePhase === 'provider_unknown'
+        ? 'pricing.addons.status.providerUnknown'
+        : 'pricing.addons.status.pending',
+      'pending'
+    );
+    focusCreditPackStatus();
+    if (
+      ['charging', 'submitted', 'provider_unknown']
+        .includes(creditPackPurchasePhase)
+    ) {
+      window.PromptGenAnalytics?.setAuthToken(session.access_token);
+      window.PromptGenAnalytics?.track('credit_pack_purchase_submitted', {
+        packKey: context.packKey,
+        credits: context.credits,
+        surface: 'pricing_addons'
+      });
+    }
+    void pollCreditPackPurchase(session, resultRequestId);
+    return;
+  }
+
+  updateCreditPackModalBusy(false);
+  const rejectedBeforeHandler = result?.requestProcessed === false
+    && (
+      (response.status === 401
+        && ['AUTH_REQUIRED', 'AUTH_INVALID'].includes(result?.code))
+      || (
+        response.status === 429
+        && result?.code === 'API_RATE_LIMITED'
+      )
+    );
+  const rejectedBeforeCharge = result?.chargeMayHaveRun === false;
+  const reservationReleased = result?.purchaseRequestId === requestId
+    && result?.status === 'failed'
+    && result?.chargeMayHaveRun === false;
+  if (reservationReleased) {
+    clearStoredCreditPackRequestId(purchaseUserId, requestId);
+    const failureMessageKey =
+      result?.code === 'PURCHASE_REVIEW_REQUIRED'
+        ? 'pricing.addons.status.withheld'
+        : [
+          'ACTIVE_SUBSCRIPTION_REQUIRED',
+          'SUBSCRIPTION_RECONFIRMATION_REQUIRED'
+        ].includes(result?.code)
+        ? 'pricing.addons.error.activeSubscriptionRequired'
+        : rejectedBeforeHandler
+          || [
+            'CREDIT_PACKS_UNAVAILABLE',
+            'SUBSCRIPTION_CHECK_FAILED',
+            'PADDLE_UNAVAILABLE',
+            'CREDIT_PACK_PREVIEW_REJECTED',
+            'INVALID_PADDLE_PREVIEW',
+            'CREDIT_PACK_TAX_CATEGORY_REQUIRED',
+            'CREDIT_PACK_CONFIGURATION_INVALID',
+            'INVALID_PADDLE_API_BASE'
+          ].includes(result?.code)
+          ? 'pricing.addons.error.unavailable'
+          : 'pricing.addons.error.purchaseRejected';
+    resetCreditPackFlow(failureMessageKey, 'error');
+    closeCreditPackConfirmationModal({
+      restoreFocus: true,
+      resetFlow: false
+    });
+    return;
+  }
+
+  if (rejectedBeforeHandler || rejectedBeforeCharge) {
+    creditPackPurchasePhase = 'awaiting_confirmation';
+    updateCreditPackModalBusy(false);
+    renderCreditPacks();
+    setCreditPackModalError(
+      [
+        'ACTIVE_SUBSCRIPTION_REQUIRED',
+        'SUBSCRIPTION_RECONFIRMATION_REQUIRED'
+      ].includes(result?.code)
+        ? 'pricing.addons.error.activeSubscriptionRequired'
+        : 'pricing.addons.error.unavailable'
+    );
+    setCreditPackStatus(
+      [
+        'ACTIVE_SUBSCRIPTION_REQUIRED',
+        'SUBSCRIPTION_RECONFIRMATION_REQUIRED'
+      ].includes(result?.code)
+        ? 'pricing.addons.error.activeSubscriptionRequired'
+        : 'pricing.addons.error.unavailable',
+      'error'
+    );
+    document.getElementById('creditPackModalConfirm')?.focus();
+    return;
+  }
+
+  creditPackPurchasePhase = 'provider_unknown';
+  closeCreditPackConfirmationModal({
+    restoreFocus: false,
+    resetFlow: false
+  });
+  trackPendingCreditPackPurchase(session, requestId, {
+    status: 'provider_unknown',
+    packKey: context.packKey
+  });
+  setCreditPackStatus('pricing.addons.status.responseUnknown', 'pending');
+  focusCreditPackStatus();
+}
+
+const creditPackConfirmModal = document.getElementById('creditPackConfirmModal');
+const creditPackModalClose = document.getElementById('creditPackModalClose');
+const creditPackModalCancel = document.getElementById('creditPackModalCancel');
+const creditPackModalConfirm = document.getElementById('creditPackModalConfirm');
+
+creditPackModalClose?.addEventListener('click', () => {
+  void cancelCreditPackConfirmationModal();
+});
+creditPackModalCancel?.addEventListener('click', () => {
+  void cancelCreditPackConfirmationModal();
+});
+creditPackModalConfirm?.addEventListener('click', () => {
+  void submitCreditPackPurchase();
+});
+creditPackConfirmModal?.addEventListener('click', event => {
+  if (event.target === creditPackConfirmModal) {
+    void cancelCreditPackConfirmationModal();
+  }
+});
+creditPackConfirmModal?.addEventListener('keydown', event => {
+  if (!creditPackConfirmModal.classList.contains('open')) return;
+  if (event.key === 'Escape') {
+    event.preventDefault();
+    void cancelCreditPackConfirmationModal();
+    return;
+  }
+  if (event.key !== 'Tab') return;
+  const focusable = [...creditPackConfirmModal.querySelectorAll(
+    'button:not([disabled]), [href], [tabindex]:not([tabindex="-1"])'
+  )].filter(element => !element.hidden);
+  if (focusable.length === 0) return;
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault();
+    first.focus();
+  }
+});
 
 async function ensurePaddleInitialized() {
   const catalog = await loadProductCatalog();
   if (paddleInitialized) return catalog;
   const clientToken = catalog?.paddle?.clientToken;
-  if (!clientToken || !window.Paddle) {
+  const paddleEnvironment = catalog?.paddle?.environment;
+  const paddle = window.Paddle;
+  const tokenEnvironment = typeof clientToken === 'string'
+    ? (clientToken.startsWith('test_')
+        ? 'sandbox'
+        : (clientToken.startsWith('live_') ? 'production' : null))
+    : null;
+  if (
+    !paddle
+    || typeof paddle.Initialize !== 'function'
+    || !['production', 'sandbox'].includes(paddleEnvironment)
+    || tokenEnvironment !== paddleEnvironment
+  ) {
     throw new Error('Checkout configuration is unavailable');
   }
-  Paddle.Initialize({
+  if (paddleEnvironment === 'sandbox') {
+    if (typeof paddle.Environment?.set !== 'function') {
+      throw new Error('Checkout configuration is unavailable');
+    }
+    paddle.Environment.set('sandbox');
+  }
+  paddle.Initialize({
     token: clientToken,
     eventCallback: function (event) {
       if (event.name === 'checkout.completed') {
         window.PromptGenAnalytics?.track('checkout_completed', { surface: 'paddle_overlay' });
-        sbClient.auth.getSession().then(function ({ data: { session } }) {
-          if (session) {
-            setTimeout(function () { refreshUserProfile(session); }, 1500);
-          }
-        });
+        handleSubscriptionCheckoutEvent('completed');
+      } else if (event.name === 'checkout.closed') {
+        handleSubscriptionCheckoutEvent('closed');
       }
     }
   });
@@ -711,6 +2301,7 @@ const modalClose  = document.getElementById('modalClose');
 function openModal() {
   loginModal.classList.add('open');
   loginModal.setAttribute('aria-hidden', 'false');
+  modalClose?.focus();
 }
 
 function closeModal() {
@@ -907,6 +2498,7 @@ async function refreshUserProfile(session) {
         }
         updateAnalyzeButtonState();
         updatePricingButtons();
+        renderCreditPacks();
       }
       return data;
     } catch (e) {
@@ -943,7 +2535,31 @@ function updateNavUI(session) {
 
 sbClient.auth.onAuthStateChange((event, session) => {
   const nextUserId = session?.user?.id || null;
-  if (nextUserId !== activeAuthUserId) {
+  const authUserChanged = nextUserId !== activeAuthUserId;
+  if (authUserChanged) {
+    creditPackStatusPollGeneration += 1;
+    creditPackStatusPollPromise = null;
+    creditPackStatusPollKey = null;
+    creditPackPendingRecoveryGeneration += 1;
+    creditPackPendingRecoveryPromise = null;
+    creditPackPendingRecoveryKey = null;
+    const creditPackModal = document.getElementById('creditPackConfirmModal');
+    creditPackModal?.classList.remove('open');
+    creditPackModal?.setAttribute('aria-hidden', 'true');
+    updateCreditPackModalBusy(false);
+    creditPackModalReturnFocus = null;
+    creditPackModalReturnPackKey = null;
+    creditPackPurchasePending = null;
+    creditPackPurchasePhase = 'idle';
+    creditPackPurchaseRequestId = null;
+    creditPackPreviewContext = null;
+    creditPackPreviewUserId = null;
+    creditPackPreviewAuthGeneration = null;
+    subscriptionCheckoutPending = false;
+    subscriptionCheckoutBlocked = false;
+    subscriptionCheckoutContext = null;
+    setCreditPackStatus();
+    setPricingCheckoutStatus();
     activeAuthUserId = nextUserId;
     authSessionGeneration += 1;
     currentUserPlan = null;
@@ -956,6 +2572,7 @@ sbClient.auth.onAuthStateChange((event, session) => {
     }
     updateAnalyzeButtonState();
     updatePricingButtons();
+    renderCreditPacks();
   }
 
   updateNavUI(session);
@@ -973,6 +2590,9 @@ sbClient.auth.onAuthStateChange((event, session) => {
   }
   if (session) {
     void refreshUserProfile(session);
+    resumeCreditPackPurchase(session, {
+      discoverIfIdle: authUserChanged || event === 'INITIAL_SESSION'
+    });
   } else {
     profileRefreshPromise = null;
     profileRefreshUserId = null;
@@ -1125,39 +2745,160 @@ if (manageSubBtn) {
 /* ══════════════════════════════════════
    PRICING CHECKOUT (Paddle overlay)
 ══════════════════════════════════════ */
+function renderPricingCheckoutStatus() {
+  const status = document.getElementById('pricingCheckoutStatus');
+  if (!status) return;
+  status.textContent = pricingCheckoutStatus.key
+    ? uiText(pricingCheckoutStatus.key, pricingCheckoutStatus.values)
+    : '';
+  if (pricingCheckoutStatus.state) {
+    status.dataset.state = pricingCheckoutStatus.state;
+  } else {
+    status.removeAttribute('data-state');
+  }
+}
+
+function setPricingCheckoutStatus(key = '', state = '', values = {}) {
+  pricingCheckoutStatus = { key, state, values };
+  renderPricingCheckoutStatus();
+}
+
+async function openSubscriptionTransaction(context) {
+  if (!context?.transactionId || !context?.checkoutAttemptId) return false;
+  subscriptionCheckoutPending = true;
+  subscriptionCheckoutBlocked = false;
+  updatePricingButtons();
+  setPricingCheckoutStatus('checkout.status.opening', 'pending');
+  try {
+    await ensurePaddleInitialized();
+    Paddle.Checkout.open({ transactionId: context.transactionId });
+    setPricingCheckoutStatus('checkout.status.opened', 'pending');
+    return true;
+  } catch (error) {
+    console.error('[checkout] Could not open the server-bound transaction:', error.message);
+    subscriptionCheckoutPending = false;
+    updatePricingButtons();
+    setPricingCheckoutStatus('checkout.status.readyToResume', 'pending');
+    return false;
+  }
+}
+
+function handleSubscriptionCheckoutEvent(eventName) {
+  const context = subscriptionCheckoutContext;
+  if (!context) return;
+
+  if (eventName === 'closed') {
+    if (context.completed) return;
+    subscriptionCheckoutPending = false;
+    subscriptionCheckoutBlocked = false;
+    updatePricingButtons();
+    setPricingCheckoutStatus('checkout.status.readyToResume', 'pending');
+    return;
+  }
+
+  if (eventName !== 'completed') return;
+  context.completed = true;
+  subscriptionCheckoutPending = false;
+  subscriptionCheckoutBlocked = true;
+  updatePricingButtons();
+  setPricingCheckoutStatus('checkout.status.confirming', 'pending');
+  sbClient.auth.getSession().then(function ({ data: { session } }) {
+    if (!session) return;
+    window.setTimeout(async function () {
+      const profile = await refreshUserProfile(session);
+      if (['pro', 'enterprise', 'paid'].includes(profile?.plan)) {
+        subscriptionCheckoutContext = null;
+        subscriptionCheckoutBlocked = false;
+        updatePricingButtons();
+        setPricingCheckoutStatus('checkout.status.confirmed', 'success');
+      } else {
+        setPricingCheckoutStatus('checkout.status.pending', 'pending');
+      }
+    }, 1500);
+  });
+}
+
 async function handleCheckout(plan) {
+  if (!['pro', 'enterprise'].includes(plan)) return;
   const { data: { session } } = await sbClient.auth.getSession();
   if (!session) {
     openModal();
     return;
   }
 
-  let catalog;
+  if (subscriptionCheckoutPending || subscriptionCheckoutBlocked) return;
+
+  if (subscriptionCheckoutContext) {
+    if (subscriptionCheckoutContext.plan !== plan) {
+      setPricingCheckoutStatus('checkout.status.finishExisting', 'pending');
+      return;
+    }
+    await openSubscriptionTransaction(subscriptionCheckoutContext);
+    return;
+  }
+
+  subscriptionCheckoutPending = true;
+  updatePricingButtons();
+  setPricingCheckoutStatus('checkout.status.starting', 'pending');
+
+  let response;
   try {
-    catalog = await ensurePaddleInitialized();
+    response = await fetch('/api/payment/checkout', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${session.access_token}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ plan })
+    });
+    const result = await response.json().catch(() => null);
+    const validTransactionId = typeof result?.transactionId === 'string'
+      && result.transactionId.length > 0
+      && result.transactionId.length <= 255;
+    const validAttemptId = isValidCreditPackRequestId(result?.checkoutAttemptId);
+
+    if (
+      response.ok
+      && result?.success === true
+      && validTransactionId
+      && validAttemptId
+    ) {
+      subscriptionCheckoutContext = {
+        plan,
+        transactionId: result.transactionId,
+        checkoutAttemptId: result.checkoutAttemptId,
+        completed: false
+      };
+      window.PromptGenAnalytics?.setAuthToken(session.access_token);
+      window.PromptGenAnalytics?.track('checkout_started', {
+        plan,
+        surface: 'pricing'
+      });
+      await openSubscriptionTransaction(subscriptionCheckoutContext);
+      return;
+    }
+
+    const pendingOutcome = response.status === 202
+      || result?.code === 'CHECKOUT_CONFIRMATION_PENDING'
+      || result?.code === 'CHECKOUT_PROVIDER_UNKNOWN';
+    subscriptionCheckoutPending = false;
+    subscriptionCheckoutBlocked = pendingOutcome
+      || response.status >= 500
+      || (response.ok && result?.success === true);
+    updatePricingButtons();
+    setPricingCheckoutStatus(
+      subscriptionCheckoutBlocked
+        ? 'checkout.status.unknown'
+        : 'checkout.error.unavailable',
+      subscriptionCheckoutBlocked ? 'pending' : 'error'
+    );
   } catch (error) {
-    console.error('[checkout] Catalog/Paddle initialization failed:', error.message);
-    alert(uiText('checkout.error.unavailable'));
-    return;
+    console.error('[checkout] Server checkout outcome is unknown:', error.message);
+    subscriptionCheckoutPending = false;
+    subscriptionCheckoutBlocked = true;
+    updatePricingButtons();
+    setPricingCheckoutStatus('checkout.status.unknown', 'pending');
   }
-  const priceId = catalog?.paddle?.priceIds?.[plan];
-  if (!priceId) {
-    console.error('[checkout] Missing server-provided Paddle price ID for plan=' + plan);
-    alert(uiText('checkout.error.unavailable'));
-    return;
-  }
-
-  window.PromptGenAnalytics?.setAuthToken(session.access_token);
-  window.PromptGenAnalytics?.track('checkout_started', {
-    plan: plan,
-    surface: 'pricing'
-  });
-
-  Paddle.Checkout.open({
-    items: [{ priceId: priceId, quantity: 1 }],
-    customer: { email: session.user.email },
-    customData: { userId: session.user.id, plan: plan }
-  });
 }
 
 document.getElementById('proPlanBtn')?.addEventListener('click', () => handlePlanButtonClick('pro'));
@@ -1231,6 +2972,26 @@ function updatePricingButtons() {
       btn.el.removeAttribute('title');
     }
   });
+
+  const paidButtons = PRICING_BUTTONS.filter(
+    button => ['pro', 'enterprise'].includes(button.plan) && button.el
+  );
+  if (subscriptionCheckoutPending || subscriptionCheckoutBlocked) {
+    paidButtons.forEach(button => {
+      button.el.disabled = true;
+      button.el.textContent = uiText('checkout.action.pending');
+    });
+  } else if (subscriptionCheckoutContext) {
+    paidButtons.forEach(button => {
+      if (button.plan === subscriptionCheckoutContext.plan) {
+        button.el.disabled = false;
+        button.el.textContent = uiText('checkout.action.resume');
+      } else {
+        button.el.disabled = true;
+        button.el.textContent = uiText('checkout.action.finishExisting');
+      }
+    });
+  }
 }
 
 // Handle redirect back from payment
@@ -1489,6 +3250,9 @@ document.querySelectorAll('.section-reveal').forEach(el => revealObserver.observ
 
 document.addEventListener('promptgen:localechange', async () => {
   if (productCatalog) hydrateProductCatalog(productCatalog);
+  renderCreditPackStatus();
+  renderPricingCheckoutStatus();
+  if (creditPackPreviewContext) renderCreditPackConfirmationModal();
   updateAnalyzeButtonState();
   updatePricingButtons();
   if (state.result) renderAnalysis(state.result.analysis || {});

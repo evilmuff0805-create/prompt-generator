@@ -10,6 +10,14 @@ if (environmentReport.missingFeatureVariables.length > 0) {
     missingFeatures: environmentReport.missingFeatures
   }));
 }
+if (environmentReport.paddleWarnings.length > 0) {
+  console.warn(JSON.stringify({
+    timestamp: new Date().toISOString(),
+    level: 'warn',
+    event: 'environment.paddle_credentials_warning',
+    warnings: environmentReport.paddleWarnings
+  }));
+}
 
 const express = require('express');
 const fs = require('fs');
@@ -18,6 +26,14 @@ const { createClient } = require('@supabase/supabase-js');
 const rateLimit = require('express-rate-limit');
 const logger = require('./lib/logger');
 const { getPublicProductCatalog } = require('./lib/product-catalog');
+const { getPublicCreditPackCatalog } = require('./lib/credit-pack-catalog');
+const {
+  applyProductCatalogToStructuredData,
+  applyProductCatalogToVisiblePricing
+} = require('./lib/product-structured-data');
+const {
+  buildPublicRuntimeConfigScript
+} = require('./lib/public-runtime-config');
 const { redactShareTokenPath } = require('./lib/storyboard-sharing');
 const {
   getAssetVersion,
@@ -27,7 +43,14 @@ const {
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const indexHtmlTemplate = fs.readFileSync(path.join(__dirname, 'public', 'index.html'), 'utf8');
+const publicProductCatalog = getPublicProductCatalog();
+const indexHtmlTemplate = applyProductCatalogToVisiblePricing(
+  applyProductCatalogToStructuredData(
+    fs.readFileSync(path.join(__dirname, 'public', 'index.html'), 'utf8'),
+    publicProductCatalog
+  ),
+  publicProductCatalog
+);
 const versionedHtmlTemplates = new Map([
   ['index.html', indexHtmlTemplate],
   ['frame.html', fs.readFileSync(path.join(__dirname, 'public', 'frame.html'), 'utf8')],
@@ -134,7 +157,15 @@ const apiLimiter = rateLimit({
   max: 60,                   // 분당 60 요청
   standardHeaders: true,
   legacyHeaders: false,
-  message: { success: false, error: 'Too many requests, please try again later.' }
+  // This response is emitted before any API handler can run. Money-moving
+  // clients may therefore safely discard a pre-stored recovery token only
+  // when both this code and requestProcessed=false are present.
+  message: {
+    success: false,
+    error: 'Too many requests, please try again later.',
+    code: 'API_RATE_LIMITED',
+    requestProcessed: false
+  }
 });
 
 const analyzeLimiter = rateLimit({
@@ -231,6 +262,18 @@ app.get(['/terms.html', '/privacy.html', '/refund.html'], (req, res) => {
 app.get('/storyboard-share.html', (req, res) => {
   res.status(404).type('text').send('Not found');
 });
+app.get('/runtime-config.js', (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  res.type('application/javascript');
+  try {
+    return res.send(buildPublicRuntimeConfigScript(process.env));
+  } catch (error) {
+    logger.error('runtime_config.public.failed', { error });
+    return res.status(503).send(
+      "'use strict';\nthrow new Error('[runtime-config] Public configuration is unavailable');\n"
+    );
+  }
+});
 app.use(express.static('public', {
   index: false,
   setHeaders: setStaticCacheHeaders
@@ -260,8 +303,16 @@ app.get('/api/health', (req, res) => {
 });
 
 app.get('/api/catalog', (req, res) => {
-  res.setHeader('Cache-Control', 'public, max-age=300');
-  res.json({ success: true, catalog: getPublicProductCatalog() });
+  // Billing flags and outbound price IDs are rollout controls. Never let a
+  // browser or intermediary reuse a pre-switch catalog during activation.
+  res.setHeader('Cache-Control', 'no-store');
+  res.json({
+    success: true,
+    catalog: {
+      ...publicProductCatalog,
+      creditPacks: getPublicCreditPackCatalog()
+    }
+  });
 });
 
 /* ── Helper: get user-scoped Supabase client ── */

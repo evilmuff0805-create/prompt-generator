@@ -482,10 +482,11 @@
       <h2 class="section-title" data-i18n="pricing.title">Simple Pricing</h2>
       <div class="pricing-grid">
 
+        <!-- catalog-plan:free:start -->
         <div class="pricing-card" data-catalog-plan="free">
           <div class="pricing-card__header">
             <h3 data-catalog-field="name">Free</h3>
-            <div class="pricing-card__price"><span class="price-amount" data-catalog-field="price">$0</span><span class="price-period" data-i18n="pricing.period.month">/month</span></div>
+            <div class="pricing-card__price"><span class="price-amount" data-catalog-field="price" data-catalog-price-fallback="free">$0</span><span class="price-period" data-i18n="pricing.period.month">/month</span></div>
             <p class="pricing-card__desc" data-catalog-field="description">For trying the core tools</p>
           </div>
           <ul class="pricing-card__features">
@@ -498,13 +499,15 @@
           </ul>
           <button id="freePlanBtn" class="btn btn--outline" data-i18n="common.action.getStarted">Get Started</button>
         </div>
+        <!-- catalog-plan:free:end -->
 
+        <!-- catalog-plan:pro:start -->
         <div class="pricing-card pricing-card--popular" data-catalog-plan="pro">
           <div class="popular-badge" data-i18n="pricing.badge.popular">POPULAR</div>
           <div class="pricing-card__header">
             <h3 data-catalog-field="name">Pro</h3>
             <div class="pricing-card__price">
-              <span class="price-amount" data-catalog-field="price">$9.99</span>
+              <span class="price-amount" data-catalog-field="price" data-catalog-price-fallback="pro">$9.99</span>
               <span class="price-period" data-i18n="pricing.period.month">/month</span>
             </div>
             <p class="pricing-card__desc" data-catalog-field="description">For individual creators</p>
@@ -520,11 +523,13 @@
           </ul>
           <button id="proPlanBtn" class="btn btn--primary" data-i18n="common.action.getStarted">Get Started</button>
         </div>
+        <!-- catalog-plan:pro:end -->
 
+        <!-- catalog-plan:enterprise:start -->
         <div class="pricing-card" data-catalog-plan="enterprise">
           <div class="pricing-card__header">
             <h3 data-catalog-field="name">Enterprise</h3>
-            <div class="pricing-card__price"><span class="price-amount" data-catalog-field="price">$19.99</span><span class="price-period" data-i18n="pricing.period.month">/month</span></div>
+            <div class="pricing-card__price"><span class="price-amount" data-catalog-field="price" data-catalog-price-fallback="enterprise">$19.99</span><span class="price-period" data-i18n="pricing.period.month">/month</span></div>
             <p class="pricing-card__desc" data-catalog-field="description">For high-volume individual creators</p>
           </div>
           <ul class="pricing-card__features">
@@ -536,9 +541,41 @@
           </ul>
           <button id="enterprisePlanBtn" class="btn btn--lavender" data-i18n="common.action.getStarted">Get Started</button>
         </div>
+        <!-- catalog-plan:enterprise:end -->
 
       </div>
       <p class="pricing-note" data-i18n="pricing.note">Pro and Enterprise are monthly subscriptions. Credits reset to the plan allotment at renewal and do not roll over. PromptGen does not currently include API access, team workspaces, custom models, or managed support.</p>
+      <p
+        id="pricingCheckoutStatus"
+        class="pricing-checkout-status"
+        role="status"
+        aria-live="polite"
+      ></p>
+
+      <aside
+        id="creditPackPanel"
+        class="credit-packs"
+        aria-labelledby="creditPackTitle"
+        hidden
+      >
+        <div class="credit-packs__header">
+          <div>
+            <div class="section-label" data-i18n="pricing.addons.label">Usage add-ons</div>
+            <h3 id="creditPackTitle" data-i18n="pricing.addons.title">Add credits without changing your plan</h3>
+          </div>
+          <p data-i18n="pricing.addons.description">Available to active Pro and Enterprise subscribers.</p>
+        </div>
+        <div id="creditPackList" class="credit-packs__list"></div>
+        <p class="credit-packs__note" id="creditPackNote"></p>
+      </aside>
+      <p
+        class="credit-packs__status"
+        id="creditPackStatus"
+        role="status"
+        aria-live="polite"
+        tabindex="-1"
+        hidden
+      ></p>
     </div>
   </section>
 
@@ -730,6 +767,83 @@
     </div>
   </div>
 
+  <!-- Credit Pack Confirmation Modal -->
+  <div
+    id="creditPackConfirmModal"
+    class="modal-overlay credit-pack-confirm-overlay"
+    aria-hidden="true"
+  >
+    <section
+      class="modal credit-pack-confirm"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="creditPackModalTitle"
+      aria-describedby="creditPackModalSummary creditPackModalTerms"
+    >
+      <button
+        class="modal__close credit-pack-confirm__close"
+        id="creditPackModalClose"
+        type="button"
+        aria-label="Close"
+        data-i18n-attr="aria-label:common.action.close"
+      >✕</button>
+      <div class="modal__logo">PromptGen</div>
+      <p class="credit-pack-confirm__eyebrow" data-i18n="pricing.addons.modal.eyebrow">Secure review</p>
+      <h2 class="modal__title" id="creditPackModalTitle">Review your credit purchase</h2>
+      <p class="modal__sub" id="creditPackModalSummary">Review the tax-inclusive total before the immediate one-time charge.</p>
+
+      <div class="credit-pack-confirm__receipt" aria-label="Purchase total" data-i18n-attr="aria-label:pricing.addons.modal.receiptLabel">
+        <div class="credit-pack-confirm__product">
+          <span id="creditPackModalCredits">600 credits</span>
+          <span data-i18n="pricing.addons.oneTime">One-time purchase · non-transferable PromptGen usage</span>
+        </div>
+        <dl class="credit-pack-confirm__totals">
+          <div>
+            <dt data-i18n="pricing.addons.modal.baseSubtotal">Base subtotal</dt>
+            <dd id="creditPackModalSubtotal">$10.00</dd>
+          </div>
+          <div>
+            <dt data-i18n="pricing.addons.modal.discount">Discount</dt>
+            <dd id="creditPackModalDiscount">$0.00</dd>
+          </div>
+          <div>
+            <dt data-i18n="pricing.addons.modal.tax">Tax</dt>
+            <dd id="creditPackModalTax">$0.00</dd>
+          </div>
+          <div class="credit-pack-confirm__grand-total">
+            <dt data-i18n="pricing.addons.modal.finalTotal">Final total</dt>
+            <dd id="creditPackModalTotal">$10.00</dd>
+          </div>
+        </dl>
+      </div>
+
+      <ul class="credit-pack-confirm__terms" id="creditPackModalTerms">
+        <li id="creditPackModalImmediate">One-time charge billed immediately to your active subscription.</li>
+        <li id="creditPackModalExpiry">Credits expire 365 days after purchase.</li>
+        <li id="creditPackModalEligibility">An active Pro or Enterprise subscription is required to use them.</li>
+        <li id="creditPackModalNoCash">Credits are non-transferable and have no cash value.</li>
+      </ul>
+      <p
+        id="creditPackModalError"
+        class="credit-pack-confirm__error"
+        role="alert"
+        hidden
+      ></p>
+      <div class="modal__btn-row credit-pack-confirm__actions">
+        <button
+          class="btn btn--secondary"
+          id="creditPackModalCancel"
+          type="button"
+        >Cancel</button>
+        <button
+          class="btn btn--primary"
+          id="creditPackModalConfirm"
+          type="button"
+        >Confirm $10.00 charge</button>
+      </div>
+    </section>
+  </div>
+
   <!-- Upgrade Modal -->
   <div id="upgradeModal" class="modal-overlay" aria-hidden="true">
     <div class="modal" role="dialog" aria-modal="true" aria-label="Upgrade" data-i18n-attr="aria-label:auth.dialog.upgrade">
@@ -805,6 +919,7 @@
   <script src="/analytics.js?v=__ASSET_VERSION__"></script>
   <script src="/google-auth.js?v=__ASSET_VERSION__"></script>
   <script src="/js/changePlan-helpers.js?v=__ASSET_VERSION__"></script>
+  <script src="/runtime-config.js?v=__ASSET_VERSION__"></script>
   <script src="/app.js?v=__ASSET_VERSION__"></script>
   <script src="/hero-storyboards.js?v=__ASSET_VERSION__"></script>
   <script src="/navbar-shared.js?v=__ASSET_VERSION__"></script>

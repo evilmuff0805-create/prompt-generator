@@ -7,40 +7,15 @@
 const crypto = require('crypto');
 const {
   classifyTransactionOrigin,
+  classifyChargebackAdjustment,
+  priceIdToPlan,
   isActiveSubscription,
   isTestAccount,
   recordPlanUpgradePurchase,
-  syncPlanFromSubscription,
-  applyPlanChange,
-  saveSubscriptionIds
+  handleNonCreditPackAdjustment,
+  reportNonCreditPackChargebackAdjustment,
+  verifyPaddleSignature
 } = require('../../routes/paddle');
-
-// ── Copied from routes/paddle.js (pure functions, no side effects) ──
-
-function verifyPaddleSignature(secret, rawBody, signatureHeader) {
-  if (!signatureHeader) return false;
-  const parts = {};
-  signatureHeader.split(';').forEach(function (part) {
-    const idx = part.indexOf('=');
-    if (idx === -1) return;
-    parts[part.slice(0, idx)] = part.slice(idx + 1);
-  });
-  const ts = parts['ts'];
-  const h1 = parts['h1'];
-  if (!ts || !h1) return false;
-
-  const signedPayload = ts + ':' + rawBody;
-  const digest = crypto
-    .createHmac('sha256', secret)
-    .update(signedPayload)
-    .digest('hex');
-
-  try {
-    return crypto.timingSafeEqual(Buffer.from(digest), Buffer.from(h1));
-  } catch (_) {
-    return false;
-  }
-}
 
 function buildSignatureHeader(secret, rawBody, ts) {
   const signedPayload = ts + ':' + rawBody;
@@ -50,10 +25,8 @@ function buildSignatureHeader(secret, rawBody, ts) {
 
 // ── Supabase mock helpers ──
 
-function makeSupabaseMock({ insertError = null, selectData = null, selectError = null, updateError = null, rpcError = null } = {}) {
+function makeSupabaseMock({ insertError = null, selectData = null, selectError = null, rpcError = null } = {}) {
   const singleFn = jest.fn().mockResolvedValue({ data: selectData, error: selectError });
-  const updateEqFn = jest.fn().mockResolvedValue({ error: updateError });
-  const updateFn = jest.fn().mockReturnValue({ eq: updateEqFn });
   const rpcFn = jest.fn().mockResolvedValue({ error: rpcError });
 
   return {
@@ -61,26 +34,12 @@ function makeSupabaseMock({ insertError = null, selectData = null, selectError =
       insert: jest.fn().mockResolvedValue({ error: insertError }),
       select: jest.fn().mockReturnValue({
         eq: jest.fn().mockReturnValue({ single: singleFn })
-      }),
-      update: updateFn
+      })
     }),
     rpc: rpcFn,
     _rpcFn: rpcFn,
-    _singleFn: singleFn,
-    _updateFn: updateFn,
-    _updateEqFn: updateEqFn
+    _singleFn: singleFn
   };
-}
-
-async function expireSubscription(supabase, userId) {
-  if (isTestAccount(userId)) return;
-
-  const { error } = await supabase
-    .from('profiles')
-    .update({ plan: 'free', credits: 0 })
-    .eq('id', userId);
-
-  if (error) throw new Error('Failed to expire subscription: ' + error.message);
 }
 
 // ── Tests ──
@@ -89,20 +48,21 @@ describe('verifyPaddleSignature', () => {
   const SECRET = 'test-paddle-webhook-secret-abc';
   const BODY = JSON.stringify({ event_type: 'transaction.completed', data: {} });
   const TS = '1700000000';
+  const NOW_MS = Number(TS) * 1000;
 
   test('올바른 서명은 검증에 통과해야 한다', () => {
     const header = buildSignatureHeader(SECRET, BODY, TS);
-    expect(verifyPaddleSignature(SECRET, BODY, header)).toBe(true);
+    expect(verifyPaddleSignature(SECRET, BODY, header, NOW_MS)).toBe(true);
   });
 
   test('잘못된 h1 값은 검증에 실패해야 한다', () => {
     const header = `ts=${TS};h1=deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef`;
-    expect(verifyPaddleSignature(SECRET, BODY, header)).toBe(false);
+    expect(verifyPaddleSignature(SECRET, BODY, header, NOW_MS)).toBe(false);
   });
 
   test('body가 변조되면 검증에 실패해야 한다', () => {
     const header = buildSignatureHeader(SECRET, BODY, TS);
-    expect(verifyPaddleSignature(SECRET, BODY + ' ', header)).toBe(false);
+    expect(verifyPaddleSignature(SECRET, BODY + ' ', header, NOW_MS)).toBe(false);
   });
 
   test('Paddle-Signature 헤더가 없으면 false를 반환해야 한다', () => {
@@ -114,30 +74,52 @@ describe('verifyPaddleSignature', () => {
     expect(verifyPaddleSignature(SECRET, BODY, 'ts=1700000000')).toBe(false);
     expect(verifyPaddleSignature(SECRET, BODY, 'h1=abc123')).toBe(false);
   });
-});
 
-describe('expireSubscription', () => {
-  test('plan=free, credits=0으로 업데이트해야 한다', async () => {
-    const supabase = makeSupabaseMock();
-    await expireSubscription(supabase, 'user-uuid');
-
-    expect(supabase.from).toHaveBeenCalledWith('profiles');
-    expect(supabase._updateFn).toHaveBeenCalledWith({ plan: 'free', credits: 0 });
-    expect(supabase._updateEqFn).toHaveBeenCalledWith('id', 'user-uuid');
+  test('서명 회전 중 여러 h1 중 하나가 일치하면 통과해야 한다', () => {
+    const valid = buildSignatureHeader(SECRET, BODY, TS).split(';')[1];
+    const invalid = 'h1=' + '0'.repeat(64);
+    expect(
+      verifyPaddleSignature(SECRET, BODY, `ts=${TS};${invalid};${valid}`, NOW_MS)
+    ).toBe(true);
   });
 
-  test('업데이트 실패 시 예외를 던져야 한다', async () => {
-    const supabase = makeSupabaseMock({ updateError: { message: 'db error' } });
-    await expect(expireSubscription(supabase, 'user-uuid'))
-      .rejects.toThrow('Failed to expire subscription');
+  test('기본 5초 허용 범위를 벗어난 과거·미래 서명은 거절해야 한다', () => {
+    const header = buildSignatureHeader(SECRET, BODY, TS);
+    expect(verifyPaddleSignature(SECRET, BODY, header, NOW_MS + 6000)).toBe(false);
+    expect(verifyPaddleSignature(SECRET, BODY, header, NOW_MS - 6000)).toBe(false);
+  });
+});
+
+describe('priceIdToPlan staged price compatibility', () => {
+  const originalEnv = process.env;
+
+  beforeEach(() => {
+    process.env = {
+      ...originalEnv,
+      PADDLE_PRO_PRICE_ID: 'pri_pro_current',
+      PADDLE_PRO_LEGACY_PRICE_IDS: 'pri_pro_legacy',
+      PADDLE_ENTERPRISE_PRICE_ID: 'pri_enterprise_current',
+      PADDLE_ENTERPRISE_LEGACY_PRICE_IDS: 'pri_enterprise_legacy'
+    };
+  });
+
+  afterAll(() => {
+    process.env = originalEnv;
+  });
+
+  test('maps both current and legacy IDs without exposing legacy IDs to checkout', () => {
+    expect(priceIdToPlan('pri_pro_current')).toBe('pro');
+    expect(priceIdToPlan('pri_pro_legacy')).toBe('pro');
+    expect(priceIdToPlan('pri_enterprise_current')).toBe('enterprise');
+    expect(priceIdToPlan('pri_enterprise_legacy')).toBe('enterprise');
+    expect(priceIdToPlan('pri_unknown')).toBeNull();
   });
 });
 
 describe('adjustment.created 이벤트 필터링', () => {
-  test('action이 refund가 아닌 경우 처리하지 않아야 한다', () => {
-    const action = 'chargeback';
-    const isHandled = action === 'refund' || action === 'credit';
-    expect(isHandled).toBe(false);
+  test('chargeback 계열은 무시 대상이 아니라 수동 검토 대상이다', () => {
+    expect(classifyChargebackAdjustment({ action: 'chargeback', status: 'approved' }))
+      .toMatchObject({ action: 'chargeback', isReversal: false });
   });
 
   test('action이 refund 또는 credit이면 처리해야 한다', () => {
@@ -155,50 +137,246 @@ describe('adjustment.created 이벤트 필터링', () => {
   });
 });
 
-describe('saveSubscriptionIds', () => {
-  const USER_ID = 'user-uuid-123';
-  const CUSTOMER_ID = 'ctm_01abc';
-  const SUBSCRIPTION_ID = 'sub_01xyz';
+describe('non-credit-pack chargeback manual review', () => {
+  const opaqueIds = {
+    adjustmentId: 'opaque-adjustment-id',
+    transactionId: 'opaque-transaction-id',
+    subscriptionId: 'opaque-subscription-id',
+    customerId: 'opaque-customer-id',
+    notificationId: 'opaque-notification-id',
+    providerEventId: 'opaque-provider-event-id'
+  };
 
-  test('customer_id + subscription_id 둘 다 있으면 profiles UPDATE를 호출해야 한다', async () => {
-    const supabase = makeSupabaseMock();
-    await saveSubscriptionIds(supabase, { userId: USER_ID, customerId: CUSTOMER_ID, subscriptionId: SUBSCRIPTION_ID });
+  test.each([
+    ['chargeback', 'chargeback', false, false, null],
+    ['chargeback_warning', 'chargeback_warning', true, false, null],
+    ['chargeback_reverse', 'chargeback', false, true, 'reverse_action'],
+    ['chargeback_warning_reverse', 'chargeback_warning', true, true, 'reverse_action']
+  ])(
+    'Paddle action=%s을 명시적으로 분류한다',
+    (action, family, isWarning, isReversal, reversalSource) => {
+      expect(classifyChargebackAdjustment({ action, status: 'approved' })).toEqual({
+        action,
+        family,
+        isWarning,
+        isReversal,
+        reversalSource
+      });
+    }
+  );
 
-    expect(supabase._updateFn).toHaveBeenCalledWith({
-      paddle_customer_id: CUSTOMER_ID,
-      paddle_subscription_id: SUBSCRIPTION_ID,
+  test.each(['chargeback', 'chargeback_warning'])(
+    'action=%s 원본 adjustment가 status=reversed로 갱신된 형태도 역전으로 분류한다',
+    (action) => {
+      expect(classifyChargebackAdjustment({ action, status: 'reversed' }))
+        .toMatchObject({ isReversal: true, reversalSource: 'reversed_status' });
+    }
+  );
+
+  test.each(['refund', 'credit', 'credit_reverse', undefined])(
+    'action=%s는 chargeback 수동 검토 분류에 속하지 않는다',
+    (action) => {
+      expect(classifyChargebackAdjustment({ action, status: 'approved' })).toBeNull();
+    }
+  );
+
+  test.each([
+    'chargeback',
+    'chargeback_warning',
+    'chargeback_reverse',
+    'chargeback_warning_reverse'
+  ])(
+    '%s을 critical/manual-review로 내구적 기록하고 크레딧·entitlement mutation을 명시적으로 금지한다',
+    async (action) => {
+      const incidentReporter = jest.fn().mockResolvedValue({ persisted: true, incidentId: 42 });
+      const result = await reportNonCreditPackChargebackAdjustment(
+        {
+          id: opaqueIds.adjustmentId,
+          transaction_id: opaqueIds.transactionId,
+          subscription_id: opaqueIds.subscriptionId,
+          customer_id: opaqueIds.customerId,
+          action,
+          type: 'full',
+          status: 'approved'
+        },
+        {
+          requestId: 'opaque-http-request-id',
+          eventId: opaqueIds.notificationId,
+          providerEventId: opaqueIds.providerEventId,
+          eventType: 'adjustment.created',
+          occurredAt: '2026-08-01T00:00:00Z',
+          incidentReporter
+        }
+      );
+
+      expect(result).toMatchObject({ handled: true, manualReviewRequired: true });
+      expect(incidentReporter).toHaveBeenCalledWith(expect.objectContaining({
+        severity: 'critical',
+        eventCode: 'NON_CREDIT_PACK_CHARGEBACK_REQUIRES_REVIEW',
+        fingerprint:
+          `paddle-webhook:NON_CREDIT_PACK_CHARGEBACK_REQUIRES_REVIEW:opaque-adjustment-id:${action}:${action.endsWith('_reverse') ? 'reversal' : 'forward'}`,
+        context: expect.objectContaining({
+          adjustmentId: opaqueIds.adjustmentId,
+          transactionId: opaqueIds.transactionId,
+          subscriptionId: opaqueIds.subscriptionId,
+          customerId: opaqueIds.customerId,
+          eventId: opaqueIds.notificationId,
+          providerEventId: opaqueIds.providerEventId,
+          action,
+          manualReviewRequired: true,
+          creditMutationApplied: false,
+          entitlementMutationApplied: false
+        })
+      }));
+    }
+  );
+
+  test('same adjustment redelivery는 event ID를 보존하면서 같은 open-incident fingerprint를 사용한다', async () => {
+    const incidentReporter = jest.fn().mockResolvedValue({ persisted: true });
+    const data = {
+      id: opaqueIds.adjustmentId,
+      transaction_id: opaqueIds.transactionId,
+      subscription_id: opaqueIds.subscriptionId,
+      action: 'chargeback_warning',
+      status: 'approved'
+    };
+
+    await reportNonCreditPackChargebackAdjustment(data, {
+      eventId: 'notification-first',
+      providerEventId: 'event-first',
+      incidentReporter
+    });
+    await reportNonCreditPackChargebackAdjustment(data, {
+      eventId: 'notification-second',
+      providerEventId: 'event-second',
+      incidentReporter
+    });
+
+    const first = incidentReporter.mock.calls[0][0];
+    const second = incidentReporter.mock.calls[1][0];
+    expect(first.fingerprint).toBe(second.fingerprint);
+    expect(first.context).toMatchObject({
+      eventId: 'notification-first',
+      providerEventId: 'event-first'
+    });
+    expect(second.context).toMatchObject({
+      eventId: 'notification-second',
+      providerEventId: 'event-second'
     });
   });
 
-  test('UPDATE .eq()에 userId가 정확히 전달돼야 한다 (customerId 혼용 방지)', async () => {
-    const supabase = makeSupabaseMock();
-    await saveSubscriptionIds(supabase, { userId: USER_ID, customerId: CUSTOMER_ID, subscriptionId: SUBSCRIPTION_ID });
+  test('same adjustment의 forward/reversal 금융 상태는 서로 다른 incident fingerprint로 보존한다', async () => {
+    const incidentReporter = jest.fn().mockResolvedValue({ persisted: true });
+    const base = {
+      id: opaqueIds.adjustmentId,
+      transaction_id: opaqueIds.transactionId,
+      subscription_id: opaqueIds.subscriptionId
+    };
 
-    expect(supabase._updateEqFn).toHaveBeenCalledWith('id', USER_ID);
-    expect(supabase._updateEqFn).not.toHaveBeenCalledWith('id', CUSTOMER_ID);
+    await reportNonCreditPackChargebackAdjustment(
+      { ...base, action: 'chargeback_warning', status: 'approved' },
+      { providerEventId: 'event-forward', incidentReporter }
+    );
+    await reportNonCreditPackChargebackAdjustment(
+      { ...base, action: 'chargeback_warning', status: 'reversed' },
+      { providerEventId: 'event-reversed-status', incidentReporter }
+    );
+    await reportNonCreditPackChargebackAdjustment(
+      { ...base, action: 'chargeback_warning_reverse', status: 'approved' },
+      { providerEventId: 'event-reverse-action', incidentReporter }
+    );
+
+    const fingerprints = incidentReporter.mock.calls.map(([incident]) => incident.fingerprint);
+    expect(new Set(fingerprints).size).toBe(3);
+    expect(fingerprints[0]).toMatch(/:chargeback_warning:forward$/);
+    expect(fingerprints[1]).toMatch(/:chargeback_warning:reversal$/);
+    expect(fingerprints[2]).toMatch(/:chargeback_warning_reverse:reversal$/);
   });
 
-  test('customer_id만 있을 때 paddle_subscription_id를 포함하지 않아야 한다', async () => {
-    const supabase = makeSupabaseMock();
-    await saveSubscriptionIds(supabase, { userId: USER_ID, customerId: CUSTOMER_ID, subscriptionId: undefined });
+  test('critical incident가 내구적으로 저장되지 않으면 webhook ACK를 막는다', async () => {
+    const incidentReporter = jest.fn().mockResolvedValue({ persisted: false });
 
-    expect(supabase._updateFn).toHaveBeenCalledWith({ paddle_customer_id: CUSTOMER_ID });
-    expect(supabase._updateFn).not.toHaveBeenCalledWith(expect.objectContaining({ paddle_subscription_id: expect.anything() }));
+    await expect(reportNonCreditPackChargebackAdjustment(
+      {
+        id: opaqueIds.adjustmentId,
+        transaction_id: opaqueIds.transactionId,
+        action: 'chargeback_reverse',
+        status: 'approved'
+      },
+      { incidentReporter }
+    )).rejects.toMatchObject({
+      code: 'NON_CREDIT_PACK_CHARGEBACK_INCIDENT_PERSIST_FAILED'
+    });
   });
 
-  test('둘 다 undefined이면 DB 호출 없이 종료해야 한다', async () => {
-    const supabase = makeSupabaseMock();
-    await saveSubscriptionIds(supabase, { userId: USER_ID, customerId: undefined, subscriptionId: undefined });
+  test('refund/credit은 기존 자동 환불 경로를 위해 chargeback helper에서 처리하지 않는다', async () => {
+    const incidentReporter = jest.fn();
 
-    expect(supabase.from).not.toHaveBeenCalled();
+    await expect(reportNonCreditPackChargebackAdjustment(
+      { action: 'refund', status: 'approved' },
+      { incidentReporter }
+    )).resolves.toEqual({ handled: false });
+    expect(incidentReporter).not.toHaveBeenCalled();
   });
 
-  test('UPDATE 실패 시 durable webhook 재시도를 위해 예외를 던져야 한다', async () => {
-    const supabase = makeSupabaseMock({ updateError: { message: 'db error' } });
-    await expect(
-      saveSubscriptionIds(supabase, { userId: USER_ID, customerId: CUSTOMER_ID, subscriptionId: SUBSCRIPTION_ID })
-    ).rejects.toThrow('Failed to save Paddle subscription IDs');
-  });
+  test.each([
+    'chargeback',
+    'chargeback_warning',
+    'chargeback_reverse',
+    'chargeback_warning_reverse'
+  ])(
+    '%s manual-review 경로는 refund handler를 호출하지 않는다',
+    async (action) => {
+      const refundHandler = jest.fn();
+      const incidentReporter = jest.fn().mockResolvedValue({ persisted: true });
+
+      await expect(handleNonCreditPackAdjustment(
+        {},
+        {
+          id: opaqueIds.adjustmentId,
+          transaction_id: opaqueIds.transactionId,
+          subscription_id: opaqueIds.subscriptionId,
+          action,
+          status: 'approved'
+        },
+        { refundHandler, incidentReporter }
+      )).resolves.toMatchObject({ handled: true, manualReviewRequired: true });
+
+      expect(refundHandler).not.toHaveBeenCalled();
+    }
+  );
+
+  test.each(['refund', 'credit'])(
+    'approved %s는 기존 refund handler 계약을 그대로 유지한다',
+    async (action) => {
+      const supabase = { marker: 'supabase' };
+      const refundResult = { reason: 'refunded' };
+      const refundHandler = jest.fn().mockResolvedValue(refundResult);
+      const incidentReporter = jest.fn();
+
+      await expect(handleNonCreditPackAdjustment(
+        supabase,
+        {
+          transaction_id: opaqueIds.transactionId,
+          action,
+          type: 'full',
+          status: 'approved'
+        },
+        { refundHandler, incidentReporter }
+      )).resolves.toEqual({
+        handled: true,
+        reason: 'refund_or_credit_applied',
+        result: refundResult
+      });
+
+      expect(incidentReporter).not.toHaveBeenCalled();
+      expect(refundHandler).toHaveBeenCalledWith(
+        supabase,
+        opaqueIds.transactionId,
+        'full'
+      );
+    }
+  );
 });
 
 describe('recordPlanUpgradePurchase', () => {
@@ -231,10 +409,63 @@ describe('recordPlanUpgradePurchase', () => {
     expect(insertCall.credits_granted).toBe(600);
   });
 
-  test('중복 transaction_id(23505)이면 조용히 스킵해야 한다', async () => {
-    const supabase = makeSupabaseMock({ insertError: { code: '23505', message: 'duplicate key' } });
+  test('중복 transaction_id(23505)는 저장된 불변 계약이 정확히 같을 때만 스킵해야 한다', async () => {
+    const supabase = makeSupabaseMock({
+      insertError: { code: '23505', message: 'duplicate key' },
+      selectData: {
+        transaction_id: TXN_ID,
+        user_id: USER_ID,
+        plan: 'enterprise',
+        credits_granted: 1500,
+        status: 'completed',
+        subscription_id: SUB_ID,
+        transaction_type: 'plan_upgrade'
+      }
+    });
     await expect(recordPlanUpgradePurchase(supabase, { transactionId: TXN_ID, userId: USER_ID, plan: 'enterprise', subscriptionId: SUB_ID }))
-      .resolves.toBeUndefined();
+      .resolves.toMatchObject({ transaction_id: TXN_ID });
+  });
+
+  test('중복 transaction_id의 기존 계약이 다르면 fail-closed 해야 한다', async () => {
+    const supabase = makeSupabaseMock({
+      insertError: { code: '23505', message: 'duplicate key' },
+      selectData: {
+        transaction_id: TXN_ID,
+        user_id: 'different-user',
+        plan: 'enterprise',
+        credits_granted: 1500,
+        status: 'completed',
+        subscription_id: SUB_ID,
+        transaction_type: 'plan_upgrade'
+      }
+    });
+
+    await expect(recordPlanUpgradePurchase(
+      supabase,
+      {
+        transactionId: TXN_ID,
+        userId: USER_ID,
+        plan: 'enterprise',
+        subscriptionId: SUB_ID
+      }
+    )).rejects.toThrow('duplicate contract conflict');
+  });
+
+  test('중복 transaction_id 조회가 실패하면 정상 중복으로 승인하지 않아야 한다', async () => {
+    const supabase = makeSupabaseMock({
+      insertError: { code: '23505', message: 'duplicate key' },
+      selectError: { message: 'lookup failed' }
+    });
+
+    await expect(recordPlanUpgradePurchase(
+      supabase,
+      {
+        transactionId: TXN_ID,
+        userId: USER_ID,
+        plan: 'enterprise',
+        subscriptionId: SUB_ID
+      }
+    )).rejects.toThrow('duplicate contract conflict');
   });
 
   test('크레딧 RPC(grant_credits)를 절대 호출하지 않아야 한다 — 크레딧 이중처리 방지', async () => {
@@ -297,45 +528,13 @@ describe('isTestAccount (env 파싱)', () => {
   });
 });
 
-describe('테스트 계정 화이트리스트 — mutation 스킵', () => {
-  const ORIGINAL = process.env.TEST_ACCOUNT_USER_IDS;
-  const WL = 'test-user-1';
-  beforeEach(() => { process.env.TEST_ACCOUNT_USER_IDS = WL; });
-  afterEach(() => {
-    if (ORIGINAL === undefined) delete process.env.TEST_ACCOUNT_USER_IDS;
-    else process.env.TEST_ACCOUNT_USER_IDS = ORIGINAL;
-  });
-
-  test('applyPlanChange(실제 함수): apply_plan_change RPC 스킵하고 null 반환', async () => {
-    const supabase = makeSupabaseMock();
-    const result = await applyPlanChange(supabase, WL, 'enterprise');
-
-    expect(result).toBeNull();
-    expect(supabase.rpc).not.toHaveBeenCalled();
-  });
-
-  test('expireSubscription: profiles UPDATE 스킵', async () => {
-    const supabase = makeSupabaseMock();
-    await expireSubscription(supabase, WL);
-
-    expect(supabase.from).not.toHaveBeenCalled();
-  });
-
-  test('화이트리스트가 아닌 계정은 정상 mutation (apply_plan_change 호출)', async () => {
-    const supabase = makeSupabaseMock();
-    await applyPlanChange(supabase, 'normal-user', 'pro');
-
-    expect(supabase.rpc).toHaveBeenCalledWith('apply_plan_change', expect.objectContaining({ p_user_id: 'normal-user' }));
-  });
-});
-
 describe('classifyTransactionOrigin', () => {
-  test("'checkout'은 grant로 분류해야 한다 (신규 구매)", () => {
-    expect(classifyTransactionOrigin('checkout')).toBe('grant');
+  test("'checkout'은 서버 바인딩 없는 직접 구매로 거부해야 한다", () => {
+    expect(classifyTransactionOrigin('checkout')).toBe('reject');
   });
 
-  test("'web'도 grant로 분류해야 한다 (Paddle.js 체크아웃 origin 모호성 대비)", () => {
-    expect(classifyTransactionOrigin('web')).toBe('grant');
+  test("'web'도 서버 바인딩 없는 직접 구매로 거부해야 한다", () => {
+    expect(classifyTransactionOrigin('web')).toBe('reject');
   });
 
   test("'subscription_recurring'은 grant로 분류해야 한다 (갱신)", () => {
@@ -358,79 +557,6 @@ describe('classifyTransactionOrigin', () => {
     expect(classifyTransactionOrigin(undefined)).toBe('ignore');
     expect(classifyTransactionOrigin(null)).toBe('ignore');
     expect(classifyTransactionOrigin('some_future_origin')).toBe('ignore');
-  });
-});
-
-describe('syncPlanFromSubscription', () => {
-  const USER_ID = 'user-uuid-123';
-
-  test('profiles.plan을 새 플랜으로 UPDATE해야 한다', async () => {
-    const supabase = makeSupabaseMock();
-    await syncPlanFromSubscription(supabase, USER_ID, 'pro');
-
-    expect(supabase.from).toHaveBeenCalledWith('profiles');
-    expect(supabase._updateFn).toHaveBeenCalledWith({ plan: 'pro' });
-  });
-
-  test('UPDATE .eq()에 userId가 정확히 전달돼야 한다', async () => {
-    const supabase = makeSupabaseMock();
-    await syncPlanFromSubscription(supabase, USER_ID, 'enterprise');
-
-    expect(supabase._updateEqFn).toHaveBeenCalledWith('id', USER_ID);
-  });
-
-  test('크레딧은 건드리지 않아야 한다 (plan만 UPDATE)', async () => {
-    const supabase = makeSupabaseMock();
-    await syncPlanFromSubscription(supabase, USER_ID, 'pro');
-
-    const updateArg = supabase._updateFn.mock.calls[0][0];
-    expect(updateArg).toEqual({ plan: 'pro' });
-    expect(updateArg).not.toHaveProperty('credits');
-  });
-
-  test('UPDATE 실패 시 예외를 던져야 한다', async () => {
-    const supabase = makeSupabaseMock({ updateError: { message: 'db error' } });
-    await expect(syncPlanFromSubscription(supabase, USER_ID, 'pro'))
-      .rejects.toThrow('Failed to sync plan from subscription.updated');
-  });
-});
-
-describe('applyPlanChange', () => {
-  const USER_ID = 'user-uuid-123';
-
-  test('업그레이드: apply_plan_change RPC를 enterprise allotment(1500)으로 호출해야 한다', async () => {
-    const supabase = makeSupabaseMock();
-    await applyPlanChange(supabase, USER_ID, 'enterprise');
-
-    expect(supabase._rpcFn).toHaveBeenCalledWith('apply_plan_change', {
-      p_user_id: USER_ID,
-      p_new_plan: 'enterprise',
-      p_new_allotment: 1500
-    });
-  });
-
-  test('다운그레이드: apply_plan_change RPC를 pro allotment(600)으로 호출해야 한다', async () => {
-    const supabase = makeSupabaseMock();
-    await applyPlanChange(supabase, USER_ID, 'pro');
-
-    expect(supabase._rpcFn).toHaveBeenCalledWith('apply_plan_change', {
-      p_user_id: USER_ID,
-      p_new_plan: 'pro',
-      p_new_allotment: 600
-    });
-  });
-
-  test('동일 플랜 idempotent 재전송: RPC 호출은 정확히 1회 (DB 내 크레딧 결정은 RPC가 처리)', async () => {
-    const supabase = makeSupabaseMock();
-    await applyPlanChange(supabase, USER_ID, 'enterprise');
-
-    expect(supabase._rpcFn).toHaveBeenCalledTimes(1);
-  });
-
-  test('RPC 실패 시 예외를 던져야 한다', async () => {
-    const supabase = makeSupabaseMock({ rpcError: { message: 'RPC error' } });
-    await expect(applyPlanChange(supabase, USER_ID, 'enterprise'))
-      .rejects.toThrow('apply_plan_change RPC failed');
   });
 });
 
@@ -458,65 +584,6 @@ describe('isActiveSubscription', () => {
   test('undefined / null은 false를 반환해야 한다', () => {
     expect(isActiveSubscription(undefined)).toBe(false);
     expect(isActiveSubscription(null)).toBe(false);
-  });
-});
-
-describe('subscription.updated status 가드', () => {
-  // Mirrors the handler's status guard + applyPlanChange call for unit testing.
-  async function handleWithStatusGuard(supabase, status, userId, plan) {
-    if (!isActiveSubscription(status)) return 'skipped';
-    await applyPlanChange(supabase, userId, plan);
-    return 'applied';
-  }
-
-  const USER_ID = 'user-uuid-123';
-
-  test("status='canceled'이면 apply_plan_change를 호출하지 않아야 한다 (취소 레이스 방지)", async () => {
-    const supabase = makeSupabaseMock();
-    const result = await handleWithStatusGuard(supabase, 'canceled', USER_ID, 'enterprise');
-
-    expect(result).toBe('skipped');
-    expect(supabase._rpcFn).not.toHaveBeenCalled();
-  });
-
-  test("status='paused'이면 apply_plan_change를 호출하지 않아야 한다", async () => {
-    const supabase = makeSupabaseMock();
-    const result = await handleWithStatusGuard(supabase, 'paused', USER_ID, 'enterprise');
-
-    expect(result).toBe('skipped');
-    expect(supabase._rpcFn).not.toHaveBeenCalled();
-  });
-
-  test("status='past_due'이면 apply_plan_change를 호출하지 않아야 한다", async () => {
-    const supabase = makeSupabaseMock();
-    const result = await handleWithStatusGuard(supabase, 'past_due', USER_ID, 'pro');
-
-    expect(result).toBe('skipped');
-    expect(supabase._rpcFn).not.toHaveBeenCalled();
-  });
-
-  test("status='active'이면 apply_plan_change를 정상 호출해야 한다 (기존 업그레이드 동작 불변)", async () => {
-    const supabase = makeSupabaseMock();
-    const result = await handleWithStatusGuard(supabase, 'active', USER_ID, 'enterprise');
-
-    expect(result).toBe('applied');
-    expect(supabase._rpcFn).toHaveBeenCalledWith('apply_plan_change', {
-      p_user_id: USER_ID,
-      p_new_plan: 'enterprise',
-      p_new_allotment: 1500
-    });
-  });
-
-  test("status='trialing'이면 apply_plan_change를 정상 호출해야 한다", async () => {
-    const supabase = makeSupabaseMock();
-    const result = await handleWithStatusGuard(supabase, 'trialing', USER_ID, 'pro');
-
-    expect(result).toBe('applied');
-    expect(supabase._rpcFn).toHaveBeenCalledWith('apply_plan_change', {
-      p_user_id: USER_ID,
-      p_new_plan: 'pro',
-      p_new_allotment: 600
-    });
   });
 });
 

@@ -6,4 +6,8 @@ uploads/
 # Playwright test artifacts (outputDir = tests/screenshots)
 tests/screenshots/
 test-results/
+test-results-*/
 playwright-report/
+
+# Local Codex verification fixtures; may contain destructive test-only SQL.
+.codex-tmp/

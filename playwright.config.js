@@ -3,6 +3,13 @@ const { defineConfig, devices } = require('@playwright/test');
 const testPort = Number.parseInt(process.env.PLAYWRIGHT_TEST_PORT || '3100', 10);
 const localBaseURL = `http://127.0.0.1:${testPort}`;
 const baseURL = process.env.PLAYWRIGHT_TEST_BASE_URL || localBaseURL;
+const sandboxApiKeyFixture = [
+  'pdl_sdbx_apikey_',
+  'a'.repeat(26),
+  '_',
+  'B'.repeat(22),
+  '_C3D'
+].join('');
 
 module.exports = defineConfig({
   testDir: './tests/e2e',
@@ -39,14 +46,26 @@ module.exports = defineConfig({
           OPENAI_API_KEY: 'e2e-placeholder',
           GEMINI_API_KEY: 'e2e-placeholder',
           SUPABASE_URL: 'http://127.0.0.1:54321',
-          SUPABASE_ANON_KEY: 'e2e-placeholder',
+          SUPABASE_ANON_KEY: `sb_publishable_${'p'.repeat(32)}`,
           SUPABASE_SERVICE_ROLE_KEY: 'e2e-placeholder',
           PADDLE_API_BASE: 'http://127.0.0.1:54322',
-          PADDLE_API_KEY: 'e2e-placeholder',
+          // Exact-format Sandbox fixture required by the activation gate. This
+          // is deterministic test data, not a usable Paddle credential.
+          PADDLE_API_KEY: sandboxApiKeyFixture,
           PADDLE_WEBHOOK_SECRET: 'e2e-placeholder',
-          PADDLE_CLIENT_TOKEN: 'e2e-placeholder',
+          PADDLE_CLIENT_TOKEN: 'test_e2e-placeholder',
           PADDLE_PRO_PRICE_ID: 'pri_e2e_pro',
           PADDLE_ENTERPRISE_PRICE_ID: 'pri_e2e_enterprise',
+          CREDIT_LEDGER_V2_ENABLED: 'true',
+          CREDIT_PACK_PURCHASES_ENABLED: 'true',
+          CREDIT_PACK_EXPIRY_DAYS: '365',
+          // Test-only placeholder; not evidence of Paddle tax approval.
+          PADDLE_CREDIT_PACK_TAX_CATEGORY: 'saas',
+          PADDLE_CREDIT_PACK_TAX_CATEGORY_CONFIRMED: 'true',
+          // Test fixture only; production still requires a Sandbox history read.
+          PADDLE_SUBSCRIPTION_HISTORY_CONFIRMED: 'true',
+          // Test fixture only; production still requires a complete paginated scan.
+          PADDLE_TRANSACTION_READ_CONFIRMED: 'true',
           STORYBOARD_DURABLE_WORKER_ENABLED: 'false',
           CLEANUP_SCHEDULER_ENABLED: 'false',
           OPS_ALERT_WEBHOOK_URL: '',
