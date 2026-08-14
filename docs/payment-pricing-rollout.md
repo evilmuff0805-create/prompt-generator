@@ -688,6 +688,61 @@ Latest local evidence (2026-08-03):
 
 ### 2. Production-schema clone verification
 
+Use only a dedicated, isolated, disposable PostgreSQL 17 instance or container,
+with a clone database whose name contains
+`clone`, `rehearsal`, `disposable`, `sandbox`, or `test`. The audit is
+read-only by default and rejects the PromptGen production ref/host and every
+non-loopback target:
+
+```text
+PAYMENT_MIGRATION_CLONE_DATABASE_URL=postgresql://<local-user>:<local-password>@127.0.0.1:5432/promptgen_payment_clone
+npm run audit:payment-migration-clone
+```
+
+PowerShell: `$env:PAYMENT_MIGRATION_CLONE_DATABASE_URL='postgresql://<local-user>:<local-password>@127.0.0.1:5432/promptgen_payment_clone'`.
+The connection role must be the isolated clone's migration owner; any expected
+table, function, or private-schema owner mismatch stops the rehearsal. The ACL
+check permits only the owner, the declared non-grantable `service_role` runtime
+privileges, and Supabase's non-grantable `postgres` platform-admin defaults on
+the expected public tables and functions. Each permitted ACL must be granted
+directly by that object's owner; every other grantee, grantor, or privilege
+stops the rehearsal.
+
+After reviewing the count-only output and independently confirming that the
+target is disposable, mutation mode requires the explicit switch:
+
+```text
+npm run audit:payment-migration-clone -- --confirm-disposable
+```
+
+Active or ambiguous `pg_cron` state, any active analysis reservation or
+Storyboard job, schema drift, a pre-existing migration-024 landmark, a failed
+post-migration invariant, or an ACL/RLS mismatch stops the run. If positive
+legacy balances exist, the first confirmed run applies only migration 023 and
+stops at `manifest-review-required`; populate and independently review the
+private manifest without copying identifiers into logs, then rerun the same
+confirmed command. The report records SHA-256 for migrations 023 through 027
+but never prints the database URL, password, UUIDs, Paddle IDs, or row data.
+This tool does not create the clone, export or restore a backup, inspect
+Supabase migration history, or prove recovery of Auth, Storage, extensions, or
+other platform metadata. Its success therefore does not close the full
+production backup/restore gate, and it cannot independently prove that the
+local PostgreSQL cluster is isolated. Any active `pg_cron` job targeting a
+different database, any already-running cron execution, or missing cron run
+metadata stops the confirmed run before it changes cron state. Stop the cron
+worker and independently verify the dedicated instance/container is isolated;
+setting `cron.job.active = false` does not cancel work that already started.
+
+Latest local harness evidence (2026-08-14): a network-disabled, volume-free,
+tmpfs-backed Supabase PostgreSQL 17.6.1.111 container received the synthetic
+zero-balance base schema plus migrations 001 through 012 and 022. The actual
+Node audit disabled two current-database synthetic cron jobs, applied
+migrations 023 through 027, and returned zero post-migration, ACL, and RLS
+violation counts. A separate negative ACL check detected three forbidden table
+grants and one forbidden function grant (including `PUBLIC EXECUTE`), then
+returned to zero after those synthetic grants were revoked. This was not a
+production backup restore and does not close the full restore gate.
+
 Recorded isolated runs (2026-08-01 through 2026-08-03):
 
 - the retained report states that a read-only production `public` schema-only
